@@ -1,0 +1,28 @@
+{
+  "name": "@comanview/waiter",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "ComanView Waiter — Waiter tablet client (React + Vite + PWA)",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src",
+    "test": "vitest run",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@comanview/client-sdk": "workspace:*",
+    "@comanview/contracts": "workspace:*",
+    "@comanview/ui": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  }
+}

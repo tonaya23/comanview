@@ -1,0 +1,6 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "../../tooling/typescript/nextjs.json",
+  "compilerOptions": { "outDir": "dist" },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "next.config.ts", "*.ts"]
+}

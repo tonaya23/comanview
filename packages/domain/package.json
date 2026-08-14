@@ -1,0 +1,26 @@
+{
+  "name": "@comanview/domain",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "ComanView core domain — entities, value objects, invariants, domain events. ZERO infrastructure dependencies.",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc --project tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src",
+    "test": "vitest run",
+    "test:integration": "echo \"No integration tests for domain\""
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  }
+}

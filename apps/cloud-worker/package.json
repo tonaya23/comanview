@@ -1,0 +1,27 @@
+{
+  "name": "@comanview/cloud-worker",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "ComanView Cloud Worker — background jobs, async processing, scheduled tasks",
+  "scripts": {
+    "dev": "node --watch --experimental-strip-types src/index.ts",
+    "build": "tsc --project tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src",
+    "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts"
+  },
+  "dependencies": {
+    "@comanview/config": "workspace:*",
+    "@comanview/contracts": "workspace:*",
+    "@comanview/domain": "workspace:*",
+    "@comanview/sync": "workspace:*",
+    "@comanview/database": "workspace:*"
+  },
+  "devDependencies": {
+    "@comanview/testing": "workspace:*",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  }
+}
