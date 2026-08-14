@@ -322,6 +322,9 @@ importers:
 
   packages/domain:
     dependencies:
+      '@comanview/money':
+        specifier: workspace:^
+        version: link:../money
       '@types/uuid':
         specifier: ^11.0.0
         version: 11.0.0

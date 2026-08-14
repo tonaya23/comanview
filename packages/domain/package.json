@@ -24,6 +24,7 @@
     "vitest": "^3.2.4"
   },
   "dependencies": {
+    "@comanview/money": "workspace:^",
     "@types/uuid": "^11.0.0",
     "uuid": "^14.0.1"
   }
