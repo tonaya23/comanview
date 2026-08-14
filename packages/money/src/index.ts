@@ -6,4 +6,4 @@
  * NEVER use binary floating-point for authoritative money values.
  */
 
-export {};
+export * from './Money.js';

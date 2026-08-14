@@ -24,7 +24,7 @@
     "build": "tsc --project tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
-    "test": "vitest run",
+    "test": "vitest run --passWithNoTests",
     "test:integration": "vitest run --config vitest.integration.config.ts"
   },
   "devDependencies": {

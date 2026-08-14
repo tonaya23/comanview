@@ -16,11 +16,15 @@
     "build": "tsc --project tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
-    "test": "vitest run",
+    "test": "vitest run --passWithNoTests",
     "test:integration": "echo \"No integration tests for domain\""
   },
   "devDependencies": {
     "typescript": "^5.8.3",
     "vitest": "^3.2.4"
+  },
+  "dependencies": {
+    "@types/uuid": "^11.0.0",
+    "uuid": "^14.0.1"
   }
 }

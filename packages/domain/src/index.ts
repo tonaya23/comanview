@@ -10,4 +10,5 @@
  * @see Master_PRD.md
  */
 
-export {};
+export * from './shared/EntityId.js';
+export * from './shared/DomainError.js';
