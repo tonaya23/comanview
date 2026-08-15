@@ -12,7 +12,9 @@ import {
   SendRoundRequest,
   CloseOrderRequest,
   CancelOrderRequest,
-  RemoveOrderItemRequest
+  RemoveOrderItemRequest,
+  UpdateOrderTablesRequestSchema,
+  UpdateOrderTablesRequest
 } from '@comanview/contracts';
 
 export function orderRoutes(orderService: OrderService): FastifyPluginAsyncZod {
@@ -125,6 +127,22 @@ export function orderRoutes(orderService: OrderService): FastifyPluginAsyncZod {
         const { id } = request.params as { id: string };
         const body = request.body as CancelOrderRequest;
         const order = await orderService.cancelOrder(id, body);
+        reply.send(order);
+      }
+    );
+
+    // PUT /orders/:id/tables
+    fastify.put(
+      '/:id/tables',
+      {
+        schema: {
+          body: UpdateOrderTablesRequestSchema,
+        },
+      },
+      async (request, reply) => {
+        const { id } = request.params as { id: string };
+        const body = request.body as UpdateOrderTablesRequest;
+        const order = await orderService.updateTables(id, body);
         reply.send(order);
       }
     );

@@ -13,12 +13,14 @@ export const CategorySchema = z.object({
   active: z.boolean(),
 });
 
+export type CategoryResponse = z.infer<typeof CategorySchema>;
+
 // Tax Profile
 export const TaxProfileSchema = z.object({
   id: z.string().uuid(),
   name: z.string(),
   rateBasisPoints: z.number().int(),
-  calculationMode: z.enum(['INCLUDED_IN_PRICE', 'ADDED_TO_PRICE']),
+  calculationMode: z.enum(['TAX_INCLUDED', 'TAX_ADDED']),
   active: z.boolean(),
 });
 
@@ -53,7 +55,7 @@ export const ProductSchema = z.object({
   id: z.string().uuid(),
   name: z.string(),
   description: z.string(),
-  productType: z.enum(['REGULAR', 'COMBO', 'MODIFIER_ONLY']),
+  productType: z.enum(['STANDARD', 'RECIPE', 'NON_INVENTORY']),
   categoryId: z.string().uuid().nullable(),
   taxProfile: TaxProfileSchema,
   basePrice: MoneySchema,
@@ -72,7 +74,7 @@ export type ProductResponse = z.infer<typeof ProductSchema>;
 export const CreateProductRequestSchema = z.object({
   name: z.string().min(1),
   description: z.string(),
-  productType: z.enum(['REGULAR', 'COMBO', 'MODIFIER_ONLY']).default('REGULAR'),
+  productType: z.enum(['STANDARD', 'RECIPE', 'NON_INVENTORY']).default('STANDARD'),
   categoryId: z.string().uuid().optional(),
   taxProfileId: z.string().uuid(),
   basePrice: MoneySchema,

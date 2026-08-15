@@ -13,6 +13,7 @@ import {
   InvalidModifierSelectionError,
   ModifierUnavailableError,
   ModifierInactiveError,
+  TableAssignmentError,
 } from '@comanview/domain';
 import { ConcurrencyError, ObjectNotFoundError, InvalidStateError, InvariantViolationError } from './errors.js';
 import { ErrorResponse } from '@comanview/contracts';
@@ -100,6 +101,9 @@ export function errorHandler(error: Error, request: FastifyRequest, reply: Fasti
     } else if (error instanceof InvalidModifierSelectionError || error instanceof ModifierUnavailableError || error instanceof ModifierInactiveError) {
       statusCode = 409;
       code = 'INVALID_MODIFIER_SELECTION';
+    } else if (error instanceof TableAssignmentError) {
+      statusCode = 409;
+      code = 'DOMAIN_CONFLICT';
     } else {
       statusCode = 400;
       code = (error as DomainError).code ?? 'DOMAIN_ERROR';

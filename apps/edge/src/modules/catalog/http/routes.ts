@@ -20,6 +20,24 @@ export function catalogRoutes(catalogService: CatalogService): FastifyPluginAsyn
       }
     );
 
+    // GET /catalog/products
+    fastify.get(
+      '/products',
+      async (request, reply) => {
+        const products = await catalogService.getAllProducts();
+        reply.send(products);
+      }
+    );
+
+    // GET /catalog/categories
+    fastify.get(
+      '/categories',
+      async (request, reply) => {
+        const categories = await catalogService.getAllCategories();
+        reply.send(categories);
+      }
+    );
+
     // GET /catalog/products/:id
     fastify.get(
       '/products/:id',

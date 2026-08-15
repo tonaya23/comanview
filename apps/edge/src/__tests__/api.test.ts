@@ -52,7 +52,7 @@ describe('Edge API Integration Tests', () => {
       payload: {
         name: 'Test Burger',
         description: 'Delicious burger',
-        productType: 'REGULAR',
+        productType: 'STANDARD',
         taxProfileId: 'f47ac10b-58cc-4372-a567-0e02b2c3d479',
         basePrice: {
           amount: 1500,
@@ -149,6 +149,24 @@ describe('Edge API Integration Tests', () => {
     // 7. Verify snapshot was created from catalog
     expect(body.items[0].productSnapshot.productName).toBe('Test Burger');
     expect(body.items[0].productSnapshot.basePrice.amount).toBe(1500);
+  });
+
+  it('17. PUT /orders/:id/tables', async () => {
+    const tableId = '018f2c70-7b00-7000-8000-000000000001'; // valid UUID v7
+    const response = await app.inject({
+      method: 'PUT',
+      url: `/orders/${orderId}/tables`,
+      payload: {
+        expectedVersion: orderVersion,
+        tableIds: [tableId]
+      }
+    });
+    if (response.statusCode !== 200) console.error('TEST 17 FAILED', response.statusCode, response.json());
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.tableIds).toContain(tableId);
+    expect(body.version).toBe(orderVersion + 1);
+    orderVersion = body.version;
   });
 
   it('12. Retry idempotente con mismo commandId (no aumenta version)', async () => {

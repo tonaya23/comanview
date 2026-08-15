@@ -2,7 +2,7 @@ import { OrderRepository, CatalogRepository } from '@comanview/database';
 import { Order, EntityId, OrderType, OrderChannel } from '@comanview/domain';
 import { Money } from '@comanview/money';
 import { ObjectNotFoundError, ConcurrencyError } from '../../../app/errors.js';
-import { CreateOrderRequest, AddOrderItemRequest, SendRoundRequest, CloseOrderRequest, OrderResponse, CancelOrderRequest, RemoveOrderItemRequest } from '@comanview/contracts';
+import { CreateOrderRequest, AddOrderItemRequest, SendRoundRequest, CloseOrderRequest, OrderResponse, CancelOrderRequest, RemoveOrderItemRequest, UpdateOrderTablesRequest } from '@comanview/contracts';
 
 export class OrderService {
   constructor(
@@ -113,6 +113,21 @@ export class OrderService {
     return this.mapToResponse(order);
   }
 
+  async updateTables(orderId: string, request: UpdateOrderTablesRequest): Promise<OrderResponse> {
+    const order = this.orderRepo.getOrderById(EntityId.fromString(orderId));
+    if (!order) throw new ObjectNotFoundError(`Order ${orderId} not found`);
+
+    if (order.version !== request.expectedVersion) {
+      throw new ConcurrencyError(`Expected version ${request.expectedVersion}, but got ${order.version}`);
+    }
+
+    const tableIds = request.tableIds.map(t => EntityId.fromString(t));
+    order.updateTables(tableIds);
+    
+    this.orderRepo.saveOrder(order, true);
+    return this.mapToResponse(order);
+  }
+
   private mapToResponse(order: Order): OrderResponse {
     return {
       id: order.id.toString(),
@@ -136,7 +151,7 @@ export class OrderService {
             currency: i.snapshot.basePrice.currency,
           },
           taxRateBasisPoints: i.snapshot.taxRateBasisPoints,
-          taxCalculationMode: i.snapshot.taxCalculationMode === 'TAX_ADDED' ? 'ADDED_TO_PRICE' : 'INCLUDED_IN_PRICE',
+          taxCalculationMode: i.snapshot.taxCalculationMode,
           stationId: i.snapshot.stationId?.toString() ?? null,
           selectedModifiers: i.snapshot.modifiers.map(m => ({
             modifierOptionId: m.id.toString(),

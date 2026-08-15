@@ -189,6 +189,24 @@ export class CatalogRepository {
     });
   }
 
+  getAllProducts(): Product[] {
+    const pRows = this.db.select({ id: schema.products.id }).from(schema.products).all();
+    const products: Product[] = [];
+    for (const p of pRows) {
+      const prod = this.getProductById(EntityId.fromString(p.id));
+      if (prod) products.push(prod);
+    }
+    return products;
+  }
+
+  getAllCategories(): { id: string; name: string; active: boolean }[] {
+    return this.db.select().from(schema.categories).all().map(c => ({
+      id: c.id,
+      name: c.name,
+      active: Boolean(c.active),
+    }));
+  }
+
   /**
    * Retrieve a Product by its domain EntityId.
    * Returns null if not found.

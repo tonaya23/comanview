@@ -18,7 +18,7 @@ export const ProductSnapshotSchema = z.object({
   productName: z.string(),
   basePrice: MoneySchema,
   taxRateBasisPoints: z.number().int(),
-  taxCalculationMode: z.enum(['INCLUDED_IN_PRICE', 'ADDED_TO_PRICE']),
+  taxCalculationMode: z.enum(['TAX_INCLUDED', 'TAX_ADDED']),
   stationId: z.string().uuid().nullable(),
   selectedModifiers: z.array(SelectedModifierSchema),
 });
@@ -93,3 +93,9 @@ export const RemoveOrderItemRequestSchema = z.object({
   expectedVersion: z.number().int(),
 });
 export type RemoveOrderItemRequest = z.infer<typeof RemoveOrderItemRequestSchema>;
+
+export const UpdateOrderTablesRequestSchema = z.object({
+  expectedVersion: z.number().int(),
+  tableIds: z.array(z.string().uuid()),
+});
+export type UpdateOrderTablesRequest = z.infer<typeof UpdateOrderTablesRequestSchema>;
