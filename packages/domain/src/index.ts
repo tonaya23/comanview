@@ -13,3 +13,4 @@
 export * from './shared/EntityId.js';
 export * from './shared/DomainError.js';
 export * from './catalog/index.js';
+export * from './order/index.js';
