@@ -6,6 +6,7 @@ import { OrderType, OrderChannel, OrderStatus } from './types.js';
  * commandId is stored for future idempotency enforcement at the infrastructure layer.
  */
 export interface OrderDomainEvent {
+  readonly eventId: EntityId;
   readonly eventType: string;
   readonly orderId: EntityId;
   readonly occurredAt: Date;

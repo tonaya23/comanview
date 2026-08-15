@@ -79,6 +79,15 @@ export interface OrderProps {
 }
 
 /**
+ * Interface used exclusively for reconstituting an Order from persistence
+ * without emitting domain events or changing the version.
+ */
+export interface RehydrateOrderProps extends Omit<OrderProps, 'items' | 'rounds'> {
+  items: Array<import('./OrderItem.js').OrderItemProps>;
+  rounds: Array<import('./Round.js').RoundProps>;
+}
+
+/**
  * Order is the Aggregate Root for the transactional core of ComanView (§7).
  *
  * Invariants enforced here:
@@ -116,6 +125,7 @@ export class Order {
     const now = new Date();
 
     const event: OrderCreatedEvent = {
+      eventId: EntityId.generate(),
       eventType: 'ORDER_CREATED',
       orderId: id,
       occurredAt: now,
@@ -142,6 +152,18 @@ export class Order {
       rounds: [],
       events: [event],
       createdAt: now,
+    });
+  }
+
+  /**
+   * Reconstitutes an Order from persistence state without generating domain events.
+   * This is exclusively for the Repository layer.
+   */
+  static rehydrate(props: RehydrateOrderProps): Order {
+    return new Order({
+      ...props,
+      items: props.items.map((i) => new OrderItem(i)),
+      rounds: props.rounds.map((r) => new Round(r)),
     });
   }
 
@@ -212,6 +234,7 @@ export class Order {
     this.bumpVersion();
 
     const event: OrderItemAddedEvent = {
+      eventId: EntityId.generate(),
       eventType: 'ITEM_ADDED',
       orderId: this.id,
       occurredAt: new Date(),
@@ -243,6 +266,7 @@ export class Order {
     this.bumpVersion();
 
     const event: OrderItemRemovedEvent = {
+      eventId: EntityId.generate(),
       eventType: 'ITEM_REMOVED',
       orderId: this.id,
       occurredAt: new Date(),
@@ -279,6 +303,7 @@ export class Order {
     this.bumpVersion();
 
     const event: RoundSentEvent = {
+      eventId: EntityId.generate(),
       eventType: 'ROUND_SENT',
       orderId: this.id,
       occurredAt: round.sentAt,
@@ -328,6 +353,7 @@ export class Order {
     this.bumpVersion();
 
     const event: OrderClosedEvent = {
+      eventId: EntityId.generate(),
       eventType: 'ORDER_CLOSED',
       orderId: this.id,
       occurredAt: new Date(),
@@ -347,6 +373,7 @@ export class Order {
     this.bumpVersion();
 
     const event: OrderCancelledEvent = {
+      eventId: EntityId.generate(),
       eventType: 'ORDER_CANCELLED',
       orderId: this.id,
       occurredAt: new Date(),
@@ -373,6 +400,7 @@ export class Order {
     this.bumpVersion();
 
     const event: TablesUpdatedEvent = {
+      eventId: EntityId.generate(),
       eventType: 'TABLES_UPDATED',
       orderId: this.id,
       occurredAt: new Date(),
