@@ -36,15 +36,32 @@ export class OrderRepository {
   constructor(private readonly db: DB) {}
 
   /**
-   * Persist an Order (and optionally its domain events to event_log) in a single
-   * atomic transaction. Existing order records are replaced (full upsert/replace).
-   *
-   * @param order   The Order aggregate to persist.
-   * @param emitEvents  If true, appended domain events are inserted into event_log.
+   * Check if a command has already been processed (idempotency check).
    */
-  saveOrder(order: Order, emitEvents = true): void {
-    this.db.transaction((tx) => {
-      const db = tx as unknown as DB;
+  hasProcessedCommand(commandId: string): boolean {
+    const row = this.db
+      .select()
+      .from(schema.processedCommands)
+      .where(eq(schema.processedCommands.commandId, commandId))
+      .get();
+    return !!row;
+  }
+
+  /**
+   * Upsert an Order and its complete internal state in a single transaction.
+   * If emitEvents is true, domain events are appended to the event_log.
+   * If commandId is provided, it records the command as processed for idempotency.
+   */
+  saveOrder(order: Order, emitEvents: boolean = true, commandId?: string): void {
+    this.db.transaction((txDb) => {
+      const db = txDb as unknown as DB;
+
+      if (commandId) {
+        db.insert(schema.processedCommands)
+          .values({ commandId, processedAt: new Date() })
+          .onConflictDoNothing()
+          .run();
+      }
 
       // 1. Upsert the orders row
       db.insert(schema.orders)

@@ -118,4 +118,12 @@ export class Product {
       modifiers: modifierSnapshots
     });
   }
+
+  public markAsAvailable(): void {
+    this.props.available = true;
+  }
+
+  public markAsUnavailable(): void {
+    this.props.available = false;
+  }
 }

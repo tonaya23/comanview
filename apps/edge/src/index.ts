@@ -12,4 +12,98 @@
  * - Browser clients express intent; Edge validates and commits authoritative state.
  */
 
-// Entry point — implementation pending PRD completion.
+import fastify from 'fastify';
+import { serializerCompiler, validatorCompiler, ZodTypeProvider } from 'fastify-type-provider-zod';
+import { initDatabase, closeDatabase, getDatabase } from './infrastructure/database.js';
+import { errorHandler } from './app/errorHandler.js';
+import { CatalogRepository, OrderRepository } from '@comanview/database';
+import { CatalogService } from './modules/catalog/application/CatalogService.js';
+import { OrderService } from './modules/orders/application/OrderService.js';
+import { catalogRoutes } from './modules/catalog/http/routes.js';
+import { orderRoutes } from './modules/orders/http/routes.js';
+import { HealthResponseSchema } from '@comanview/contracts';
+
+export async function buildApp(dbPath: string = ':memory:') {
+  const app = fastify({
+    logger: true,
+  }).withTypeProvider<ZodTypeProvider>();
+
+  app.setValidatorCompiler(validatorCompiler);
+  app.setSerializerCompiler(serializerCompiler);
+  app.setErrorHandler(errorHandler);
+
+  // Initialize DB
+  const db = initDatabase(dbPath);
+
+  // Setup Repositories
+  const catalogRepo = new CatalogRepository(db);
+  const orderRepo = new OrderRepository(db);
+
+  // Setup Services
+  const catalogService = new CatalogService(catalogRepo);
+  const orderService = new OrderService(orderRepo, catalogRepo);
+
+  // Setup Routes
+  app.register(catalogRoutes(catalogService), { prefix: '/catalog' });
+  app.register(orderRoutes(orderService), { prefix: '/orders' });
+
+  // Health route
+  app.get(
+    '/health',
+    {
+      schema: {
+        response: {
+          200: HealthResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      // Basic check: is the DB queryable?
+      let dbStatus: 'OK' | 'ERROR' = 'OK';
+      try {
+        const sqlite = getDatabase();
+        // Since we don't have access to the raw sqlite connection directly from drizzle easily in a standard way
+        // We just do a simple query
+        const sql = require('drizzle-orm').sql;
+        sqlite.run(sql`SELECT 1`);
+      } catch (err) {
+        app.log.error({ err }, 'Database health check failed');
+        dbStatus = 'ERROR';
+      }
+
+      const status = dbStatus === 'OK' ? 'UP' : 'DOWN';
+      
+      reply.send({
+        status,
+        edgeService: {
+          status: 'OK',
+          timestamp: new Date().toISOString(),
+        },
+        database: {
+          status: dbStatus,
+        },
+      });
+    }
+  );
+
+  app.addHook('onClose', async () => {
+    closeDatabase();
+  });
+
+  return app;
+}
+
+// If executed directly, start the server
+if (process.argv[1] && process.argv[1].includes('index.ts')) {
+  const start = async () => {
+    // Development default path for testing Edge
+    const app = await buildApp('./edge-dev.db');
+    try {
+      await app.listen({ port: 3000, host: '0.0.0.0' });
+    } catch (err) {
+      app.log.error(err);
+      process.exit(1);
+    }
+  };
+  start();
+}

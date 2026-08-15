@@ -13,14 +13,18 @@
     "test:integration": "vitest run --config vitest.integration.config.ts"
   },
   "dependencies": {
+    "@comanview/auth": "workspace:*",
     "@comanview/config": "workspace:*",
     "@comanview/contracts": "workspace:*",
+    "@comanview/database": "workspace:*",
     "@comanview/domain": "workspace:*",
     "@comanview/money": "workspace:*",
-    "@comanview/sync": "workspace:*",
     "@comanview/printing": "workspace:*",
-    "@comanview/database": "workspace:*",
-    "@comanview/auth": "workspace:*"
+    "@comanview/sync": "workspace:*",
+    "fastify": "^5.12.0",
+    "fastify-plugin": "^6.0.0",
+    "fastify-type-provider-zod": "^4.0.2",
+    "zod": "^3.25.67"
   },
   "devDependencies": {
     "@comanview/testing": "workspace:*",
