@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { MoneySchema } from './catalog.js';
+import { PaymentSchema } from './payment.js';
 
 // Enums
 export const OrderStatusSchema = z.enum(['OPEN', 'CLOSED', 'CANCELLED']);
@@ -50,6 +51,11 @@ export const OrderSchema = z.object({
   items: z.array(OrderItemSchema),
   rounds: z.array(RoundSchema),
   subtotal: MoneySchema,
+  total: MoneySchema,
+  paidAmount: MoneySchema,
+  balanceDue: MoneySchema,
+  tipTotal: MoneySchema,
+  payments: z.array(PaymentSchema),
   version: z.number().int(),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -80,8 +86,8 @@ export const SendRoundRequestSchema = z.object({
 export type SendRoundRequest = z.infer<typeof SendRoundRequestSchema>;
 
 export const CloseOrderRequestSchema = z.object({
+  commandId: z.string().min(1),
   expectedVersion: z.number().int(),
-  balanceDueAmount: z.number().int(),
 });
 export type CloseOrderRequest = z.infer<typeof CloseOrderRequestSchema>;
 

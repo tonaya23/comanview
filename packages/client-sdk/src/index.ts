@@ -4,6 +4,9 @@ import {
   HealthResponseSchema,
   OrderSchema,
   ProductSchema,
+  CashSessionSchema,
+  CurrentCashSessionSchema,
+  PaymentConfigSchema,
   type AddOrderItemRequest,
   type CategoryResponse,
   type CreateOrderRequest,
@@ -12,6 +15,13 @@ import {
   type ProductResponse,
   type RemoveOrderItemRequest,
   type SendRoundRequest,
+  type CashSessionResponse,
+  type CurrentCashSessionResponse,
+  type OpenCashSessionRequest,
+  type PaymentConfigResponse,
+  type CreatePaymentRequest,
+  type VoidPaymentRequest,
+  type CloseOrderRequest,
 } from '@comanview/contracts';
 
 interface RuntimeSchema<T> {
@@ -64,6 +74,16 @@ export interface EdgeClient {
     request: RemoveOrderItemRequest,
   ): Promise<OrderResponse>;
   sendRound(orderId: string, request: SendRoundRequest): Promise<OrderResponse>;
+  getCurrentCashSession(): Promise<CurrentCashSessionResponse>;
+  openCashSession(request: OpenCashSessionRequest): Promise<CashSessionResponse>;
+  getPaymentConfig(): Promise<PaymentConfigResponse>;
+  createPayment(orderId: string, request: CreatePaymentRequest): Promise<OrderResponse>;
+  voidPayment(
+    orderId: string,
+    paymentId: string,
+    request: VoidPaymentRequest,
+  ): Promise<OrderResponse>;
+  closeOrder(orderId: string, request: CloseOrderRequest): Promise<OrderResponse>;
 }
 
 export function createEdgeClient(options: EdgeClientOptions = {}): EdgeClient {
@@ -159,6 +179,28 @@ export function createEdgeClient(options: EdgeClientOptions = {}): EdgeClient {
       }),
     sendRound: (orderId, body) =>
       request(`/orders/${orderId}/rounds`, OrderSchema, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    getCurrentCashSession: () => request('/cash-sessions/current', CurrentCashSessionSchema),
+    openCashSession: (body) =>
+      request('/cash-sessions', CashSessionSchema, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    getPaymentConfig: () => request('/payments/config', PaymentConfigSchema),
+    createPayment: (orderId, body) =>
+      request(`/orders/${orderId}/payments`, OrderSchema, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    voidPayment: (orderId, paymentId, body) =>
+      request(`/orders/${orderId}/payments/${paymentId}/void`, OrderSchema, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    closeOrder: (orderId, body) =>
+      request(`/orders/${orderId}/close`, OrderSchema, {
         method: 'POST',
         body: JSON.stringify(body),
       }),

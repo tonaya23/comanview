@@ -52,6 +52,21 @@ export interface TablesUpdatedEvent extends OrderDomainEvent {
   readonly tableIds: EntityId[];
 }
 
+export interface PaymentCompletedEvent extends OrderDomainEvent {
+  readonly eventType: 'PAYMENT_COMPLETED';
+  readonly paymentId: EntityId;
+  readonly cashSessionId: EntityId;
+  readonly method: 'CASH' | 'CARD' | 'OTHER';
+  readonly amountApplied: number;
+  readonly tipAmount: number;
+  readonly currency: string;
+}
+
+export interface PaymentVoidedEvent extends OrderDomainEvent {
+  readonly eventType: 'PAYMENT_VOIDED';
+  readonly paymentId: EntityId;
+}
+
 export type AnyOrderEvent =
   | OrderCreatedEvent
   | OrderItemAddedEvent
@@ -59,4 +74,6 @@ export type AnyOrderEvent =
   | RoundSentEvent
   | OrderClosedEvent
   | OrderCancelledEvent
-  | TablesUpdatedEvent;
+  | TablesUpdatedEvent
+  | PaymentCompletedEvent
+  | PaymentVoidedEvent;

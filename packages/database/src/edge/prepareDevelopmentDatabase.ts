@@ -2,9 +2,10 @@ import Database from 'better-sqlite3';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-const migrationPath = fileURLToPath(
-  new URL('../../../../migrations/edge/0000_initial.sql', import.meta.url),
-);
+const migrationPaths = [
+  fileURLToPath(new URL('../../../../migrations/edge/0000_initial.sql', import.meta.url)),
+  fileURLToPath(new URL('../../../../migrations/edge/0001_payments_cash.sql', import.meta.url)),
+];
 const defaultDatabasePath = fileURLToPath(
   new URL('../../../../apps/edge/edge-dev.db', import.meta.url),
 );
@@ -14,7 +15,9 @@ const sqlite = new Database(databasePath);
 
 try {
   sqlite.pragma('foreign_keys = ON');
-  sqlite.exec(readFileSync(migrationPath, 'utf8'));
+  for (const migrationPath of migrationPaths) {
+    sqlite.exec(readFileSync(migrationPath, 'utf8'));
+  }
 
   const seed = sqlite.transaction(() => {
     const insertCategory = sqlite.prepare(

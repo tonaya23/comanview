@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
+import { eq, sql } from 'drizzle-orm';
 import { readFileSync, unlinkSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -9,6 +10,7 @@ import * as schema from '../schema.js';
 import { createEdgeDatabase } from '../db.js';
 import { CatalogRepository } from '../repositories/CatalogRepository.js';
 import { OrderRepository } from '../repositories/OrderRepository.js';
+import { CashRepository } from '../repositories/CashRepository.js';
 import {
   EntityId,
   Order,
@@ -19,6 +21,8 @@ import {
   ModifierOption,
   ProductModifierGroup,
   Category,
+  CashRegister,
+  CashSession,
 } from '@comanview/domain';
 import { Money } from '@comanview/money';
 
@@ -26,7 +30,15 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-const MIGRATION_PATH = join(__dirname, '../../../../../migrations/edge/0000_initial.sql');
+const MIGRATION_PATHS = ['0000_initial.sql', '0001_payments_cash.sql'].map((migration) =>
+  join(__dirname, `../../../../../migrations/edge/${migration}`),
+);
+
+function applyMigrations(sqlite: { exec(source: string): unknown }): void {
+  for (const migrationPath of MIGRATION_PATHS) {
+    sqlite.exec(readFileSync(migrationPath, 'utf-8'));
+  }
+}
 
 function createTestDb() {
   const sqlite = new Database(':memory:');
@@ -34,8 +46,7 @@ function createTestDb() {
   sqlite.pragma('foreign_keys = ON');
 
   // Apply migration
-  const sql = readFileSync(MIGRATION_PATH, 'utf-8');
-  sqlite.exec(sql);
+  applyMigrations(sqlite);
 
   return drizzle(sqlite, { schema });
 }
@@ -82,6 +93,31 @@ function makeOrder(currency = 'MXN') {
   });
 }
 
+function openCashSession(db: ReturnType<typeof createTestDb>, openingFloat = 5000) {
+  const cashRepo = new CashRepository(db);
+  const register = new CashRegister({
+    id: EntityId.generate(),
+    tenantId: EntityId.generate(),
+    locationId: EntityId.generate(),
+    name: 'Main register',
+    currency: 'MXN',
+    active: true,
+    createdAt: new Date(),
+  });
+  cashRepo.saveRegister(register);
+  const session = CashSession.open({
+    cashRegisterId: register.id,
+    tenantId: register.tenantId,
+    locationId: register.locationId,
+    openingFloat: Money.fromMinorUnits(openingFloat, 'MXN'),
+    businessDate: '2026-08-25',
+    openedBy: EntityId.generate(),
+    commandId: EntityId.generate().toString(),
+  });
+  cashRepo.openSession(session);
+  return { cashRepo, register, session };
+}
+
 // ─── Suite ───────────────────────────────────────────────────────────────────
 
 describe('Edge Persistence Integration Tests', () => {
@@ -105,7 +141,7 @@ describe('Edge Persistence Integration Tests', () => {
     try {
       sqlite.pragma('journal_mode = WAL');
       sqlite.pragma('foreign_keys = ON');
-      sqlite.exec(readFileSync(MIGRATION_PATH, 'utf-8'));
+      applyMigrations(sqlite);
 
       const walMode = sqlite.pragma('journal_mode', { simple: true });
       const fkMode = sqlite.pragma('foreign_keys', { simple: true });
@@ -370,18 +406,12 @@ describe('Edge Persistence Integration Tests', () => {
 
   // ── 13. CLOSED / CANCELLED state preserved ────────────────────────────────
 
-  it('13. CLOSED status is preserved after close(Money.zero)', () => {
+  it('13. CLOSED status is preserved after authoritative zero-balance close', () => {
     const db = createTestDb();
-    const catalogRepo = new CatalogRepository(db);
     const orderRepo = new OrderRepository(db);
 
-    const product = makeProduct();
-    catalogRepo.saveProduct(product);
-
     const order = makeOrder();
-    order.addItem(product.createSnapshot(new Map()));
-    order.sendDraftItems();
-    order.close(Money.zero('MXN'));
+    order.close();
     orderRepo.saveOrder(order, false);
 
     const found = orderRepo.getOrderById(order.id);
@@ -431,7 +461,7 @@ describe('Edge Persistence Integration Tests', () => {
     const sqlite = new Database(':memory:');
     sqlite.pragma('journal_mode = WAL');
     sqlite.pragma('foreign_keys = ON');
-    sqlite.exec(readFileSync(MIGRATION_PATH, 'utf-8'));
+    applyMigrations(sqlite);
     const db = drizzle(sqlite, { schema });
 
     // Try to insert an order_item referencing a non-existent order — FK violation
@@ -482,7 +512,7 @@ describe('Edge Persistence Integration Tests', () => {
     const sqlite = new Database(':memory:');
     sqlite.pragma('journal_mode = WAL');
     sqlite.pragma('foreign_keys = ON');
-    sqlite.exec(readFileSync(MIGRATION_PATH, 'utf-8'));
+    applyMigrations(sqlite);
     const db = drizzle(sqlite, { schema });
 
     expect(() =>
@@ -505,7 +535,7 @@ describe('Edge Persistence Integration Tests', () => {
 
     // 1. Create DB and migration
     const migrationDatabase = new Database(tmpPath);
-    migrationDatabase.exec(readFileSync(MIGRATION_PATH, 'utf-8'));
+    applyMigrations(migrationDatabase);
     migrationDatabase.close();
 
     let dbHandle = createEdgeDatabase(tmpPath);
@@ -576,5 +606,146 @@ describe('Edge Persistence Integration Tests', () => {
 
     const count2 = (countQuery.get() as any).count;
     expect(count2).toBe(1); // Should still be 1 because eventId is the same and onConflictDoNothing applies
+  });
+
+  it('20. persists one OPEN CashSession and rejects a second for the same register', () => {
+    const db = createTestDb();
+    const { cashRepo, register, session } = openCashSession(db);
+
+    expect(cashRepo.getOpenSession(register.id)?.id.toString()).toBe(session.id.toString());
+    expect(() =>
+      cashRepo.openSession(
+        CashSession.open({
+          cashRegisterId: register.id,
+          tenantId: register.tenantId,
+          locationId: register.locationId,
+          openingFloat: Money.zero('MXN'),
+          businessDate: '2026-08-25',
+          openedBy: EntityId.generate(),
+          commandId: EntityId.generate().toString(),
+        }),
+      ),
+    ).toThrow(/OPEN CashSession/);
+  });
+
+  it('21. persists Payment fields exactly and derives expected cash from amount_applied', () => {
+    const db = createTestDb();
+    const { cashRepo, session } = openCashSession(db, 5000);
+    const orderRepo = new OrderRepository(db);
+    const order = makeOrder();
+    order.addItem(makeProduct(undefined, 'MXN', 10000).createSnapshot(new Map()));
+    const payment = order.completePayment({
+      cashSessionId: session.id,
+      method: 'CASH',
+      amountApplied: Money.fromMinorUnits(10000, 'MXN'),
+      tipAmount: Money.zero('MXN'),
+      cashTendered: Money.fromMinorUnits(12000, 'MXN'),
+      commandId: 'persist-payment-1',
+    });
+    orderRepo.saveOrder(order, true, payment.commandId);
+
+    const recovered = orderRepo.getOrderById(order.id)!;
+    expect(recovered.payments).toHaveLength(1);
+    expect(recovered.payments[0]?.cashTendered?.amount).toBe(12000);
+    expect(recovered.payments[0]?.changeGiven.amount).toBe(2000);
+    expect(recovered.getPaidAmount().amount).toBe(10000);
+    expect(cashRepo.calculateExpectedCash(session).amount).toBe(15000);
+  });
+
+  it('22. rolls back Order, Payment, command, and Event Log on controlled Payment failure', () => {
+    const db = createTestDb();
+    const { session } = openCashSession(db);
+    const orderRepo = new OrderRepository(db);
+    const order = makeOrder();
+    order.addItem(makeProduct(undefined, 'MXN', 1000).createSnapshot(new Map()));
+    orderRepo.saveOrder(order, true);
+    const versionBeforePayment = order.version;
+    order.completePayment({
+      cashSessionId: session.id,
+      method: 'CARD',
+      amountApplied: Money.fromMinorUnits(1000, 'MXN'),
+      tipAmount: Money.zero('MXN'),
+      commandId: 'controlled-payment-failure',
+    });
+
+    db.run(
+      sql.raw(`
+      CREATE TRIGGER fail_payment_insert
+      BEFORE INSERT ON payments
+      BEGIN
+        SELECT RAISE(ABORT, 'controlled payment failure');
+      END;
+    `),
+    );
+
+    expect(() => orderRepo.saveOrder(order, true, 'controlled-payment-failure')).toThrow(
+      /controlled payment failure/,
+    );
+
+    const recovered = orderRepo.getOrderById(order.id)!;
+    expect(recovered.version).toBe(versionBeforePayment);
+    expect(recovered.payments).toHaveLength(0);
+    expect(orderRepo.hasProcessedCommand('controlled-payment-failure')).toBe(false);
+    expect(
+      db
+        .select()
+        .from(schema.eventLog)
+        .where(eq(schema.eventLog.eventType, 'PAYMENT_COMPLETED'))
+        .all(),
+    ).toHaveLength(0);
+  });
+
+  it('23. CashSession and Payment survive database close and reopen', () => {
+    const tmpPath = join(tmpdir(), `comanview-payment-reopen-${Date.now()}.db`);
+    const migrationDatabase = new Database(tmpPath);
+    migrationDatabase.pragma('foreign_keys = ON');
+    applyMigrations(migrationDatabase);
+    migrationDatabase.close();
+
+    let handle = createEdgeDatabase(tmpPath);
+    const cashRepo = new CashRepository(handle.db);
+    const register = new CashRegister({
+      id: EntityId.generate(),
+      tenantId: EntityId.generate(),
+      locationId: EntityId.generate(),
+      name: 'Persistent register',
+      currency: 'MXN',
+      active: true,
+      createdAt: new Date(),
+    });
+    cashRepo.saveRegister(register);
+    const session = CashSession.open({
+      cashRegisterId: register.id,
+      tenantId: register.tenantId,
+      locationId: register.locationId,
+      openingFloat: Money.fromMinorUnits(2500, 'MXN'),
+      businessDate: '2026-08-25',
+      openedBy: EntityId.generate(),
+      commandId: 'reopen-session',
+    });
+    cashRepo.openSession(session);
+    const order = makeOrder();
+    order.addItem(makeProduct(undefined, 'MXN', 750).createSnapshot(new Map()));
+    order.completePayment({
+      cashSessionId: session.id,
+      method: 'CARD',
+      amountApplied: Money.fromMinorUnits(750, 'MXN'),
+      tipAmount: Money.zero('MXN'),
+      commandId: 'reopen-payment',
+    });
+    new OrderRepository(handle.db).saveOrder(order, true, 'reopen-payment');
+    handle.close();
+
+    handle = createEdgeDatabase(tmpPath);
+    expect(new CashRepository(handle.db).getOpenSession(register.id)?.status).toBe('OPEN');
+    expect(new OrderRepository(handle.db).getOrderById(order.id)?.payments).toHaveLength(1);
+    handle.close();
+    for (const suffix of ['', '-shm', '-wal']) {
+      try {
+        unlinkSync(tmpPath + suffix);
+      } catch {
+        /* ignore */
+      }
+    }
   });
 });

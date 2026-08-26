@@ -2354,7 +2354,11 @@ Como mínimo:
 balance_due = 0
 ```
 
-y demás validaciones operativas deben cumplirse.
+y demás validaciones operativas deben cumplirse. En V1 una Order MUST NOT pasar de OPEN a CLOSED mientras contenga cualquier OrderItem con `sendStatus = DRAFT`.
+
+Para cerrar, `balance_due` MUST ser 0 y no MUST existir ningún OrderItem DRAFT. Los DRAFT deberán enviarse explícitamente mediante el flujo DRAFT → SENT / Round, o eliminarse mediante el flujo permitido mientras continúen siendo DRAFT.
+
+`closeOrder` MUST NOT convertir DRAFT → SENT, eliminar DRAFT, producir una Round, emitir un evento de KDS ni provocar ninguna consecuencia implícita de envío.
 
 CLOSED congela el estado comercial.
 
@@ -2477,6 +2481,10 @@ para control de concurrencia.
 > **INVARIANT:** INV-15
 
 > **INVARIANT:** Closing an Order MUST freeze its commercial state.
+
+> **INVARIANT:** ORDER-CLOSE-INV
+
+> **INVARIANT:** An Order MUST NOT transition from OPEN to CLOSED unless `balance_due = 0` and no OrderItem has `sendStatus = DRAFT`.
 
 # 8. Pagos, Propinas y Conciliación
 

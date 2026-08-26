@@ -55,12 +55,21 @@ function makeBaseOrder(
   });
 }
 
-const ZERO = Money.zero(DEFAULT_CURRENCY);
+function payInFull(order: ReturnType<typeof makeBaseOrder>, commandId = 'cmd-pay-test'): void {
+  const balance = order.getBalanceDue();
+  order.completePayment({
+    cashSessionId: EntityId.generate(),
+    method: 'CASH',
+    amountApplied: balance,
+    tipAmount: Money.zero(order.currency),
+    cashTendered: balance,
+    commandId,
+  });
+}
 
 // ─── Suite ───────────────────────────────────────────────────────────────────
 
 describe('Order Aggregate — Phase 1D', () => {
-
   // ── Construction ──────────────────────────────────────────────────────────
 
   describe('Order creation', () => {
@@ -98,7 +107,7 @@ describe('Order Aggregate — Phase 1D', () => {
 
     it('emits ORDER_CREATED event on creation', () => {
       const order = makeBaseOrder();
-      const created = order.events.find(e => e.eventType === 'ORDER_CREATED');
+      const created = order.events.find((e) => e.eventType === 'ORDER_CREATED');
       expect(created).toBeDefined();
       expect(created?.orderId.equals(order.id)).toBe(true);
     });
@@ -172,7 +181,7 @@ describe('Order Aggregate — Phase 1D', () => {
     it('emits ITEM_ADDED event', () => {
       const order = makeBaseOrder();
       order.addItem(makeSnapshot(), 'cmd-add-1');
-      const ev = order.events.find(e => e.eventType === 'ITEM_ADDED');
+      const ev = order.events.find((e) => e.eventType === 'ITEM_ADDED');
       expect(ev).toBeDefined();
       expect((ev as any).commandId).toBe('cmd-add-1');
     });
@@ -194,7 +203,8 @@ describe('Order Aggregate — Phase 1D', () => {
       const order = makeBaseOrder();
       order.addItem(makeSnapshot());
       order.sendDraftItems();
-      order.close(ZERO);
+      payInFull(order);
+      order.close();
       expect(() => order.addItem(makeSnapshot())).toThrow(OrderNotOpenError);
     });
 
@@ -222,7 +232,7 @@ describe('Order Aggregate — Phase 1D', () => {
       const order = makeBaseOrder();
       const item = order.addItem(makeSnapshot());
       order.removeItem(item.id, 'cmd-remove-1');
-      const ev = order.events.find(e => e.eventType === 'ITEM_REMOVED');
+      const ev = order.events.find((e) => e.eventType === 'ITEM_REMOVED');
       expect(ev).toBeDefined();
     });
 
@@ -242,7 +252,8 @@ describe('Order Aggregate — Phase 1D', () => {
       const order = makeBaseOrder();
       const item = order.addItem(makeSnapshot());
       order.sendDraftItems();
-      order.close(ZERO);
+      payInFull(order);
+      order.close();
       expect(() => order.removeItem(item.id)).toThrow(OrderNotOpenError);
     });
   });
@@ -275,7 +286,7 @@ describe('Order Aggregate — Phase 1D', () => {
       const order = makeBaseOrder();
       order.addItem(makeSnapshot());
       order.sendDraftItems('cmd-send-1');
-      const ev = order.events.find(e => e.eventType === 'ROUND_SENT');
+      const ev = order.events.find((e) => e.eventType === 'ROUND_SENT');
       expect(ev).toBeDefined();
     });
 
@@ -312,7 +323,8 @@ describe('Order Aggregate — Phase 1D', () => {
       const order = makeBaseOrder();
       order.addItem(makeSnapshot());
       order.sendDraftItems();
-      order.close(ZERO);
+      payInFull(order);
+      order.close();
       expect(() => order.sendDraftItems()).toThrow(OrderNotOpenError);
     });
   });
@@ -324,8 +336,9 @@ describe('Order Aggregate — Phase 1D', () => {
       const order = makeBaseOrder();
       order.addItem(makeSnapshot());
       order.sendDraftItems();
+      payInFull(order);
       const v0 = order.version;
-      order.close(ZERO);
+      order.close();
 
       expect(order.status).toBe('CLOSED');
       expect(order.version).toBe(v0 + 1);
@@ -335,35 +348,36 @@ describe('Order Aggregate — Phase 1D', () => {
       const order = makeBaseOrder();
       order.addItem(makeSnapshot());
       order.sendDraftItems();
-      order.close(ZERO, 'cmd-close');
-      const ev = order.events.find(e => e.eventType === 'ORDER_CLOSED');
+      payInFull(order);
+      order.close('cmd-close');
+      const ev = order.events.find((e) => e.eventType === 'ORDER_CLOSED');
       expect(ev).toBeDefined();
     });
 
     it('throws when balance_due is non-zero (INV-15)', () => {
       const order = makeBaseOrder();
-      const nonZeroBalance = Money.fromMinorUnits(5000, 'MXN');
-      expect(() => order.close(nonZeroBalance)).toThrow(OrderBalanceNotZeroError);
+      order.addItem(makeSnapshot(5000));
+      expect(() => order.close()).toThrow(OrderBalanceNotZeroError);
     });
 
-    it('throws when balance_due currency does not match the order currency', () => {
+    it('derives balance_due in the Order currency', () => {
       const order = makeBaseOrder('COUNTER', 'MXN');
-      const usdZeroBalance = Money.zero('USD');
-      expect(() => order.close(usdZeroBalance)).toThrow(OrderCurrencyMismatchError);
+      expect(order.getBalanceDue().currency).toBe('MXN');
     });
 
     it('throws when closing an already CLOSED order (INV-03)', () => {
       const order = makeBaseOrder();
       order.addItem(makeSnapshot());
       order.sendDraftItems();
-      order.close(ZERO);
-      expect(() => order.close(ZERO)).toThrow(OrderNotOpenError);
+      payInFull(order);
+      order.close();
+      expect(() => order.close()).toThrow(OrderNotOpenError);
     });
 
     it('throws when closing a CANCELLED order (INV-03)', () => {
       const order = makeBaseOrder();
       order.cancel();
-      expect(() => order.close(ZERO)).toThrow(OrderNotOpenError);
+      expect(() => order.close()).toThrow(OrderNotOpenError);
     });
   });
 
@@ -379,7 +393,7 @@ describe('Order Aggregate — Phase 1D', () => {
     it('emits ORDER_CANCELLED event', () => {
       const order = makeBaseOrder();
       order.cancel('cmd-cancel');
-      const ev = order.events.find(e => e.eventType === 'ORDER_CANCELLED');
+      const ev = order.events.find((e) => e.eventType === 'ORDER_CANCELLED');
       expect(ev).toBeDefined();
     });
 
@@ -387,7 +401,8 @@ describe('Order Aggregate — Phase 1D', () => {
       const order = makeBaseOrder();
       order.addItem(makeSnapshot());
       order.sendDraftItems();
-      order.close(ZERO);
+      payInFull(order);
+      order.close();
       expect(() => order.cancel()).toThrow(OrderNotOpenError);
     });
   });
@@ -423,8 +438,10 @@ describe('Order Aggregate — Phase 1D', () => {
       const order = makeBaseOrder();
       order.addItem(makeSnapshot());
       order.sendDraftItems();
-      order.close(ZERO);
-      expect(order.version).toBe(4);
+      payInFull(order);
+      const beforeClose = order.version;
+      order.close();
+      expect(order.version).toBe(beforeClose + 1);
     });
   });
 
@@ -440,7 +457,7 @@ describe('Order Aggregate — Phase 1D', () => {
     it('emits TABLES_UPDATED event', () => {
       const order = makeBaseOrder('TABLE');
       order.updateTables([EntityId.generate()], 'cmd-tables');
-      const ev = order.events.find(e => e.eventType === 'TABLES_UPDATED');
+      const ev = order.events.find((e) => e.eventType === 'TABLES_UPDATED');
       expect(ev).toBeDefined();
     });
 
@@ -514,7 +531,7 @@ describe('Order Aggregate — Phase 1D', () => {
     it('stores commandId in ITEM_ADDED event', () => {
       const order = makeBaseOrder();
       order.addItem(makeSnapshot(), 'idempotent-cmd-abc');
-      const ev = order.events.find(e => e.eventType === 'ITEM_ADDED');
+      const ev = order.events.find((e) => e.eventType === 'ITEM_ADDED');
       expect((ev as any).commandId).toBe('idempotent-cmd-abc');
     });
 
@@ -522,7 +539,7 @@ describe('Order Aggregate — Phase 1D', () => {
       const order = makeBaseOrder();
       order.addItem(makeSnapshot());
       order.sendDraftItems('idempotent-round-xyz');
-      const ev = order.events.find(e => e.eventType === 'ROUND_SENT');
+      const ev = order.events.find((e) => e.eventType === 'ROUND_SENT');
       expect((ev as any).commandId).toBe('idempotent-round-xyz');
     });
   });

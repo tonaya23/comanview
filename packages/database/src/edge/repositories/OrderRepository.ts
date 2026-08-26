@@ -12,6 +12,9 @@ import {
   RehydrateOrderProps,
   OrderItemProps,
   RoundProps,
+  PaymentMethod,
+  PaymentStatus,
+  PaymentProps,
 } from '@comanview/domain';
 import { ProductSnapshot, ModifierSnapshot } from '@comanview/domain';
 import { Money } from '@comanview/money';
@@ -42,6 +45,26 @@ export class OrderRepository {
       .where(eq(schema.processedCommands.commandId, commandId))
       .get();
     return !!row;
+  }
+
+  getProcessedCommandEvent(
+    commandId: string,
+  ): { aggregateId: string; eventType: string } | null {
+    const row = this.db
+      .select({ aggregateId: schema.eventLog.aggregateId, eventType: schema.eventLog.eventType })
+      .from(schema.eventLog)
+      .where(eq(schema.eventLog.commandId, commandId))
+      .get();
+    return row ?? null;
+  }
+
+  getOrderIdByPaymentCommand(commandId: string): EntityId | null {
+    const row = this.db
+      .select({ orderId: schema.payments.orderId })
+      .from(schema.payments)
+      .where(eq(schema.payments.commandId, commandId))
+      .get();
+    return row ? EntityId.fromString(row.orderId) : null;
   }
 
   /**
@@ -178,7 +201,39 @@ export class OrderRepository {
         }
       }
 
-      // 5. Optionally persist domain events to event_log (Transactional Outbox)
+      // 5. Payments — append history and allow only lifecycle status updates.
+      // COMPLETED and VOIDED Payments are never physically deleted.
+      for (const payment of order.payments) {
+        db.insert(schema.payments)
+          .values({
+            id: payment.id.toString(),
+            orderId: order.id.toString(),
+            cashSessionId: payment.cashSessionId.toString(),
+            method: payment.method,
+            amountAppliedAmount: payment.amountApplied.amount,
+            tipAmount: payment.tipAmount.amount,
+            currency: payment.amountApplied.currency,
+            cashTenderedAmount: payment.cashTendered?.amount ?? null,
+            changeGivenAmount: payment.changeGiven.amount,
+            status: payment.status,
+            externalReference: payment.externalReference,
+            commandId: payment.commandId,
+            createdAt: payment.createdAt,
+            completedAt: payment.completedAt,
+            voidedAt: payment.voidedAt,
+          })
+          .onConflictDoUpdate({
+            target: schema.payments.id,
+            set: {
+              status: payment.status,
+              completedAt: payment.completedAt,
+              voidedAt: payment.voidedAt,
+            },
+          })
+          .run();
+      }
+
+      // 6. Optionally persist domain events to event_log (Transactional Outbox)
       if (emitEvents) {
         for (const event of order.events) {
           db.insert(schema.eventLog)
@@ -277,6 +332,32 @@ export class OrderRepository {
       });
     }
 
+    const paymentRows = this.db
+      .select()
+      .from(schema.payments)
+      .where(eq(schema.payments.orderId, id.toString()))
+      .all();
+
+    const payments: PaymentProps[] = paymentRows.map((payment) => ({
+      id: EntityId.fromString(payment.id),
+      orderId: EntityId.fromString(payment.orderId),
+      cashSessionId: EntityId.fromString(payment.cashSessionId),
+      method: payment.method as PaymentMethod,
+      amountApplied: Money.fromMinorUnits(payment.amountAppliedAmount, payment.currency),
+      tipAmount: Money.fromMinorUnits(payment.tipAmount, payment.currency),
+      cashTendered:
+        payment.cashTenderedAmount === null
+          ? null
+          : Money.fromMinorUnits(payment.cashTenderedAmount, payment.currency),
+      changeGiven: Money.fromMinorUnits(payment.changeGivenAmount, payment.currency),
+      status: payment.status as PaymentStatus,
+      externalReference: payment.externalReference,
+      commandId: payment.commandId,
+      createdAt: new Date(payment.createdAt as unknown as number),
+      completedAt: payment.completedAt ? new Date(payment.completedAt as unknown as number) : null,
+      voidedAt: payment.voidedAt ? new Date(payment.voidedAt as unknown as number) : null,
+    }));
+
     const rehydrateProps: RehydrateOrderProps = {
       id: EntityId.fromString(orderRow.id),
       tenantId: EntityId.fromString(orderRow.tenantId),
@@ -290,6 +371,7 @@ export class OrderRepository {
       tableIds: tableRows.map((t) => EntityId.fromString(t.tableId)),
       items,
       rounds,
+      payments,
       events: [], // Domain events are in event_log; in-memory list starts fresh after rehydration
       createdAt: new Date(orderRow.createdAt as unknown as number),
     };

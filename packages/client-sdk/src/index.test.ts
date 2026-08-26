@@ -41,6 +41,11 @@ describe('createEdgeClient', () => {
         items: [],
         rounds: [],
         subtotal: { amount: 0, currency: 'MXN' },
+        total: { amount: 0, currency: 'MXN' },
+        paidAmount: { amount: 0, currency: 'MXN' },
+        balanceDue: { amount: 0, currency: 'MXN' },
+        tipTotal: { amount: 0, currency: 'MXN' },
+        payments: [],
         version: 4,
         createdAt: '2026-08-25T12:00:00.000Z',
         updatedAt: '2026-08-25T12:00:00.000Z',
@@ -71,5 +76,55 @@ describe('createEdgeClient', () => {
       code: 'STALE_ORDER_VERSION',
       status: 409,
     } satisfies Partial<EdgeClientError>);
+  });
+
+  it('sends exact payment intent without deriving financial values', async () => {
+    const order = {
+      id: '01991a00-0000-7000-8000-000000000301',
+      tenantId: '01991a00-0000-7000-8000-000000000302',
+      locationId: '01991a00-0000-7000-8000-000000000303',
+      orderType: 'COUNTER',
+      channel: 'POS',
+      currency: 'MXN',
+      status: 'OPEN',
+      tableIds: [],
+      items: [],
+      rounds: [],
+      payments: [],
+      version: 2,
+      subtotal: { amount: 0, currency: 'MXN' },
+      total: { amount: 0, currency: 'MXN' },
+      paidAmount: { amount: 0, currency: 'MXN' },
+      balanceDue: { amount: 0, currency: 'MXN' },
+      tipTotal: { amount: 0, currency: 'MXN' },
+      createdAt: '2026-08-25T12:00:00.000Z',
+      updatedAt: '2026-08-25T12:00:00.000Z',
+    };
+    const fetchMock = vi.fn(async () => jsonResponse(order));
+    const client = createEdgeClient({ fetch: fetchMock as EdgeFetch });
+
+    await client.createPayment(order.id, {
+      commandId: 'payment-command',
+      expectedVersion: 1,
+      method: 'CASH',
+      amountApplied: 105,
+      tip: { type: 'PERCENTAGE', basisPoints: 1000 },
+      cashTendered: 120,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/orders/${order.id}/payments`,
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          commandId: 'payment-command',
+          expectedVersion: 1,
+          method: 'CASH',
+          amountApplied: 105,
+          tip: { type: 'PERCENTAGE', basisPoints: 1000 },
+          cashTendered: 120,
+        }),
+      }),
+    );
   });
 });

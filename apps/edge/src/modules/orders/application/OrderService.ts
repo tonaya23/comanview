@@ -1,7 +1,9 @@
 import { OrderRepository, CatalogRepository } from '@comanview/database';
 import { Order, EntityId, OrderType, OrderChannel } from '@comanview/domain';
-import { Money } from '@comanview/money';
 import { ObjectNotFoundError, ConcurrencyError } from '../../../app/errors.js';
+import type { EdgeOperationalContext } from '../../../app/operationalContext.js';
+import { AppError } from '../../../app/errorHandler.js';
+import { mapOrderToResponse } from './orderMapper.js';
 import {
   CreateOrderRequest,
   AddOrderItemRequest,
@@ -17,11 +19,12 @@ export class OrderService {
   constructor(
     private readonly orderRepo: OrderRepository,
     private readonly catalogRepo: CatalogRepository,
+    private readonly context: EdgeOperationalContext,
   ) {}
 
   async createOrder(request: CreateOrderRequest): Promise<OrderResponse> {
-    const tenantId = EntityId.generate();
-    const locationId = EntityId.generate();
+    const tenantId = EntityId.fromString(this.context.tenantId);
+    const locationId = EntityId.fromString(this.context.locationId);
     const tableIds = request.tableIds ? request.tableIds.map((t) => EntityId.fromString(t)) : [];
 
     const order = Order.create({
@@ -35,13 +38,13 @@ export class OrderService {
     });
 
     this.orderRepo.saveOrder(order, true);
-    return this.mapToResponse(order);
+    return mapOrderToResponse(order);
   }
 
   async getOrder(id: string): Promise<OrderResponse | null> {
     const order = this.orderRepo.getOrderById(EntityId.fromString(id));
     if (!order) return null;
-    return this.mapToResponse(order);
+    return mapOrderToResponse(order);
   }
 
   async addItem(orderId: string, request: AddOrderItemRequest): Promise<OrderResponse> {
@@ -55,7 +58,7 @@ export class OrderService {
     }
 
     if (this.orderRepo.hasProcessedCommand(request.commandId)) {
-      return this.mapToResponse(order);
+      return mapOrderToResponse(order);
     }
 
     const product = this.catalogRepo.getProductById(EntityId.fromString(request.productId));
@@ -68,7 +71,7 @@ export class OrderService {
 
     this.orderRepo.saveOrder(order, true, request.commandId);
 
-    return this.mapToResponse(order);
+    return mapOrderToResponse(order);
   }
 
   async removeItem(
@@ -87,7 +90,7 @@ export class OrderService {
 
     order.removeItem(EntityId.fromString(itemId));
     this.orderRepo.saveOrder(order, true);
-    return this.mapToResponse(order);
+    return mapOrderToResponse(order);
   }
 
   async sendRound(orderId: string, request: SendRoundRequest): Promise<OrderResponse> {
@@ -102,12 +105,24 @@ export class OrderService {
 
     order.sendDraftItems();
     this.orderRepo.saveOrder(order, true);
-    return this.mapToResponse(order);
+    return mapOrderToResponse(order);
   }
 
   async closeOrder(orderId: string, request: CloseOrderRequest): Promise<OrderResponse> {
     const order = this.orderRepo.getOrderById(EntityId.fromString(orderId));
     if (!order) throw new ObjectNotFoundError(`Order ${orderId} not found`);
+
+    if (this.orderRepo.hasProcessedCommand(request.commandId)) {
+      const event = this.orderRepo.getProcessedCommandEvent(request.commandId);
+      if (event?.aggregateId === orderId && event.eventType === 'ORDER_CLOSED') {
+        return mapOrderToResponse(order);
+      }
+      throw new AppError(
+        'COMMAND_ID_CONFLICT',
+        409,
+        'commandId was already used for a different operation.',
+      );
+    }
 
     if (order.version !== request.expectedVersion) {
       throw new ConcurrencyError(
@@ -115,10 +130,9 @@ export class OrderService {
       );
     }
 
-    const balanceDue = Money.fromMinorUnits(request.balanceDueAmount, order.currency);
-    order.close(balanceDue);
-    this.orderRepo.saveOrder(order, true);
-    return this.mapToResponse(order);
+    order.close(request.commandId);
+    this.orderRepo.saveOrder(order, true, request.commandId);
+    return mapOrderToResponse(order);
   }
 
   async cancelOrder(orderId: string, request: CancelOrderRequest): Promise<OrderResponse> {
@@ -133,7 +147,7 @@ export class OrderService {
 
     order.cancel();
     this.orderRepo.saveOrder(order, true);
-    return this.mapToResponse(order);
+    return mapOrderToResponse(order);
   }
 
   async updateTables(orderId: string, request: UpdateOrderTablesRequest): Promise<OrderResponse> {
@@ -150,59 +164,6 @@ export class OrderService {
     order.updateTables(tableIds);
 
     this.orderRepo.saveOrder(order, true);
-    return this.mapToResponse(order);
-  }
-
-  private mapToResponse(order: Order): OrderResponse {
-    const subtotal = order.getSubtotal();
-
-    return {
-      id: order.id.toString(),
-      tenantId: order.tenantId.toString(),
-      locationId: order.locationId.toString(),
-      orderType: order.orderType,
-      channel: order.orderChannel,
-      currency: order.currency,
-      status: order.status,
-      tableIds: order.tableIds.map((t) => t.toString()),
-      items: order.items.map((i) => ({
-        id: i.id.toString(),
-        status: i.sendStatus,
-        addedAt: order.createdAt.toISOString(),
-        sentAt: order.createdAt.toISOString(),
-        productSnapshot: {
-          productId: i.snapshot.productId.toString(),
-          productName: i.snapshot.productName,
-          basePrice: {
-            amount: i.snapshot.basePrice.amount,
-            currency: i.snapshot.basePrice.currency,
-          },
-          taxRateBasisPoints: i.snapshot.taxRateBasisPoints,
-          taxCalculationMode: i.snapshot.taxCalculationMode,
-          stationId: i.snapshot.stationId?.toString() ?? null,
-          selectedModifiers: i.snapshot.modifiers.map((m) => ({
-            modifierOptionId: m.id.toString(),
-            name: m.name,
-            priceDelta: {
-              amount: m.priceDelta.amount,
-              currency: m.priceDelta.currency,
-            },
-          })),
-        },
-      })),
-      rounds: order.rounds.map((r) => ({
-        id: r.id.toString(),
-        roundNumber: r.roundNumber,
-        sentAt: r.sentAt.toISOString(),
-        itemIds: [],
-      })),
-      subtotal: {
-        amount: subtotal.amount,
-        currency: subtotal.currency,
-      },
-      version: order.version,
-      createdAt: order.createdAt.toISOString(),
-      updatedAt: order.createdAt.toISOString(),
-    };
+    return mapOrderToResponse(order);
   }
 }

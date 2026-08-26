@@ -1,9 +1,4 @@
-import {
-  sqliteTable,
-  text,
-  integer,
-  uniqueIndex,
-} from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, integer, uniqueIndex } from 'drizzle-orm/sqlite-core';
 
 // ─── INFRASTRUCTURE ─────────────────────────────────────────────────────────
 
@@ -50,7 +45,9 @@ export const modifierGroups = sqliteTable('modifier_groups', {
 
 export const modifierOptions = sqliteTable('modifier_options', {
   id: text('id').primaryKey(),
-  groupId: text('group_id').notNull().references(() => modifierGroups.id),
+  groupId: text('group_id')
+    .notNull()
+    .references(() => modifierGroups.id),
   name: text('name').notNull(),
   priceDeltaAmount: integer('price_delta_amount').notNull().default(0),
   priceDeltaCurrency: text('price_delta_currency').notNull(),
@@ -65,7 +62,9 @@ export const products = sqliteTable('products', {
   description: text('description').notNull().default(''),
   productType: text('product_type').notNull().default('STANDARD'), // STANDARD | RECIPE | NON_INVENTORY
   categoryId: text('category_id').references(() => categories.id),
-  taxProfileId: text('tax_profile_id').notNull().references(() => taxProfiles.id),
+  taxProfileId: text('tax_profile_id')
+    .notNull()
+    .references(() => taxProfiles.id),
   basePriceAmount: integer('base_price_amount').notNull(),
   basePriceCurrency: text('base_price_currency').notNull(),
   stationId: text('station_id'),
@@ -79,26 +78,34 @@ export const products = sqliteTable('products', {
 export const productModifierGroups = sqliteTable(
   'product_modifier_groups',
   {
-    productId: text('product_id').notNull().references(() => products.id),
-    modifierGroupId: text('modifier_group_id').notNull().references(() => modifierGroups.id),
+    productId: text('product_id')
+      .notNull()
+      .references(() => products.id),
+    modifierGroupId: text('modifier_group_id')
+      .notNull()
+      .references(() => modifierGroups.id),
     displayOrder: integer('display_order').notNull().default(0),
   },
   (table) => ({
     unq: uniqueIndex('unq_product_modifier_group').on(table.productId, table.modifierGroupId),
-  })
+  }),
 );
 
 export const modifierPriceOverrides = sqliteTable(
   'modifier_price_overrides',
   {
-    productId: text('product_id').notNull().references(() => products.id),
-    modifierOptionId: text('modifier_option_id').notNull().references(() => modifierOptions.id),
+    productId: text('product_id')
+      .notNull()
+      .references(() => products.id),
+    modifierOptionId: text('modifier_option_id')
+      .notNull()
+      .references(() => modifierOptions.id),
     priceDeltaAmount: integer('price_delta_amount').notNull(),
     priceDeltaCurrency: text('price_delta_currency').notNull(),
   },
   (table) => ({
     unq: uniqueIndex('unq_modifier_price_override').on(table.productId, table.modifierOptionId),
-  })
+  }),
 );
 
 // ─── ORDERS ─────────────────────────────────────────────────────────────────
@@ -119,24 +126,30 @@ export const orders = sqliteTable('orders', {
 export const orderTableAssignments = sqliteTable(
   'order_table_assignments',
   {
-    orderId: text('order_id').notNull().references(() => orders.id),
+    orderId: text('order_id')
+      .notNull()
+      .references(() => orders.id),
     tableId: text('table_id').notNull(),
   },
   (table) => ({
     unq: uniqueIndex('unq_order_table_assignment').on(table.orderId, table.tableId),
-  })
+  }),
 );
 
 export const rounds = sqliteTable('rounds', {
   id: text('id').primaryKey(),
-  orderId: text('order_id').notNull().references(() => orders.id),
+  orderId: text('order_id')
+    .notNull()
+    .references(() => orders.id),
   roundNumber: integer('round_number').notNull(),
   sentAt: integer('sent_at', { mode: 'timestamp_ms' }).notNull(),
 });
 
 export const orderItems = sqliteTable('order_items', {
   id: text('id').primaryKey(),
-  orderId: text('order_id').notNull().references(() => orders.id),
+  orderId: text('order_id')
+    .notNull()
+    .references(() => orders.id),
   productId: text('product_id').notNull(),
   productName: text('product_name').notNull(),
   basePriceAmount: integer('base_price_amount').notNull(),
@@ -152,9 +165,64 @@ export const orderItems = sqliteTable('order_items', {
 
 export const orderItemModifiers = sqliteTable('order_item_modifiers', {
   id: text('id').primaryKey(),
-  orderItemId: text('order_item_id').notNull().references(() => orderItems.id),
+  orderItemId: text('order_item_id')
+    .notNull()
+    .references(() => orderItems.id),
   modifierOptionId: text('modifier_option_id').notNull(),
   name: text('name').notNull(),
   priceDeltaAmount: integer('price_delta_amount').notNull(),
   priceDeltaCurrency: text('price_delta_currency').notNull(),
+});
+
+// ─── CASH ───────────────────────────────────────────────────────────────────
+
+export const cashRegisters = sqliteTable('cash_registers', {
+  id: text('id').primaryKey(),
+  tenantId: text('tenant_id').notNull(),
+  locationId: text('location_id').notNull(),
+  name: text('name').notNull(),
+  currency: text('currency').notNull(),
+  active: integer('active', { mode: 'boolean' }).notNull().default(true),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+});
+
+export const cashSessions = sqliteTable('cash_sessions', {
+  id: text('id').primaryKey(),
+  cashRegisterId: text('cash_register_id')
+    .notNull()
+    .references(() => cashRegisters.id),
+  tenantId: text('tenant_id').notNull(),
+  locationId: text('location_id').notNull(),
+  openingFloatAmount: integer('opening_float_amount').notNull(),
+  currency: text('currency').notNull(),
+  businessDate: text('business_date').notNull(),
+  status: text('status').notNull(),
+  openedAt: integer('opened_at', { mode: 'timestamp_ms' }).notNull(),
+  openedBy: text('opened_by').notNull(),
+  closedAt: integer('closed_at', { mode: 'timestamp_ms' }),
+  openCommandId: text('open_command_id').notNull().unique(),
+});
+
+// ─── PAYMENTS ───────────────────────────────────────────────────────────────
+
+export const payments = sqliteTable('payments', {
+  id: text('id').primaryKey(),
+  orderId: text('order_id')
+    .notNull()
+    .references(() => orders.id),
+  cashSessionId: text('cash_session_id')
+    .notNull()
+    .references(() => cashSessions.id),
+  method: text('method').notNull(),
+  amountAppliedAmount: integer('amount_applied_amount').notNull(),
+  tipAmount: integer('tip_amount').notNull(),
+  currency: text('currency').notNull(),
+  cashTenderedAmount: integer('cash_tendered_amount'),
+  changeGivenAmount: integer('change_given_amount').notNull(),
+  status: text('status').notNull(),
+  externalReference: text('external_reference'),
+  commandId: text('command_id').notNull().unique(),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  completedAt: integer('completed_at', { mode: 'timestamp_ms' }),
+  voidedAt: integer('voided_at', { mode: 'timestamp_ms' }),
 });

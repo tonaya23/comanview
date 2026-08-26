@@ -1,17 +1,28 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import { createEdgeClient, EdgeClientError } from '@comanview/client-sdk';
-import type { CategoryResponse, OrderResponse, ProductResponse } from '@comanview/contracts';
+import type {
+  CashSessionResponse,
+  CategoryResponse,
+  OrderResponse,
+  PaymentConfigResponse,
+  PaymentMethod,
+  ProductResponse,
+  TipSelection,
+} from '@comanview/contracts';
 import {
   ALL_CATEGORIES,
   formatMoney,
   getErrorMessage,
+  getLocalBusinessDate,
   getVisibleCategories,
   getVisibleProducts,
+  minorUnitsToInput,
+  parseMoneyInputToMinorUnits,
+  percentageAmountHalfUp,
 } from './posLogic.js';
 
 const edge = createEdgeClient({ baseUrl: import.meta.env['VITE_EDGE_API_URL'] ?? '/api' });
 const currentOrderStorageKey = 'comanview.pos.currentOrderId';
-
 type ConnectionState = 'CHECKING' | 'CONNECTED' | 'DISCONNECTED';
 
 export function App() {
@@ -20,10 +31,27 @@ export function App() {
   const [products, setProducts] = useState<ProductResponse[]>([]);
   const [selectedCategoryId, setSelectedCategoryId] = useState(ALL_CATEGORIES);
   const [order, setOrder] = useState<OrderResponse | null>(null);
+  const [cashSession, setCashSession] = useState<CashSessionResponse | null>(null);
+  const [paymentConfig, setPaymentConfig] = useState<PaymentConfigResponse | null>(null);
   const [loadingCatalog, setLoadingCatalog] = useState(true);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [showOpenCash, setShowOpenCash] = useState(false);
+  const [openingFloat, setOpeningFloat] = useState('0.00');
+  const [showPayment, setShowPayment] = useState(false);
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('CASH');
+  const [paymentAmount, setPaymentAmount] = useState('0.00');
+  const [cashTendered, setCashTendered] = useState('0.00');
+  const [tipMode, setTipMode] = useState<'NONE' | 'PERCENTAGE' | 'FIXED_AMOUNT'>('NONE');
+  const [tipBasisPoints, setTipBasisPoints] = useState(1000);
+  const [fixedTip, setFixedTip] = useState('0.00');
+
+  const updateOrder = useCallback((next: OrderResponse) => {
+    setOrder(next);
+    window.localStorage.setItem(currentOrderStorageKey, next.id);
+    setConnection('CONNECTED');
+  }, []);
 
   const refreshConnection = useCallback(async () => {
     try {
@@ -36,58 +64,56 @@ export function App() {
     }
   }, []);
 
-  const refreshCatalog = useCallback(async () => {
-    setLoadingCatalog(true);
+  const refreshOperationalState = useCallback(async () => {
     try {
-      const [nextCategories, nextProducts] = await Promise.all([
+      const [nextCategories, nextProducts, currentCash, config] = await Promise.all([
         edge.getCategories(),
         edge.getProducts(),
+        edge.getCurrentCashSession(),
+        edge.getPaymentConfig(),
       ]);
       setCategories(nextCategories);
       setProducts(nextProducts);
+      setCashSession(currentCash.session);
+      setPaymentConfig(config);
       setConnection('CONNECTED');
-    } catch (catalogError) {
-      if (catalogError instanceof EdgeClientError && catalogError.code === 'EDGE_UNREACHABLE') {
+    } catch (stateError) {
+      if (stateError instanceof EdgeClientError && stateError.code === 'EDGE_UNREACHABLE')
         setConnection('DISCONNECTED');
-      }
-      setError(getErrorMessage(catalogError));
+      setError(getErrorMessage(stateError));
     } finally {
       setLoadingCatalog(false);
     }
   }, []);
 
   const restoreCurrentOrder = useCallback(async () => {
-    const storedOrderId = window.localStorage.getItem(currentOrderStorageKey);
-    if (!storedOrderId) return;
-
+    const id = window.localStorage.getItem(currentOrderStorageKey);
+    if (!id) return;
     try {
-      setOrder(await edge.getOrder(storedOrderId));
+      setOrder(await edge.getOrder(id));
     } catch (restoreError) {
       window.localStorage.removeItem(currentOrderStorageKey);
-      if (!(restoreError instanceof EdgeClientError && restoreError.code === 'ORDER_NOT_FOUND')) {
+      if (!(restoreError instanceof EdgeClientError && restoreError.code === 'ORDER_NOT_FOUND'))
         setError(getErrorMessage(restoreError));
-      }
     }
   }, []);
 
   useEffect(() => {
     let wasConnected = false;
-
-    const checkEdge = async () => {
+    const check = async () => {
       const connected = await refreshConnection();
       if (connected && !wasConnected) {
         wasConnected = true;
-        await Promise.all([refreshCatalog(), restoreCurrentOrder()]);
+        await Promise.all([refreshOperationalState(), restoreCurrentOrder()]);
       } else if (!connected) {
         wasConnected = false;
         setLoadingCatalog(false);
       }
     };
-
-    void checkEdge();
-    const healthTimer = window.setInterval(() => void checkEdge(), 5000);
-    return () => window.clearInterval(healthTimer);
-  }, [refreshCatalog, refreshConnection, restoreCurrentOrder]);
+    void check();
+    const timer = window.setInterval(() => void check(), 5000);
+    return () => window.clearInterval(timer);
+  }, [refreshConnection, refreshOperationalState, restoreCurrentOrder]);
 
   const visibleCategories = useMemo(() => getVisibleCategories(categories), [categories]);
   const visibleProducts = useMemo(
@@ -96,174 +122,257 @@ export function App() {
   );
   const draftItems = order?.items.filter((item) => item.status === 'DRAFT') ?? [];
   const sentItems = order?.items.filter((item) => item.status === 'SENT') ?? [];
+  const amountMinor = parseMoneyInputToMinorUnits(paymentAmount) ?? 0;
+  const fixedTipMinor = parseMoneyInputToMinorUnits(fixedTip) ?? 0;
+  const tipPreview =
+    tipMode === 'PERCENTAGE'
+      ? percentageAmountHalfUp(amountMinor, tipBasisPoints)
+      : tipMode === 'FIXED_AMOUNT'
+        ? fixedTipMinor
+        : 0;
+  const tenderedMinor = parseMoneyInputToMinorUnits(cashTendered) ?? 0;
+  const changePreview = Math.max(0, tenderedMinor - amountMinor - tipPreview);
+  const isBusy = pendingAction !== null;
+  const canOperateOrder = order?.status === 'OPEN' && connection === 'CONNECTED' && !isBusy;
 
-  const updateOrder = useCallback((nextOrder: OrderResponse) => {
-    setOrder(nextOrder);
-    window.localStorage.setItem(currentOrderStorageKey, nextOrder.id);
-    setConnection('CONNECTED');
-  }, []);
-
-  async function runOrderMutation(
-    actionName: string,
-    mutation: () => Promise<OrderResponse>,
-    successNotice: string,
-  ) {
-    setPendingAction(actionName);
+  function clearFeedback() {
     setError(null);
     setNotice(null);
+  }
 
+  async function mutate(name: string, action: () => Promise<OrderResponse>, message: string) {
+    setPendingAction(name);
+    clearFeedback();
     try {
-      updateOrder(await mutation());
-      setNotice(successNotice);
-    } catch (mutationError) {
-      if (mutationError instanceof EdgeClientError && mutationError.code === 'EDGE_UNREACHABLE') {
+      const next = await action();
+      updateOrder(next);
+      setNotice(message);
+      return next;
+    } catch (problem) {
+      if (problem instanceof EdgeClientError && problem.code === 'EDGE_UNREACHABLE')
         setConnection('DISCONNECTED');
-      }
-
-      if (
-        mutationError instanceof EdgeClientError &&
-        mutationError.code === 'STALE_ORDER_VERSION' &&
-        order
-      ) {
+      if (problem instanceof EdgeClientError && problem.code === 'STALE_ORDER_VERSION' && order) {
         try {
           updateOrder(await edge.getOrder(order.id));
         } catch {
-          // The original conflict remains the most actionable feedback.
+          /* original error is clearer */
         }
       }
-
-      setError(getErrorMessage(mutationError));
+      setError(getErrorMessage(problem));
+      return null;
     } finally {
       setPendingAction(null);
     }
   }
 
   async function createOrder() {
-    if (order && order.items.length > 0) {
-      const shouldReplace = window.confirm(
-        'La venta actual permanecerá abierta en Edge. ¿Quieres iniciar otra venta?',
-      );
-      if (!shouldReplace) return;
-    }
-
+    if (
+      order?.status === 'OPEN' &&
+      order.items.length > 0 &&
+      !window.confirm('La venta actual permanecerá abierta en Edge. ¿Quieres iniciar otra venta?')
+    )
+      return;
     const currency = products.find((product) => product.active)?.basePrice.currency ?? 'MXN';
-    await runOrderMutation(
+    await mutate(
       'create-order',
       () => edge.createOrder({ orderType: 'COUNTER', channel: 'POS', currency }),
-      'Venta creada y confirmada por Edge.',
+      'Nueva venta creada en Edge.',
     );
   }
-
   async function addProduct(product: ProductResponse) {
     if (!order) return;
-
-    await runOrderMutation(
+    await mutate(
       `add-${product.id}`,
       () =>
         edge.addOrderItem(order.id, {
-          commandId: window.crypto.randomUUID(),
+          commandId: crypto.randomUUID(),
           expectedVersion: order.version,
           productId: product.id,
         }),
-      `${product.name} agregado a la venta.`,
+      `${product.name} agregado.`,
     );
   }
-
   async function removeItem(itemId: string) {
     if (!order) return;
-
-    await runOrderMutation(
+    await mutate(
       `remove-${itemId}`,
       () => edge.removeOrderItem(order.id, itemId, { expectedVersion: order.version }),
       'Producto retirado del borrador.',
     );
   }
-
   async function sendRound() {
     if (!order) return;
-
-    await runOrderMutation(
+    await mutate(
       'send-round',
       () => edge.sendRound(order.id, { expectedVersion: order.version }),
-      `Ronda ${order.rounds.length + 1} enviada y confirmada por Edge.`,
+      `Ronda ${order.rounds.length + 1} enviada a Edge.`,
     );
   }
 
-  async function retryConnection() {
-    setError(null);
-    setConnection('CHECKING');
-    const connected = await refreshConnection();
-    if (connected) {
-      await Promise.all([refreshCatalog(), restoreCurrentOrder()]);
+  async function openCash(event: FormEvent) {
+    event.preventDefault();
+    const amount = parseMoneyInputToMinorUnits(openingFloat);
+    if (amount === null) {
+      setError('Ingresa un fondo inicial válido, con máximo dos decimales.');
+      return;
+    }
+    setPendingAction('open-cash');
+    clearFeedback();
+    try {
+      const session = await edge.openCashSession({
+        commandId: crypto.randomUUID(),
+        openingFloatAmount: amount,
+        businessDate: getLocalBusinessDate(),
+      });
+      setCashSession(session);
+      setShowOpenCash(false);
+      setNotice('Caja abierta y persistida en Edge.');
+    } catch (problem) {
+      setError(getErrorMessage(problem));
+    } finally {
+      setPendingAction(null);
     }
   }
 
-  const isBusy = pendingAction !== null;
+  function beginPayment() {
+    if (!order) return;
+    const balance = minorUnitsToInput(order.balanceDue.amount);
+    setPaymentAmount(balance);
+    setCashTendered(balance);
+    setTipMode('NONE');
+    setShowPayment(true);
+  }
+
+  async function submitPayment(event: FormEvent) {
+    event.preventDefault();
+    if (!order) return;
+    const applied = parseMoneyInputToMinorUnits(paymentAmount);
+    const tendered = parseMoneyInputToMinorUnits(cashTendered);
+    if (!applied || applied > order.balanceDue.amount) {
+      setError('El monto debe ser mayor a cero y no superar el saldo pendiente.');
+      return;
+    }
+    if (paymentMethod === 'CASH' && (tendered === null || tendered < applied + tipPreview)) {
+      setError('El efectivo recibido debe cubrir el pago y la propina.');
+      return;
+    }
+    let tip: TipSelection = { type: 'NONE' };
+    if (tipMode === 'PERCENTAGE') tip = { type: 'PERCENTAGE', basisPoints: tipBasisPoints };
+    if (tipMode === 'FIXED_AMOUNT') tip = { type: 'FIXED_AMOUNT', amount: fixedTipMinor };
+    const next = await mutate(
+      'payment',
+      () =>
+        edge.createPayment(order.id, {
+          commandId: crypto.randomUUID(),
+          expectedVersion: order.version,
+          method: paymentMethod,
+          amountApplied: applied,
+          tip,
+          cashTendered: paymentMethod === 'CASH' ? tendered : null,
+        }),
+      `${paymentMethod === 'CASH' ? 'Pago en efectivo' : 'Pago con tarjeta'} confirmado por Edge.`,
+    );
+    if (next) {
+      setShowPayment(false);
+      try {
+        setCashSession((await edge.getCurrentCashSession()).session);
+      } catch {
+        /* payment remains confirmed */
+      }
+    }
+  }
+
+  async function closeOrder() {
+    if (!order) return;
+    if (draftItems.length > 0) {
+      setError('Envía o elimina los productos pendientes antes de cerrar la venta.');
+      return;
+    }
+    if (
+      await mutate(
+        'close-order',
+        () =>
+          edge.closeOrder(order.id, {
+            commandId: crypto.randomUUID(),
+            expectedVersion: order.version,
+          }),
+        'Venta cobrada y cerrada en Edge.',
+      )
+    )
+      setShowPayment(false);
+  }
+
+  async function retryConnection() {
+    clearFeedback();
+    setConnection('CHECKING');
+    if (await refreshConnection())
+      await Promise.all([refreshOperationalState(), restoreCurrentOrder()]);
+  }
 
   return (
     <div className="pos-shell">
       <header className="topbar">
         <div className="brand">
-          <span className="brand-mark" aria-hidden="true">
-            C
-          </span>
+          <span className="brand-mark">C</span>
           <div>
             <strong>ComanView</strong>
             <span>Point of Sale</span>
           </div>
         </div>
-
-        <div className={`connection connection--${connection.toLowerCase()}`} role="status">
-          <span className="connection-dot" aria-hidden="true" />
-          <div>
-            <strong>
-              {connection === 'CONNECTED'
-                ? 'Edge conectado'
-                : connection === 'CHECKING'
-                  ? 'Verificando Edge'
-                  : 'Conexión local perdida'}
-            </strong>
+        <div className="topbar-statuses">
+          <button
+            className={`cash-status ${cashSession ? 'cash-status--open' : ''}`}
+            type="button"
+            onClick={() => !cashSession && setShowOpenCash(true)}
+          >
+            <strong>{cashSession ? 'Caja abierta' : 'Caja cerrada'}</strong>
             <span>
-              {connection === 'CONNECTED'
-                ? 'Operación local disponible'
-                : connection === 'CHECKING'
-                  ? 'Un momento…'
-                  : 'Las operaciones no pueden confirmarse'}
+              {cashSession
+                ? `${cashSession.businessDate} · Esperado ${formatMoney(cashSession.expectedCash.amount, cashSession.expectedCash.currency)}`
+                : 'Toca para abrir'}
             </span>
+          </button>
+          <div className={`connection connection--${connection.toLowerCase()}`} role="status">
+            <span className="connection-dot" />
+            <div>
+              <strong>
+                {connection === 'CONNECTED'
+                  ? 'Edge conectado'
+                  : connection === 'CHECKING'
+                    ? 'Verificando Edge'
+                    : 'Conexión local perdida'}
+              </strong>
+              <span>
+                {connection === 'CONNECTED'
+                  ? 'Operación local disponible'
+                  : 'Operaciones sin confirmar'}
+              </span>
+            </div>
+            {connection === 'DISCONNECTED' && (
+              <button
+                className="connection-retry"
+                type="button"
+                onClick={() => void retryConnection()}
+              >
+                Reintentar
+              </button>
+            )}
           </div>
-          {connection === 'DISCONNECTED' && (
-            <button
-              className="connection-retry"
-              type="button"
-              onClick={() => void retryConnection()}
-            >
-              Reintentar
-            </button>
-          )}
         </div>
       </header>
-
       {connection === 'DISCONNECTED' && (
         <div className="critical-banner" role="alert">
-          <strong>Edge no está disponible.</strong> Puedes revisar la pantalla, pero ninguna venta
-          se mostrará como confirmada hasta recuperar la conexión local.
+          <strong>Edge no está disponible.</strong> Ninguna operación financiera se confirma sin la
+          autoridad local.
         </div>
       )}
-
       {(error || notice) && (
         <div
           className={`feedback ${error ? 'feedback--error' : 'feedback--success'}`}
           role="status"
         >
           <span>{error ?? notice}</span>
-          <button
-            type="button"
-            aria-label="Cerrar mensaje"
-            onClick={() => {
-              setError(null);
-              setNotice(null);
-            }}
-          >
+          <button type="button" aria-label="Cerrar mensaje" onClick={clearFeedback}>
             ×
           </button>
         </div>
@@ -284,7 +393,7 @@ export function App() {
               onClick={() => setSelectedCategoryId(ALL_CATEGORIES)}
             >
               <span>Todo</span>
-              <small>{products.filter((product) => product.active).length}</small>
+              <small>{products.filter((p) => p.active).length}</small>
             </button>
             {visibleCategories.map((category) => (
               <button
@@ -297,11 +406,7 @@ export function App() {
               >
                 <span>{category.name}</span>
                 <small>
-                  {
-                    products.filter(
-                      (product) => product.active && product.categoryId === category.id,
-                    ).length
-                  }
+                  {products.filter((p) => p.active && p.categoryId === category.id).length}
                 </small>
               </button>
             ))}
@@ -315,63 +420,47 @@ export function App() {
               <h2 id="products-title">
                 {selectedCategoryId === ALL_CATEGORIES
                   ? 'Todos los productos'
-                  : (visibleCategories.find((category) => category.id === selectedCategoryId)
-                      ?.name ?? 'Productos')}
+                  : (visibleCategories.find((c) => c.id === selectedCategoryId)?.name ??
+                    'Productos')}
               </h2>
             </div>
             <span className="product-count">{visibleProducts.length} productos</span>
           </div>
-
           {loadingCatalog ? (
-            <div className="empty-state" aria-live="polite">
-              <span className="spinner" aria-hidden="true" />
+            <div className="empty-state">
+              <span className="spinner" />
               <strong>Cargando catálogo desde Edge</strong>
-              <p>Consultando la información local disponible.</p>
             </div>
           ) : visibleProducts.length === 0 ? (
             <div className="empty-state">
-              <span className="empty-icon" aria-hidden="true">
-                ◇
-              </span>
-              <strong>No hay productos en esta categoría</strong>
-              <p>Prepara la base de desarrollo o selecciona otra categoría.</p>
-              <button
-                type="button"
-                className="secondary-button"
-                onClick={() => void refreshCatalog()}
-              >
-                Actualizar catálogo
-              </button>
+              <span className="empty-icon">◇</span>
+              <strong>No hay productos disponibles</strong>
             </div>
           ) : (
             <div className="product-grid">
-              {visibleProducts.map((product) => {
-                const disabled =
-                  !product.available || !order || isBusy || connection !== 'CONNECTED';
-                return (
-                  <button
-                    type="button"
-                    className={`product-card ${!product.available ? 'product-card--unavailable' : ''}`}
-                    key={product.id}
-                    disabled={disabled}
-                    onClick={() => void addProduct(product)}
-                  >
-                    <span className="product-card-accent" aria-hidden="true" />
-                    <span className="product-name">{product.name}</span>
-                    <span className="product-description">
-                      {product.description || 'Producto del catálogo'}
+              {visibleProducts.map((product) => (
+                <button
+                  type="button"
+                  className={`product-card ${!product.available ? 'product-card--unavailable' : ''}`}
+                  key={product.id}
+                  disabled={!product.available || !canOperateOrder}
+                  onClick={() => void addProduct(product)}
+                >
+                  <span className="product-card-accent" />
+                  <span className="product-name">{product.name}</span>
+                  <span className="product-description">
+                    {product.description || 'Producto del catálogo'}
+                  </span>
+                  <span className="product-footer">
+                    <strong>
+                      {formatMoney(product.basePrice.amount, product.basePrice.currency)}
+                    </strong>
+                    <span>
+                      {product.available ? (order ? 'Agregar +' : 'Crea una venta') : 'Agotado'}
                     </span>
-                    <span className="product-footer">
-                      <strong>
-                        {formatMoney(product.basePrice.amount, product.basePrice.currency)}
-                      </strong>
-                      <span>
-                        {product.available ? (order ? 'Agregar +' : 'Crea una venta') : 'Agotado'}
-                      </span>
-                    </span>
-                  </button>
-                );
-              })}
+                  </span>
+                </button>
+              ))}
             </div>
           )}
         </section>
@@ -380,11 +469,16 @@ export function App() {
           <div className="order-header">
             <div>
               <span className="eyebrow">Venta actual</span>
-              <h2>{order ? 'Mostrador' : 'Sin venta abierta'}</h2>
+              <h2>
+                {order
+                  ? order.status === 'CLOSED'
+                    ? 'Venta cerrada'
+                    : 'Mostrador'
+                  : 'Sin venta abierta'}
+              </h2>
               {order && (
                 <span className="order-meta">
-                  Versión {order.version} · {order.items.length}{' '}
-                  {order.items.length === 1 ? 'producto' : 'productos'}
+                  Versión {order.version} · {order.items.length} productos
                 </span>
               )}
             </div>
@@ -397,12 +491,11 @@ export function App() {
               {pendingAction === 'create-order' ? 'Creando…' : order ? 'Nueva' : 'Crear venta'}
             </button>
           </div>
-
           {!order ? (
             <div className="order-empty">
-              <span aria-hidden="true">＋</span>
+              <span>＋</span>
               <strong>Inicia una venta de mostrador</strong>
-              <p>Después podrás tocar los productos para agregarlos como DRAFT.</p>
+              <p>Crea una Order local y agrega productos.</p>
               <button
                 type="button"
                 className="primary-button"
@@ -418,14 +511,13 @@ export function App() {
                 {order.items.length === 0 && (
                   <div className="order-empty compact">
                     <strong>La venta está vacía</strong>
-                    <p>Selecciona un producto del catálogo.</p>
+                    <p>Selecciona un producto.</p>
                   </div>
                 )}
-
                 {draftItems.length > 0 && (
-                  <section className="item-group" aria-labelledby="draft-heading">
+                  <section className="item-group">
                     <div className="item-group-heading">
-                      <h3 id="draft-heading">
+                      <h3>
                         <span className="status-dot status-dot--draft" />
                         Borrador
                       </h3>
@@ -446,22 +538,20 @@ export function App() {
                           </strong>
                           <button
                             type="button"
-                            aria-label={`Eliminar ${item.productSnapshot.productName}`}
-                            disabled={isBusy || connection !== 'CONNECTED'}
+                            disabled={!canOperateOrder}
                             onClick={() => void removeItem(item.id)}
                           >
-                            {pendingAction === `remove-${item.id}` ? '…' : 'Eliminar'}
+                            Eliminar
                           </button>
                         </div>
                       </article>
                     ))}
                   </section>
                 )}
-
                 {sentItems.length > 0 && (
-                  <section className="item-group" aria-labelledby="sent-heading">
+                  <section className="item-group">
                     <div className="item-group-heading">
-                      <h3 id="sent-heading">
+                      <h3>
                         <span className="status-dot status-dot--sent" />
                         Enviado
                       </h3>
@@ -483,38 +573,291 @@ export function App() {
                     ))}
                   </section>
                 )}
+                {order.payments.length > 0 && (
+                  <section className="payments-list">
+                    <div className="item-group-heading">
+                      <h3>Pagos</h3>
+                      <span>{order.payments.length} registrados</span>
+                    </div>
+                    {order.payments.map((payment) => (
+                      <div
+                        className={`payment-row payment-row--${payment.status.toLowerCase()}`}
+                        key={payment.id}
+                      >
+                        <div>
+                          <strong>{payment.method}</strong>
+                          <span>
+                            {payment.status}
+                            {payment.tipAmount.amount > 0
+                              ? ` · Propina ${formatMoney(payment.tipAmount.amount, payment.tipAmount.currency)}`
+                              : ''}
+                          </span>
+                        </div>
+                        <strong>
+                          {formatMoney(
+                            payment.amountApplied.amount,
+                            payment.amountApplied.currency,
+                          )}
+                        </strong>
+                      </div>
+                    ))}
+                  </section>
+                )}
               </div>
-
               <footer className="order-summary">
                 <div className="round-summary">
                   <span>Rondas enviadas</span>
                   <strong>{order.rounds.length}</strong>
                 </div>
-                <div className="subtotal-row">
+                <div className="financial-lines">
                   <div>
-                    <span>Subtotal</span>
-                    <small>Calculado por Edge</small>
+                    <span>Total</span>
+                    <strong>{formatMoney(order.total.amount, order.total.currency)}</strong>
                   </div>
-                  <strong>{formatMoney(order.subtotal.amount, order.subtotal.currency)}</strong>
+                  <div>
+                    <span>Pagado</span>
+                    <strong>
+                      {formatMoney(order.paidAmount.amount, order.paidAmount.currency)}
+                    </strong>
+                  </div>
+                  <div className="balance-line">
+                    <span>Saldo pendiente</span>
+                    <strong>
+                      {formatMoney(order.balanceDue.amount, order.balanceDue.currency)}
+                    </strong>
+                  </div>
                 </div>
-                <button
-                  type="button"
-                  className="send-button"
-                  disabled={draftItems.length === 0 || isBusy || connection !== 'CONNECTED'}
-                  onClick={() => void sendRound()}
-                >
-                  <span>
-                    {pendingAction === 'send-round' ? 'Enviando ronda…' : 'Enviar nueva ronda'}
-                  </span>
-                  <small>
-                    {draftItems.length} {draftItems.length === 1 ? 'producto' : 'productos'} DRAFT
-                  </small>
-                </button>
+                {order.status === 'OPEN' && (
+                  <div className="order-actions">
+                    <button
+                      type="button"
+                      className="send-button"
+                      disabled={draftItems.length === 0 || !canOperateOrder}
+                      onClick={() => void sendRound()}
+                    >
+                      <span>{pendingAction === 'send-round' ? 'Enviando…' : 'Enviar ronda'}</span>
+                      <small>{draftItems.length} DRAFT</small>
+                    </button>
+                    <button
+                      type="button"
+                      className="payment-button"
+                      disabled={
+                        order.balanceDue.amount === 0 ||
+                        order.items.length === 0 ||
+                        !canOperateOrder ||
+                        !cashSession
+                      }
+                      onClick={beginPayment}
+                    >
+                      Cobrar
+                    </button>
+                    {order.balanceDue.amount === 0 && order.items.length > 0 && (
+                      <>
+                        <button
+                          type="button"
+                          className="close-order-button"
+                          disabled={!canOperateOrder || draftItems.length > 0}
+                          onClick={() => void closeOrder()}
+                        >
+                          {pendingAction === 'close-order' ? 'Cerrando…' : 'Cerrar venta'}
+                        </button>
+                        {draftItems.length > 0 && (
+                          <p className="close-order-hint" role="status">
+                            Envía o elimina los productos pendientes antes de cerrar la venta.
+                          </p>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
+                {order.status === 'CLOSED' && (
+                  <div className="closed-callout">✓ Venta cerrada y balanceada</div>
+                )}
+                {!cashSession && order.status === 'OPEN' && (
+                  <button
+                    type="button"
+                    className="cash-required"
+                    onClick={() => setShowOpenCash(true)}
+                  >
+                    Abre la caja para poder cobrar
+                  </button>
+                )}
               </footer>
             </>
           )}
         </aside>
       </main>
+
+      {showOpenCash && (
+        <div className="modal-backdrop">
+          <section
+            className="payment-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="cash-title"
+          >
+            <div className="modal-heading">
+              <div>
+                <span className="eyebrow">Inicio de turno</span>
+                <h2 id="cash-title">Abrir caja</h2>
+              </div>
+              <button type="button" onClick={() => setShowOpenCash(false)}>
+                ×
+              </button>
+            </div>
+            <form onSubmit={(event) => void openCash(event)}>
+              <label>
+                Business date
+                <input value={getLocalBusinessDate()} readOnly />
+              </label>
+              <label>
+                Fondo inicial
+                <input
+                  inputMode="decimal"
+                  value={openingFloat}
+                  onChange={(event) => setOpeningFloat(event.target.value)}
+                  autoFocus
+                />
+              </label>
+              <p className="field-help">
+                Se guarda en minor units exactos. El efectivo esperado parte de este fondo.
+              </p>
+              <button className="confirm-payment" disabled={isBusy} type="submit">
+                {pendingAction === 'open-cash' ? 'Abriendo…' : 'Abrir CashSession'}
+              </button>
+            </form>
+          </section>
+        </div>
+      )}
+
+      {showPayment && order && (
+        <div className="modal-backdrop">
+          <section
+            className="payment-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="payment-title"
+          >
+            <div className="modal-heading">
+              <div>
+                <span className="eyebrow">Cobro local</span>
+                <h2 id="payment-title">Registrar pago</h2>
+              </div>
+              <button type="button" onClick={() => setShowPayment(false)}>
+                ×
+              </button>
+            </div>
+            <div className="payment-balance">
+              <span>Saldo pendiente</span>
+              <strong>{formatMoney(order.balanceDue.amount, order.balanceDue.currency)}</strong>
+            </div>
+            <form onSubmit={(event) => void submitPayment(event)}>
+              <div className="method-selector">
+                <button
+                  type="button"
+                  className={paymentMethod === 'CASH' ? 'active' : ''}
+                  onClick={() => setPaymentMethod('CASH')}
+                >
+                  Efectivo
+                </button>
+                <button
+                  type="button"
+                  className={paymentMethod === 'CARD' ? 'active' : ''}
+                  onClick={() => setPaymentMethod('CARD')}
+                >
+                  Tarjeta
+                </button>
+              </div>
+              <label>
+                Monto aplicado al consumo
+                <input
+                  inputMode="decimal"
+                  value={paymentAmount}
+                  onChange={(event) => setPaymentAmount(event.target.value)}
+                />
+              </label>
+              {paymentConfig?.tipsEnabled && (
+                <fieldset className="tip-options">
+                  <legend>Propina separada</legend>
+                  <button
+                    type="button"
+                    className={tipMode === 'NONE' ? 'active' : ''}
+                    onClick={() => setTipMode('NONE')}
+                  >
+                    Sin propina
+                  </button>
+                  {paymentConfig.percentageOptionsBasisPoints.map((bps) => (
+                    <button
+                      type="button"
+                      className={tipMode === 'PERCENTAGE' && tipBasisPoints === bps ? 'active' : ''}
+                      key={bps}
+                      onClick={() => {
+                        setTipMode('PERCENTAGE');
+                        setTipBasisPoints(bps);
+                      }}
+                    >
+                      {bps / 100}%
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    className={tipMode === 'FIXED_AMOUNT' ? 'active' : ''}
+                    onClick={() => setTipMode('FIXED_AMOUNT')}
+                  >
+                    Monto
+                  </button>
+                </fieldset>
+              )}
+              {tipMode === 'FIXED_AMOUNT' && (
+                <label>
+                  Propina fija
+                  <input
+                    inputMode="decimal"
+                    value={fixedTip}
+                    onChange={(event) => setFixedTip(event.target.value)}
+                  />
+                </label>
+              )}
+              {paymentConfig?.tipsEnabled && (
+                <div className="calculation-row">
+                  <span>Propina</span>
+                  <strong>{formatMoney(tipPreview, order.currency)}</strong>
+                </div>
+              )}
+              {paymentMethod === 'CASH' ? (
+                <>
+                  <label>
+                    Efectivo recibido
+                    <input
+                      inputMode="decimal"
+                      value={cashTendered}
+                      onChange={(event) => setCashTendered(event.target.value)}
+                    />
+                  </label>
+                  <div className="change-row">
+                    <span>Cambio</span>
+                    <strong>{formatMoney(changePreview, order.currency)}</strong>
+                    <small>Edge confirma el valor definitivo</small>
+                  </div>
+                </>
+              ) : (
+                <div className="card-note">
+                  <strong>Registro administrativo</strong>
+                  <span>
+                    Confirma que el datáfono aprobó el cargo. ComanView no controla la transacción
+                    bancaria.
+                  </span>
+                </div>
+              )}
+              <button className="confirm-payment" disabled={isBusy} type="submit">
+                {pendingAction === 'payment'
+                  ? 'Confirmando con Edge…'
+                  : `Registrar ${paymentMethod === 'CASH' ? 'efectivo' : 'tarjeta'}`}
+              </button>
+            </form>
+          </section>
+        </div>
+      )}
     </div>
   );
 }

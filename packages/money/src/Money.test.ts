@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { Money, CurrencyMismatchError, InvalidMoneyAmountError } from './Money.js';
+import { calculateBasisPointsHalfUp, roundHalfUpToMinorUnits } from './rounding.js';
 
 describe('Money', () => {
   it('creates money from minor units safely', () => {
@@ -13,7 +14,9 @@ describe('Money', () => {
   });
 
   it('throws when creating money with unsafe integers', () => {
-    expect(() => Money.fromMinorUnits(Number.MAX_SAFE_INTEGER + 1, 'USD')).toThrow(InvalidMoneyAmountError);
+    expect(() => Money.fromMinorUnits(Number.MAX_SAFE_INTEGER + 1, 'USD')).toThrow(
+      InvalidMoneyAmountError,
+    );
   });
 
   it('normalizes currency to uppercase', () => {
@@ -133,5 +136,28 @@ describe('Money', () => {
       const money = Money.fromMinorUnits(1234, 'EUR');
       expect(JSON.stringify(money)).toBe('{"amount":1234,"currency":"EUR"}');
     });
+  });
+});
+
+describe('authoritative HALF_UP financial rounding', () => {
+  it('rounds exactly one half minor unit upward without floating point', () => {
+    expect(roundHalfUpToMinorUnits(21n, 2n)).toBe(11);
+  });
+
+  it('rounds values below one half down and values above one half up', () => {
+    expect(roundHalfUpToMinorUnits(104n, 10n)).toBe(10);
+    expect(roundHalfUpToMinorUnits(106n, 10n)).toBe(11);
+  });
+
+  it('calculates basis points using integer arithmetic and final HALF_UP rounding', () => {
+    expect(calculateBasisPointsHalfUp(105, 1000)).toBe(11);
+    expect(calculateBasisPointsHalfUp(104, 1000)).toBe(10);
+    expect(calculateBasisPointsHalfUp(12_900, 1500)).toBe(1935);
+  });
+
+  it('rejects negative or unsafe financial inputs', () => {
+    expect(() => roundHalfUpToMinorUnits(-1n, 2n)).toThrow(RangeError);
+    expect(() => roundHalfUpToMinorUnits(1n, 0n)).toThrow(RangeError);
+    expect(() => calculateBasisPointsHalfUp(-1, 1000)).toThrow(RangeError);
   });
 });

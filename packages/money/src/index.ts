@@ -7,3 +7,4 @@
  */
 
 export * from './Money.js';
+export * from './rounding.js';

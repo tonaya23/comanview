@@ -14,3 +14,5 @@ export * from './shared/EntityId.js';
 export * from './shared/DomainError.js';
 export * from './catalog/index.js';
 export * from './order/index.js';
+export * from './payment/index.js';
+export * from './cash/index.js';

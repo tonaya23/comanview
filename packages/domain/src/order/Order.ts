@@ -4,6 +4,8 @@ import { ProductSnapshot } from '../catalog/Snapshot.js';
 import { OrderType, OrderChannel, OrderStatus } from './types.js';
 import { OrderItem, OrderItemView } from './OrderItem.js';
 import { Round } from './Round.js';
+import { Payment, PaymentProps, CompletePaymentProps } from '../payment/Payment.js';
+import { PaymentNotFoundError, PaymentOverpaymentError } from '../payment/errors.js';
 import {
   OrderNotOpenError,
   OrderItemSentError,
@@ -11,7 +13,9 @@ import {
   NoDraftItemsError,
   TableAssignmentError,
   OrderBalanceNotZeroError,
+  OrderHasDraftItemsError,
   OrderCurrencyMismatchError,
+  OrderPaidAmountExceedsTotalError,
 } from './errors.js';
 import {
   AnyOrderEvent,
@@ -22,6 +26,8 @@ import {
   OrderClosedEvent,
   OrderCancelledEvent,
   TablesUpdatedEvent,
+  PaymentCompletedEvent,
+  PaymentVoidedEvent,
 } from './events.js';
 
 export interface CreateOrderProps {
@@ -74,6 +80,7 @@ export interface OrderProps {
   tableIds: EntityId[];
   items: OrderItem[];
   rounds: Round[];
+  payments: Payment[];
   events: AnyOrderEvent[];
   createdAt: Date;
 }
@@ -82,9 +89,10 @@ export interface OrderProps {
  * Interface used exclusively for reconstituting an Order from persistence
  * without emitting domain events or changing the version.
  */
-export interface RehydrateOrderProps extends Omit<OrderProps, 'items' | 'rounds'> {
+export interface RehydrateOrderProps extends Omit<OrderProps, 'items' | 'rounds' | 'payments'> {
   items: Array<import('./OrderItem.js').OrderItemProps>;
   rounds: Array<import('./Round.js').RoundProps>;
+  payments: PaymentProps[];
 }
 
 /**
@@ -150,6 +158,7 @@ export class Order {
       tableIds: input.tableIds ?? [],
       items: [],
       rounds: [],
+      payments: [],
       events: [event],
       createdAt: now,
     });
@@ -164,26 +173,58 @@ export class Order {
       ...props,
       items: props.items.map((i) => new OrderItem(i)),
       rounds: props.rounds.map((r) => new Round(r)),
+      payments: props.payments.map((payment) => Payment.rehydrate(payment)),
     });
   }
 
   // ─── Getters ────────────────────────────────────────────────────────────────
 
-  get id(): EntityId { return this.props.id; }
-  get tenantId(): EntityId { return this.props.tenantId; }
-  get locationId(): EntityId { return this.props.locationId; }
-  get orderType(): OrderType { return this.props.orderType; }
-  get orderChannel(): OrderChannel { return this.props.orderChannel; }
-  get orderNumber(): string { return this.props.orderNumber; }
-  get currency(): string { return this.props.currency; }
-  get status(): OrderStatus { return this.props.status; }
-  get version(): number { return this.props.version; }
-  get tableIds(): ReadonlyArray<EntityId> { return this.props.tableIds; }
+  get id(): EntityId {
+    return this.props.id;
+  }
+  get tenantId(): EntityId {
+    return this.props.tenantId;
+  }
+  get locationId(): EntityId {
+    return this.props.locationId;
+  }
+  get orderType(): OrderType {
+    return this.props.orderType;
+  }
+  get orderChannel(): OrderChannel {
+    return this.props.orderChannel;
+  }
+  get orderNumber(): string {
+    return this.props.orderNumber;
+  }
+  get currency(): string {
+    return this.props.currency;
+  }
+  get status(): OrderStatus {
+    return this.props.status;
+  }
+  get version(): number {
+    return this.props.version;
+  }
+  get tableIds(): ReadonlyArray<EntityId> {
+    return this.props.tableIds;
+  }
   /** Items exposed as the read-only OrderItemView interface (aggregate boundary). */
-  get items(): ReadonlyArray<OrderItemView> { return this.props.items; }
-  get rounds(): ReadonlyArray<Round> { return this.props.rounds; }
-  get events(): ReadonlyArray<AnyOrderEvent> { return this.props.events; }
-  get createdAt(): Date { return this.props.createdAt; }
+  get items(): ReadonlyArray<OrderItemView> {
+    return this.props.items;
+  }
+  get rounds(): ReadonlyArray<Round> {
+    return this.props.rounds;
+  }
+  get payments(): ReadonlyArray<Payment> {
+    return this.props.payments;
+  }
+  get events(): ReadonlyArray<AnyOrderEvent> {
+    return this.props.events;
+  }
+  get createdAt(): Date {
+    return this.props.createdAt;
+  }
 
   // ─── Guards ─────────────────────────────────────────────────────────────────
 
@@ -254,7 +295,7 @@ export class Order {
   removeItem(itemId: EntityId, commandId?: string): void {
     this.assertIsOpen();
 
-    const item = this.props.items.find(i => i.id.equals(itemId));
+    const item = this.props.items.find((i) => i.id.equals(itemId));
     if (!item) {
       throw new OrderItemNotFoundError(itemId.toString());
     }
@@ -262,7 +303,12 @@ export class Order {
       throw new OrderItemSentError(itemId.toString());
     }
 
-    this.props.items = this.props.items.filter(i => !i.id.equals(itemId));
+    const resultingSubtotal = this.getSubtotal().subtract(item.getLineTotal());
+    if (this.getPaidAmount().greaterThan(resultingSubtotal)) {
+      throw new OrderPaidAmountExceedsTotalError(this.id.toString());
+    }
+
+    this.props.items = this.props.items.filter((i) => !i.id.equals(itemId));
     this.bumpVersion();
 
     const event: OrderItemRemovedEvent = {
@@ -284,7 +330,7 @@ export class Order {
   sendDraftItems(commandId?: string): Round {
     this.assertIsOpen();
 
-    const draftItems = this.props.items.filter(i => i.isDraft);
+    const draftItems = this.props.items.filter((i) => i.isDraft);
     if (draftItems.length === 0) {
       throw new NoDraftItemsError(this.id.toString());
     }
@@ -309,7 +355,7 @@ export class Order {
       occurredAt: round.sentAt,
       commandId: commandId ?? null,
       roundId: round.id,
-      itemIds: draftItems.map(i => i.id),
+      itemIds: draftItems.map((i) => i.id),
     };
     this.emit(event);
 
@@ -319,27 +365,17 @@ export class Order {
   /**
    * Close the Order, freezing its commercial state (INV-15).
    *
-   * The caller (Application Layer) is responsible for computing balance_due
-   * (total - paid) and passing it here. The domain enforces that it is zero.
-   *
-   * This design keeps Payments out of the domain while still upholding
-   * the invariant that a non-zero balance_due prevents closure.
+   * The Aggregate derives balance_due from its own total and COMPLETED Payments.
+   * Closing requires zero balance and no DRAFT items; sending remains an explicit action.
    *
    * Once CLOSED, no further mutations are allowed (INV-03).
    *
-   * @param balanceDue   Remaining unpaid amount. Must be zero (Money.isZero()).
-   * @param commandId    Optional idempotency token.
+   * @param commandId Optional idempotency token.
    */
-  close(balanceDue: Money, commandId?: string): void {
+  close(commandId?: string): void {
     this.assertIsOpen();
 
-    if (balanceDue.currency !== this.props.currency) {
-      throw new OrderCurrencyMismatchError(
-        this.props.id.toString(),
-        this.props.currency,
-        balanceDue.currency,
-      );
-    }
+    const balanceDue = this.getBalanceDue();
 
     if (!balanceDue.isZero()) {
       throw new OrderBalanceNotZeroError(
@@ -347,6 +383,10 @@ export class Order {
         balanceDue.amount,
         balanceDue.currency,
       );
+    }
+
+    if (this.props.items.some((item) => item.isDraft)) {
+      throw new OrderHasDraftItemsError(this.props.id.toString());
     }
 
     this.props.status = 'CLOSED';
@@ -360,6 +400,72 @@ export class Order {
       commandId: commandId ?? null,
     };
     this.emit(event);
+  }
+
+  completePayment(input: Omit<CompletePaymentProps, 'orderId'>): Payment {
+    this.assertIsOpen();
+
+    if (
+      input.amountApplied.currency !== this.currency ||
+      input.tipAmount.currency !== this.currency ||
+      (input.cashTendered && input.cashTendered.currency !== this.currency)
+    ) {
+      const actualCurrency =
+        input.amountApplied.currency !== this.currency
+          ? input.amountApplied.currency
+          : input.tipAmount.currency !== this.currency
+            ? input.tipAmount.currency
+            : input.cashTendered!.currency;
+      throw new OrderCurrencyMismatchError(this.id.toString(), this.currency, actualCurrency);
+    }
+
+    const balanceDue = this.getBalanceDue();
+    if (input.amountApplied.greaterThan(balanceDue)) {
+      throw new PaymentOverpaymentError(
+        balanceDue.amount,
+        input.amountApplied.amount,
+        this.currency,
+      );
+    }
+
+    const payment = Payment.complete({ ...input, orderId: this.id });
+    this.props.payments.push(payment);
+    this.bumpVersion();
+
+    const event: PaymentCompletedEvent = {
+      eventId: EntityId.generate(),
+      eventType: 'PAYMENT_COMPLETED',
+      orderId: this.id,
+      occurredAt: payment.completedAt!,
+      commandId: payment.commandId,
+      paymentId: payment.id,
+      cashSessionId: payment.cashSessionId,
+      method: payment.method,
+      amountApplied: payment.amountApplied.amount,
+      tipAmount: payment.tipAmount.amount,
+      currency: this.currency,
+    };
+    this.emit(event);
+    return payment;
+  }
+
+  voidPayment(paymentId: EntityId, commandId?: string): Payment {
+    this.assertIsOpen();
+    const payment = this.props.payments.find((candidate) => candidate.id.equals(paymentId));
+    if (!payment) throw new PaymentNotFoundError(paymentId.toString());
+
+    payment.void();
+    this.bumpVersion();
+    const event: PaymentVoidedEvent = {
+      eventId: EntityId.generate(),
+      eventType: 'PAYMENT_VOIDED',
+      orderId: this.id,
+      occurredAt: payment.voidedAt!,
+      commandId: commandId ?? null,
+      paymentId: payment.id,
+    };
+    this.emit(event);
+    return payment;
   }
 
   /**
@@ -391,9 +497,7 @@ export class Order {
     this.assertIsOpen();
 
     if (this.props.orderType !== 'TABLE') {
-      throw new TableAssignmentError(
-        `Cannot assign tables to a ${this.props.orderType} order.`,
-      );
+      throw new TableAssignmentError(`Cannot assign tables to a ${this.props.orderType} order.`);
     }
 
     this.props.tableIds = [...tableIds];
@@ -424,5 +528,21 @@ export class Order {
       (acc, item) => acc.add(item.getLineTotal()),
       Money.zero(this.props.currency),
     );
+  }
+
+  getPaidAmount(): Money {
+    return this.props.payments
+      .filter((payment) => payment.status === 'COMPLETED')
+      .reduce((total, payment) => total.add(payment.amountApplied), Money.zero(this.currency));
+  }
+
+  getTipTotal(): Money {
+    return this.props.payments
+      .filter((payment) => payment.status === 'COMPLETED')
+      .reduce((total, payment) => total.add(payment.tipAmount), Money.zero(this.currency));
+  }
+
+  getBalanceDue(): Money {
+    return this.getSubtotal().subtract(this.getPaidAmount());
   }
 }

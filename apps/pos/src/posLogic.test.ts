@@ -7,6 +7,10 @@ import {
   getErrorMessage,
   getVisibleCategories,
   getVisibleProducts,
+  getLocalBusinessDate,
+  minorUnitsToInput,
+  parseMoneyInputToMinorUnits,
+  percentageAmountHalfUp,
 } from './posLogic.js';
 
 const product = (overrides: Partial<ProductResponse>): ProductResponse => ({
@@ -71,5 +75,27 @@ describe('POS presentation behavior', () => {
     expect(getErrorMessage(new EdgeClientError('technical', 'STALE_ORDER_VERSION', 409))).toContain(
       'cambió en otro dispositivo',
     );
+  });
+
+  it('explains that pending DRAFT items must be sent or removed before closing', () => {
+    expect(getErrorMessage(new EdgeClientError('technical', 'ORDER_HAS_DRAFT_ITEMS', 409))).toBe(
+      'Envía o elimina los productos pendientes antes de cerrar la venta.',
+    );
+  });
+
+  it('parses money input with exact minor units and rejects excess decimals', () => {
+    expect(parseMoneyInputToMinorUnits('10.50')).toBe(1050);
+    expect(parseMoneyInputToMinorUnits('10,5')).toBe(1050);
+    expect(parseMoneyInputToMinorUnits('10.005')).toBeNull();
+    expect(minorUnitsToInput(1050)).toBe('10.50');
+  });
+
+  it('previews percentage tips with deterministic HALF_UP integer rounding', () => {
+    expect(percentageAmountHalfUp(105, 1000)).toBe(11);
+    expect(percentageAmountHalfUp(104, 1000)).toBe(10);
+  });
+
+  it('uses an explicit local business date', () => {
+    expect(getLocalBusinessDate(new Date(2026, 7, 25, 23, 30))).toBe('2026-08-25');
   });
 });

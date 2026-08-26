@@ -9,3 +9,5 @@ export * from './errors.js';
 export * from './catalog.js';
 export * from './order.js';
 export * from './health.js';
+export * from './payment.js';
+export * from './cash.js';

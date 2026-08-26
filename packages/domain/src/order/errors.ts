@@ -26,10 +26,7 @@ export class OrderItemNotFoundError extends DomainError {
 
 export class NoDraftItemsError extends DomainError {
   constructor(orderId: string) {
-    super(
-      `Order ${orderId} has no DRAFT items to send.`,
-      'NO_DRAFT_ITEMS',
-    );
+    super(`Order ${orderId} has no DRAFT items to send.`, 'NO_DRAFT_ITEMS');
   }
 }
 
@@ -41,14 +38,23 @@ export class TableAssignmentError extends DomainError {
 
 /**
  * Thrown when attempting to close an Order whose balance_due is not zero.
- * The caller (Application Layer) is responsible for computing balance_due
- * and passing it to Order.close(). The domain enforces that it must be zero (INV-15).
+ * The Aggregate derives balance_due and enforces that it must be zero (INV-15).
  */
 export class OrderBalanceNotZeroError extends DomainError {
   constructor(orderId: string, balanceDue: number, currency: string) {
     super(
       `Order ${orderId} cannot be closed: balance_due is ${balanceDue} ${currency}, expected 0.`,
       'ORDER_BALANCE_NOT_ZERO',
+    );
+  }
+}
+
+/** Thrown when attempting to close an Order that still contains DRAFT items. */
+export class OrderHasDraftItemsError extends DomainError {
+  constructor(orderId: string) {
+    super(
+      `Order ${orderId} cannot be closed while it contains DRAFT items.`,
+      'ORDER_HAS_DRAFT_ITEMS',
     );
   }
 }
@@ -66,3 +72,11 @@ export class OrderCurrencyMismatchError extends DomainError {
   }
 }
 
+export class OrderPaidAmountExceedsTotalError extends DomainError {
+  constructor(orderId: string) {
+    super(
+      `Order ${orderId} cannot be changed because the resulting sale total would be below its completed paid amount.`,
+      'ORDER_PAID_AMOUNT_EXCEEDS_TOTAL',
+    );
+  }
+}

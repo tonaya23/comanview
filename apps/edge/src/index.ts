@@ -18,11 +18,16 @@ import { fileURLToPath } from 'node:url';
 import { serializerCompiler, validatorCompiler, ZodTypeProvider } from 'fastify-type-provider-zod';
 import { initDatabase, closeDatabase } from './infrastructure/database.js';
 import { errorHandler } from './app/errorHandler.js';
-import { CatalogRepository, OrderRepository } from '@comanview/database';
+import { CashRepository, CatalogRepository, OrderRepository } from '@comanview/database';
 import { CatalogService } from './modules/catalog/application/CatalogService.js';
 import { OrderService } from './modules/orders/application/OrderService.js';
 import { catalogRoutes } from './modules/catalog/http/routes.js';
 import { orderRoutes } from './modules/orders/http/routes.js';
+import { CashService } from './modules/cash/application/CashService.js';
+import { cashRoutes } from './modules/cash/http/routes.js';
+import { PaymentService } from './modules/payments/application/PaymentService.js';
+import { paymentRoutes } from './modules/payments/http/routes.js';
+import { defaultOperationalContext } from './app/operationalContext.js';
 import { HealthResponseSchema } from '@comanview/contracts';
 
 export async function buildApp(dbPath: string = ':memory:') {
@@ -43,14 +48,20 @@ export async function buildApp(dbPath: string = ':memory:') {
   // Setup Repositories
   const catalogRepo = new CatalogRepository(db);
   const orderRepo = new OrderRepository(db);
+  const cashRepo = new CashRepository(db);
 
   // Setup Services
   const catalogService = new CatalogService(catalogRepo);
-  const orderService = new OrderService(orderRepo, catalogRepo);
+  const orderService = new OrderService(orderRepo, catalogRepo, defaultOperationalContext);
+  const cashService = new CashService(cashRepo, defaultOperationalContext);
+  const paymentService = new PaymentService(orderRepo, cashRepo, defaultOperationalContext);
+  cashService.ensureDefaultRegister();
 
   // Setup Routes
   app.register(catalogRoutes(catalogService), { prefix: '/catalog' });
   app.register(orderRoutes(orderService), { prefix: '/orders' });
+  app.register(cashRoutes(cashService), { prefix: '/cash-sessions' });
+  app.register(paymentRoutes(paymentService));
 
   // Health route
   app.get(

@@ -6,6 +6,7 @@ import {
   OrderItemNotFoundError,
   NoDraftItemsError,
   OrderBalanceNotZeroError,
+  OrderHasDraftItemsError,
   OrderCurrencyMismatchError,
   ProductUnavailableError,
   ProductInactiveError,
@@ -14,8 +15,22 @@ import {
   ModifierUnavailableError,
   ModifierInactiveError,
   TableAssignmentError,
+  InvalidCashTenderedError,
+  InvalidPaymentAmountError,
+  InvalidTipError,
+  OrderPaidAmountExceedsTotalError,
+  PaymentCurrencyMismatchError,
+  PaymentNotCompletedError,
+  PaymentNotFoundError,
+  PaymentOverpaymentError,
+  TipsDisabledError,
 } from '@comanview/domain';
-import { ConcurrencyError, ObjectNotFoundError, InvalidStateError, InvariantViolationError } from './errors.js';
+import {
+  ConcurrencyError,
+  ObjectNotFoundError,
+  InvalidStateError,
+  InvariantViolationError,
+} from './errors.js';
 import { ErrorResponse } from '@comanview/contracts';
 
 export class AppError extends Error {
@@ -23,7 +38,7 @@ export class AppError extends Error {
     public readonly code: string,
     public readonly statusCode: number,
     message: string,
-    public readonly details?: any
+    public readonly details?: any,
   ) {
     super(message);
     this.name = 'AppError';
@@ -86,6 +101,9 @@ export function errorHandler(error: Error, request: FastifyRequest, reply: Fasti
     } else if (error instanceof OrderBalanceNotZeroError) {
       statusCode = 409;
       code = 'ORDER_BALANCE_NOT_ZERO';
+    } else if (error instanceof OrderHasDraftItemsError) {
+      statusCode = 409;
+      code = 'ORDER_HAS_DRAFT_ITEMS';
     } else if (error instanceof OrderCurrencyMismatchError) {
       statusCode = 409;
       code = 'ORDER_CURRENCY_MISMATCH';
@@ -98,12 +116,32 @@ export function errorHandler(error: Error, request: FastifyRequest, reply: Fasti
     } else if (error instanceof TaxProfileInactiveError) {
       statusCode = 409;
       code = 'TAX_PROFILE_INACTIVE';
-    } else if (error instanceof InvalidModifierSelectionError || error instanceof ModifierUnavailableError || error instanceof ModifierInactiveError) {
+    } else if (
+      error instanceof InvalidModifierSelectionError ||
+      error instanceof ModifierUnavailableError ||
+      error instanceof ModifierInactiveError
+    ) {
       statusCode = 409;
       code = 'INVALID_MODIFIER_SELECTION';
     } else if (error instanceof TableAssignmentError) {
       statusCode = 409;
       code = 'DOMAIN_CONFLICT';
+    } else if (error instanceof PaymentNotFoundError) {
+      statusCode = 404;
+      code = 'PAYMENT_NOT_FOUND';
+    } else if (
+      error instanceof PaymentOverpaymentError ||
+      error instanceof InvalidCashTenderedError ||
+      error instanceof PaymentCurrencyMismatchError ||
+      error instanceof PaymentNotCompletedError ||
+      error instanceof TipsDisabledError ||
+      error instanceof OrderPaidAmountExceedsTotalError
+    ) {
+      statusCode = 409;
+      code = error.code;
+    } else if (error instanceof InvalidPaymentAmountError || error instanceof InvalidTipError) {
+      statusCode = 400;
+      code = error.code;
     } else {
       statusCode = 400;
       code = (error as DomainError).code ?? 'DOMAIN_ERROR';
