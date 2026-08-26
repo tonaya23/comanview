@@ -30,9 +30,11 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-const MIGRATION_PATHS = ['0000_initial.sql', '0001_payments_cash.sql'].map((migration) =>
-  join(__dirname, `../../../../../migrations/edge/${migration}`),
-);
+const MIGRATION_PATHS = [
+  '0000_initial.sql',
+  '0001_payments_cash.sql',
+  '0002_order_item_special_instructions.sql',
+].map((migration) => join(__dirname, `../../../../../migrations/edge/${migration}`));
 
 function applyMigrations(sqlite: { exec(source: string): unknown }): void {
   for (const migrationPath of MIGRATION_PATHS) {
@@ -282,6 +284,31 @@ describe('Edge Persistence Integration Tests', () => {
     expect(item.snapshot.modifiers[0]!.priceDelta.amount).toBe(150);
     expect(item.snapshot.modifiers[0]!.priceDelta.currency).toBe('MXN');
     expect(found!.getSubtotal().amount).toBe(20150);
+  });
+
+  it('6b. special instructions persist independently through edit, SENT and CLOSED states', () => {
+    const db = createTestDb();
+    const catalogRepo = new CatalogRepository(db);
+    const orderRepo = new OrderRepository(db);
+    const product = makeProduct(undefined, 'MXN', 0);
+    catalogRepo.saveProduct(product);
+
+    const order = makeOrder();
+    const item = order.addItem(product.createSnapshot(new Map()), undefined, '  salsa aparte  ');
+    orderRepo.saveOrder(order, false);
+
+    const draft = orderRepo.getOrderById(order.id)!;
+    expect(draft.items[0]!.specialInstructions).toBe('salsa aparte');
+    draft.updateItemSpecialInstructions(item.id, 'solo una rodaja');
+    draft.sendDraftItems();
+    draft.close();
+    orderRepo.saveOrder(draft, false);
+
+    const closed = orderRepo.getOrderById(order.id)!;
+    expect(closed.status).toBe('CLOSED');
+    expect(closed.items[0]!.sendStatus).toBe('SENT');
+    expect(closed.items[0]!.specialInstructions).toBe('solo una rodaja');
+    expect(closed.items[0]!.snapshot).not.toHaveProperty('specialInstructions');
   });
 
   // ── 7. Multiple Rounds preserved ─────────────────────────────────────────
@@ -551,7 +578,7 @@ describe('Edge Persistence Integration Tests', () => {
     catalogRepo.saveProduct(product);
 
     const order = makeOrder('MXN');
-    order.addItem(product.createSnapshot(new Map()));
+    order.addItem(product.createSnapshot(new Map()), undefined, 'persist after restart');
     order.sendDraftItems();
     orderRepo.saveOrder(order, true);
 
@@ -567,6 +594,7 @@ describe('Edge Persistence Integration Tests', () => {
     expect(recovered).not.toBeNull();
     expect(recovered!.status).toBe('OPEN');
     expect(recovered!.currency).toBe('MXN');
+    expect(recovered!.items[0]!.specialInstructions).toBe('persist after restart');
     expect(recovered!.version).toBe(3); // created + item added + round sent
     expect(recovered!.rounds).toHaveLength(1);
     expect(recovered!.items).toHaveLength(1);

@@ -65,6 +65,48 @@ describe('createEdgeClient', () => {
     );
   });
 
+  it('sends a versioned idempotent special-instructions command', async () => {
+    const order = {
+      id: '01991a00-0000-7000-8000-000000000301',
+      tenantId: '01991a00-0000-7000-8000-000000000302',
+      locationId: '01991a00-0000-7000-8000-000000000303',
+      orderType: 'COUNTER',
+      channel: 'POS',
+      currency: 'MXN',
+      status: 'OPEN',
+      tableIds: [],
+      items: [],
+      rounds: [],
+      subtotal: { amount: 0, currency: 'MXN' },
+      total: { amount: 0, currency: 'MXN' },
+      paidAmount: { amount: 0, currency: 'MXN' },
+      balanceDue: { amount: 0, currency: 'MXN' },
+      tipTotal: { amount: 0, currency: 'MXN' },
+      payments: [],
+      version: 4,
+      createdAt: '2026-08-25T12:00:00.000Z',
+      updatedAt: '2026-08-25T12:00:00.000Z',
+    };
+    const fetchMock = vi.fn(async () => jsonResponse(order));
+    const client = createEdgeClient({ fetch: fetchMock as EdgeFetch });
+    const request = {
+      commandId: 'note-command',
+      expectedVersion: 3,
+      specialInstructions: 'salsa aparte',
+    };
+
+    await client.updateOrderItemSpecialInstructions(
+      order.id,
+      '01991a00-0000-7000-8000-000000000304',
+      request,
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/orders/${order.id}/items/01991a00-0000-7000-8000-000000000304/instructions`,
+      expect.objectContaining({ method: 'PATCH', body: JSON.stringify(request) }),
+    );
+  });
+
   it('exposes stable Edge error codes', async () => {
     const client = createEdgeClient({
       fetch: vi.fn(async () =>

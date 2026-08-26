@@ -1484,6 +1484,10 @@ Cambios posteriores del catálogo MUST NOT modificar el snapshot.
 
 Esto aplica incluso mientras el ítem continúe DRAFT.
 
+Cada `OrderItem` MAY mantener `special_instructions` como texto plano transaccional separado del `ProductSnapshot`, del catálogo y de los modificadores. Edge MUST normalizar whitespace exterior; texto vacío MUST persistirse como `null`; el máximo V1 será 500 caracteres. Este campo MUST NOT afectar precio, impuestos, subtotal ni total.
+
+Mientras el ítem sea DRAFT, `special_instructions` MAY crearse, editarse o eliminarse explícitamente. Al pasar a SENT queda congelado junto con la historia operativa del ítem y MUST NOT modificarse mediante el flujo normal.
+
 ## 7.7 Estados de ítem
 
 ```text
@@ -1502,6 +1506,8 @@ READY
 ## 7.8 Sent Finality
 
 Un SENT OrderItem MUST NOT desaparecer ni modificarse silenciosamente.
+
+Esto incluye sus `special_instructions`: el envío conserva el texto histórico exacto y cualquier cambio posterior requerirá un flujo explícito futuro, no una edición silenciosa.
 
 ## 7.9 Rounds
 

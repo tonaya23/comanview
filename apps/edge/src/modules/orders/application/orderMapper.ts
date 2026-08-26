@@ -18,6 +18,7 @@ export function mapOrderToResponse(order: Order): OrderResponse {
     tableIds: order.tableIds.map((tableId) => tableId.toString()),
     items: order.items.map((item) => ({
       id: item.id.toString(),
+      specialInstructions: item.specialInstructions,
       status: item.sendStatus,
       addedAt: order.createdAt.toISOString(),
       sentAt: item.isSent ? order.createdAt.toISOString() : null,

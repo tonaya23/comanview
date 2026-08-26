@@ -105,6 +105,9 @@ const errorMessages: Record<string, string> = {
   MODIFIER_INACTIVE:
     'Una opción seleccionada fue retirada del catálogo. Actualizamos el catálogo; revisa tu selección.',
   ORDER_ITEM_SENT: 'El producto ya fue enviado y no puede eliminarse como borrador.',
+  ORDER_ITEM_SPECIAL_INSTRUCTIONS_FROZEN:
+    'La nota quedó protegida porque el producto ya fue enviado.',
+  SPECIAL_INSTRUCTIONS_TOO_LONG: 'La nota especial no puede superar 500 caracteres.',
   NO_DRAFT_ITEMS: 'No hay productos nuevos por enviar.',
   STALE_ORDER_VERSION:
     'La venta cambió en otro dispositivo. Se actualizó su estado; revisa e intenta de nuevo.',
@@ -122,6 +125,10 @@ const errorMessages: Record<string, string> = {
   COMMAND_ID_CONFLICT: 'La operación ya fue utilizada con datos diferentes. Intenta nuevamente.',
   INVALID_EDGE_RESPONSE: 'Edge respondió con datos inesperados. Intenta recargar la pantalla.',
 };
+
+export function canEditItemSpecialInstructions(status: 'DRAFT' | 'SENT'): boolean {
+  return status === 'DRAFT';
+}
 
 export function getErrorMessage(error: unknown): string {
   if (error instanceof EdgeClientError) {

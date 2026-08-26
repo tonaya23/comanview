@@ -24,6 +24,24 @@ export class OrderItemNotFoundError extends DomainError {
   }
 }
 
+export class OrderItemSpecialInstructionsFrozenError extends DomainError {
+  constructor(itemId: string) {
+    super(
+      `Special instructions for SENT OrderItem ${itemId} cannot be changed.`,
+      'ORDER_ITEM_SPECIAL_INSTRUCTIONS_FROZEN',
+    );
+  }
+}
+
+export class SpecialInstructionsTooLongError extends DomainError {
+  constructor(maxLength: number) {
+    super(
+      `Special instructions cannot exceed ${maxLength} characters.`,
+      'SPECIAL_INSTRUCTIONS_TOO_LONG',
+    );
+  }
+}
+
 export class NoDraftItemsError extends DomainError {
   constructor(orderId: string) {
     super(`Order ${orderId} has no DRAFT items to send.`, 'NO_DRAFT_ITEMS');

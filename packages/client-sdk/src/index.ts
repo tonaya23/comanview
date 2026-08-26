@@ -22,6 +22,7 @@ import {
   type CreatePaymentRequest,
   type VoidPaymentRequest,
   type CloseOrderRequest,
+  type UpdateOrderItemSpecialInstructionsRequest,
 } from '@comanview/contracts';
 
 interface RuntimeSchema<T> {
@@ -72,6 +73,11 @@ export interface EdgeClient {
     orderId: string,
     itemId: string,
     request: RemoveOrderItemRequest,
+  ): Promise<OrderResponse>;
+  updateOrderItemSpecialInstructions(
+    orderId: string,
+    itemId: string,
+    request: UpdateOrderItemSpecialInstructionsRequest,
   ): Promise<OrderResponse>;
   sendRound(orderId: string, request: SendRoundRequest): Promise<OrderResponse>;
   getCurrentCashSession(): Promise<CurrentCashSessionResponse>;
@@ -175,6 +181,11 @@ export function createEdgeClient(options: EdgeClientOptions = {}): EdgeClient {
     removeOrderItem: (orderId, itemId, body) =>
       request(`/orders/${orderId}/items/${itemId}`, OrderSchema, {
         method: 'DELETE',
+        body: JSON.stringify(body),
+      }),
+    updateOrderItemSpecialInstructions: (orderId, itemId, body) =>
+      request(`/orders/${orderId}/items/${itemId}/instructions`, OrderSchema, {
+        method: 'PATCH',
         body: JSON.stringify(body),
       }),
     sendRound: (orderId, body) =>

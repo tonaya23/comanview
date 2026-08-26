@@ -2,7 +2,12 @@ import { EntityId } from '../shared/EntityId.js';
 import { Money } from '@comanview/money';
 import { ProductSnapshot } from '../catalog/Snapshot.js';
 import { OrderType, OrderChannel, OrderStatus } from './types.js';
-import { OrderItem, OrderItemView } from './OrderItem.js';
+import {
+  MAX_SPECIAL_INSTRUCTIONS_LENGTH,
+  normalizeSpecialInstructions,
+  OrderItem,
+  OrderItemView,
+} from './OrderItem.js';
 import { Round } from './Round.js';
 import { Payment, PaymentProps, CompletePaymentProps } from '../payment/Payment.js';
 import { PaymentNotFoundError, PaymentOverpaymentError } from '../payment/errors.js';
@@ -16,12 +21,15 @@ import {
   OrderHasDraftItemsError,
   OrderCurrencyMismatchError,
   OrderPaidAmountExceedsTotalError,
+  OrderItemSpecialInstructionsFrozenError,
+  SpecialInstructionsTooLongError,
 } from './errors.js';
 import {
   AnyOrderEvent,
   OrderCreatedEvent,
   OrderItemAddedEvent,
   OrderItemRemovedEvent,
+  OrderItemSpecialInstructionsUpdatedEvent,
   RoundSentEvent,
   OrderClosedEvent,
   OrderCancelledEvent,
@@ -250,7 +258,11 @@ export class Order {
    * Snapshot is frozen at the moment of addition (INV-04).
    * The snapshot's currency must match the Order's currency (single-currency V1 rule).
    */
-  addItem(snapshot: ProductSnapshot, commandId?: string): OrderItemView {
+  addItem(
+    snapshot: ProductSnapshot,
+    commandId?: string,
+    specialInstructions?: string | null,
+  ): OrderItemView {
     this.assertIsOpen();
 
     // Single-currency enforcement: reject snapshots with a different currency.
@@ -262,6 +274,14 @@ export class Order {
       );
     }
 
+    const normalizedInstructions = normalizeSpecialInstructions(specialInstructions);
+    if (
+      normalizedInstructions !== null &&
+      normalizedInstructions.length > MAX_SPECIAL_INSTRUCTIONS_LENGTH
+    ) {
+      throw new SpecialInstructionsTooLongError(MAX_SPECIAL_INSTRUCTIONS_LENGTH);
+    }
+
     const item = new OrderItem({
       id: EntityId.generate(),
       snapshot,
@@ -269,6 +289,7 @@ export class Order {
       sendStatus: 'DRAFT',
       prepStatus: 'PENDING',
       roundId: null,
+      specialInstructions: normalizedInstructions,
     });
 
     this.props.items.push(item);
@@ -282,10 +303,45 @@ export class Order {
       commandId: commandId ?? null,
       itemId: item.id,
       productName: snapshot.productName,
+      specialInstructions: normalizedInstructions,
     };
     this.emit(event);
 
     return item;
+  }
+
+  updateItemSpecialInstructions(
+    itemId: EntityId,
+    specialInstructions: string | null,
+    commandId?: string,
+  ): void {
+    this.assertIsOpen();
+
+    const item = this.props.items.find((candidate) => candidate.id.equals(itemId));
+    if (!item) throw new OrderItemNotFoundError(itemId.toString());
+    if (item.isSent) throw new OrderItemSpecialInstructionsFrozenError(itemId.toString());
+
+    const normalizedInstructions = normalizeSpecialInstructions(specialInstructions);
+    if (
+      normalizedInstructions !== null &&
+      normalizedInstructions.length > MAX_SPECIAL_INSTRUCTIONS_LENGTH
+    ) {
+      throw new SpecialInstructionsTooLongError(MAX_SPECIAL_INSTRUCTIONS_LENGTH);
+    }
+
+    item._setSpecialInstructions(normalizedInstructions);
+    this.bumpVersion();
+
+    const event: OrderItemSpecialInstructionsUpdatedEvent = {
+      eventId: EntityId.generate(),
+      eventType: 'ITEM_SPECIAL_INSTRUCTIONS_UPDATED',
+      orderId: this.id,
+      occurredAt: new Date(),
+      commandId: commandId ?? null,
+      itemId,
+      specialInstructions: normalizedInstructions,
+    };
+    this.emit(event);
   }
 
   /**

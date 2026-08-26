@@ -161,6 +161,7 @@ export const orderItems = sqliteTable('order_items', {
   sendStatus: text('send_status').notNull(), // DRAFT | SENT
   prepStatus: text('prep_status').notNull(), // PENDING | PREPARING | READY
   roundId: text('round_id').references(() => rounds.id),
+  specialInstructions: text('special_instructions'),
 });
 
 export const orderItemModifiers = sqliteTable('order_item_modifiers', {

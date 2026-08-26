@@ -47,9 +47,15 @@ export class OrderRepository {
     return !!row;
   }
 
-  getProcessedCommandEvent(commandId: string): { aggregateId: string; eventType: string } | null {
+  getProcessedCommandEvent(
+    commandId: string,
+  ): { aggregateId: string; eventType: string; payload: string } | null {
     const row = this.db
-      .select({ aggregateId: schema.eventLog.aggregateId, eventType: schema.eventLog.eventType })
+      .select({
+        aggregateId: schema.eventLog.aggregateId,
+        eventType: schema.eventLog.eventType,
+        payload: schema.eventLog.payload,
+      })
       .from(schema.eventLog)
       .where(eq(schema.eventLog.commandId, commandId))
       .get();
@@ -171,6 +177,7 @@ export class OrderRepository {
             sendStatus: item.sendStatus,
             prepStatus: item.prepStatus,
             roundId: item.roundId?.toString() ?? null,
+            specialInstructions: item.specialInstructions,
           })
           .onConflictDoUpdate({
             target: schema.orderItems.id,
@@ -179,6 +186,7 @@ export class OrderRepository {
               prepStatus: item.prepStatus,
               roundId: item.roundId?.toString() ?? null,
               quantity: item.quantity,
+              specialInstructions: item.specialInstructions,
             },
           })
           .run();
@@ -334,6 +342,7 @@ export class OrderRepository {
         sendStatus: itemRow.sendStatus as OrderItemSendStatus,
         prepStatus: itemRow.prepStatus as OrderItemPrepStatus,
         roundId: itemRow.roundId ? EntityId.fromString(itemRow.roundId) : null,
+        specialInstructions: itemRow.specialInstructions,
       });
     }
 

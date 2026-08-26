@@ -14,6 +14,7 @@ export interface OrderItemView {
   readonly sendStatus: OrderItemSendStatus;
   readonly prepStatus: OrderItemPrepStatus;
   readonly roundId: EntityId | null;
+  readonly specialInstructions: string | null;
   readonly isDraft: boolean;
   readonly isSent: boolean;
   getLineTotal(): Money;
@@ -27,6 +28,15 @@ export interface OrderItemProps {
   prepStatus: OrderItemPrepStatus;
   /** Set when the item is sent as part of a Round (INV-06). */
   roundId: EntityId | null;
+  /** Transactional preparation note; intentionally separate from ProductSnapshot. */
+  specialInstructions: string | null;
+}
+
+export const MAX_SPECIAL_INSTRUCTIONS_LENGTH = 500;
+
+export function normalizeSpecialInstructions(value?: string | null): string | null {
+  const normalized = value?.trim() ?? '';
+  return normalized.length === 0 ? null : normalized;
 }
 
 /**
@@ -40,14 +50,33 @@ export interface OrderItemProps {
 export class OrderItem implements OrderItemView {
   constructor(private props: OrderItemProps) {}
 
-  get id(): EntityId { return this.props.id; }
-  get snapshot(): ProductSnapshot { return this.props.snapshot; }
-  get quantity(): number { return this.props.quantity; }
-  get sendStatus(): OrderItemSendStatus { return this.props.sendStatus; }
-  get prepStatus(): OrderItemPrepStatus { return this.props.prepStatus; }
-  get roundId(): EntityId | null { return this.props.roundId; }
-  get isDraft(): boolean { return this.props.sendStatus === 'DRAFT'; }
-  get isSent(): boolean { return this.props.sendStatus === 'SENT'; }
+  get id(): EntityId {
+    return this.props.id;
+  }
+  get snapshot(): ProductSnapshot {
+    return this.props.snapshot;
+  }
+  get quantity(): number {
+    return this.props.quantity;
+  }
+  get sendStatus(): OrderItemSendStatus {
+    return this.props.sendStatus;
+  }
+  get prepStatus(): OrderItemPrepStatus {
+    return this.props.prepStatus;
+  }
+  get roundId(): EntityId | null {
+    return this.props.roundId;
+  }
+  get specialInstructions(): string | null {
+    return this.props.specialInstructions;
+  }
+  get isDraft(): boolean {
+    return this.props.sendStatus === 'DRAFT';
+  }
+  get isSent(): boolean {
+    return this.props.sendStatus === 'SENT';
+  }
 
   /**
    * Calculate the line total: (base price + all modifier deltas) × quantity.
@@ -71,6 +100,11 @@ export class OrderItem implements OrderItemView {
     this.props.sendStatus = 'SENT';
     this.props.prepStatus = 'PENDING';
     this.props.roundId = roundId;
+  }
+
+  /** Internal: called by Order.updateItemSpecialInstructions() only. */
+  _setSpecialInstructions(value: string | null): void {
+    this.props.specialInstructions = value;
   }
 
   /** Internal: to be called by KDS integration at application layer. */

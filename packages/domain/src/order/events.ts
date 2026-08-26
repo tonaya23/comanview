@@ -26,11 +26,18 @@ export interface OrderItemAddedEvent extends OrderDomainEvent {
   readonly eventType: 'ITEM_ADDED';
   readonly itemId: EntityId;
   readonly productName: string;
+  readonly specialInstructions: string | null;
 }
 
 export interface OrderItemRemovedEvent extends OrderDomainEvent {
   readonly eventType: 'ITEM_REMOVED';
   readonly itemId: EntityId;
+}
+
+export interface OrderItemSpecialInstructionsUpdatedEvent extends OrderDomainEvent {
+  readonly eventType: 'ITEM_SPECIAL_INSTRUCTIONS_UPDATED';
+  readonly itemId: EntityId;
+  readonly specialInstructions: string | null;
 }
 
 export interface RoundSentEvent extends OrderDomainEvent {
@@ -71,6 +78,7 @@ export type AnyOrderEvent =
   | OrderCreatedEvent
   | OrderItemAddedEvent
   | OrderItemRemovedEvent
+  | OrderItemSpecialInstructionsUpdatedEvent
   | RoundSentEvent
   | OrderClosedEvent
   | OrderCancelledEvent

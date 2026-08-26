@@ -14,12 +14,13 @@ import {
   CancelOrderRequest,
   RemoveOrderItemRequest,
   UpdateOrderTablesRequestSchema,
-  UpdateOrderTablesRequest
+  UpdateOrderTablesRequest,
+  UpdateOrderItemSpecialInstructionsRequestSchema,
+  UpdateOrderItemSpecialInstructionsRequest,
 } from '@comanview/contracts';
 
 export function orderRoutes(orderService: OrderService): FastifyPluginAsyncZod {
   return async (fastify) => {
-    
     // POST /orders
     fastify.post(
       '/',
@@ -32,24 +33,37 @@ export function orderRoutes(orderService: OrderService): FastifyPluginAsyncZod {
         const body = request.body as CreateOrderRequest;
         const order = await orderService.createOrder(body);
         reply.status(201).send(order);
-      }
+      },
+    );
+
+    // PATCH /orders/:id/items/:itemId/instructions
+    fastify.patch(
+      '/:id/items/:itemId/instructions',
+      {
+        schema: {
+          body: UpdateOrderItemSpecialInstructionsRequestSchema,
+        },
+      },
+      async (request, reply) => {
+        const { id, itemId } = request.params as { id: string; itemId: string };
+        const body = request.body as UpdateOrderItemSpecialInstructionsRequest;
+        const order = await orderService.updateItemSpecialInstructions(id, itemId, body);
+        reply.send(order);
+      },
     );
 
     // GET /orders/:id
-    fastify.get(
-      '/:id',
-      async (request, reply) => {
-        const { id } = request.params as { id: string };
-        const order = await orderService.getOrder(id);
-        
-        if (!order) {
-          reply.status(404).send({ error: 'ORDER_NOT_FOUND', message: 'Order not found' });
-          return;
-        }
+    fastify.get('/:id', async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const order = await orderService.getOrder(id);
 
-        reply.send(order);
+      if (!order) {
+        reply.status(404).send({ error: 'ORDER_NOT_FOUND', message: 'Order not found' });
+        return;
       }
-    );
+
+      reply.send(order);
+    });
 
     // POST /orders/:id/items
     fastify.post(
@@ -64,7 +78,7 @@ export function orderRoutes(orderService: OrderService): FastifyPluginAsyncZod {
         const body = request.body as AddOrderItemRequest;
         const order = await orderService.addItem(id, body);
         reply.send(order);
-      }
+      },
     );
 
     // DELETE /orders/:id/items/:itemId
@@ -80,7 +94,7 @@ export function orderRoutes(orderService: OrderService): FastifyPluginAsyncZod {
         const body = request.body as RemoveOrderItemRequest;
         const order = await orderService.removeItem(id, itemId, body);
         reply.send(order);
-      }
+      },
     );
 
     // POST /orders/:id/rounds
@@ -96,7 +110,7 @@ export function orderRoutes(orderService: OrderService): FastifyPluginAsyncZod {
         const body = request.body as SendRoundRequest;
         const order = await orderService.sendRound(id, body);
         reply.send(order);
-      }
+      },
     );
 
     // POST /orders/:id/close
@@ -112,7 +126,7 @@ export function orderRoutes(orderService: OrderService): FastifyPluginAsyncZod {
         const body = request.body as CloseOrderRequest;
         const order = await orderService.closeOrder(id, body);
         reply.send(order);
-      }
+      },
     );
 
     // POST /orders/:id/cancel
@@ -128,7 +142,7 @@ export function orderRoutes(orderService: OrderService): FastifyPluginAsyncZod {
         const body = request.body as CancelOrderRequest;
         const order = await orderService.cancelOrder(id, body);
         reply.send(order);
-      }
+      },
     );
 
     // PUT /orders/:id/tables
@@ -144,8 +158,7 @@ export function orderRoutes(orderService: OrderService): FastifyPluginAsyncZod {
         const body = request.body as UpdateOrderTablesRequest;
         const order = await orderService.updateTables(id, body);
         reply.send(order);
-      }
+      },
     );
-
   };
 }

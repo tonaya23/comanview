@@ -15,7 +15,11 @@ describe('Edge API Integration Tests', () => {
     // Create DB with migration
     const Database = require('better-sqlite3');
     const sqlite = new Database(tmpPath);
-    for (const migration of ['0000_initial.sql', '0001_payments_cash.sql']) {
+    for (const migration of [
+      '0000_initial.sql',
+      '0001_payments_cash.sql',
+      '0002_order_item_special_instructions.sql',
+    ]) {
       sqlite.exec(
         readFileSync(path.resolve(__dirname, `../../../../migrations/edge/${migration}`), 'utf-8'),
       );
@@ -655,6 +659,7 @@ describe('Edge API Integration Tests', () => {
       expectedVersion: created.json().version,
       productId: configuredProductId,
       selectedModifierIds: [mediumId, cheeseId],
+      specialInstructions: '  salsa aparte  ',
     };
     const added = await app.inject({
       method: 'POST',
@@ -663,6 +668,7 @@ describe('Edge API Integration Tests', () => {
     });
     expect(added.statusCode).toBe(200);
     expect(added.json().subtotal).toEqual({ amount: 14900, currency: 'MXN' });
+    expect(added.json().items[0].specialInstructions).toBe('salsa aparte');
     expect(added.json().items[0].productSnapshot.selectedModifiers).toEqual([
       { modifierOptionId: mediumId, name: 'Medio', priceDelta: { amount: 0, currency: 'MXN' } },
       {
@@ -680,6 +686,89 @@ describe('Edge API Integration Tests', () => {
     expect(retry.statusCode).toBe(200);
     expect(retry.json().items).toHaveLength(1);
     expect(retry.json().version).toBe(added.json().version);
+
+    const itemId = added.json().items[0].id;
+    const editPayload = {
+      commandId: 'configured-note-edit-idempotent',
+      expectedVersion: added.json().version,
+      specialInstructions: 'solo 1 rodaja de tomate',
+    };
+    const edited = await app.inject({
+      method: 'PATCH',
+      url: `/orders/${created.json().id}/items/${itemId}/instructions`,
+      payload: editPayload,
+    });
+    expect(edited.statusCode).toBe(200);
+    expect(edited.json().items[0].specialInstructions).toBe('solo 1 rodaja de tomate');
+    expect(edited.json().subtotal).toEqual({ amount: 14900, currency: 'MXN' });
+
+    const editRetry = await app.inject({
+      method: 'PATCH',
+      url: `/orders/${created.json().id}/items/${itemId}/instructions`,
+      payload: editPayload,
+    });
+    expect(editRetry.statusCode).toBe(200);
+    expect(editRetry.json().version).toBe(edited.json().version);
+    const editConflict = await app.inject({
+      method: 'PATCH',
+      url: `/orders/${created.json().id}/items/${itemId}/instructions`,
+      payload: { ...editPayload, specialInstructions: 'different intent' },
+    });
+    expect(editConflict.statusCode).toBe(409);
+    expect(editConflict.json().error).toBe('COMMAND_ID_CONFLICT');
+    const eventSqlite = new Database(tmpPath);
+    const eventCount = eventSqlite
+      .prepare('SELECT COUNT(*) AS count FROM event_log WHERE command_id = ?')
+      .get(editPayload.commandId).count;
+    eventSqlite.close();
+    expect(eventCount).toBe(1);
+
+    const deletedNote = await app.inject({
+      method: 'PATCH',
+      url: `/orders/${created.json().id}/items/${itemId}/instructions`,
+      payload: {
+        commandId: 'configured-note-delete',
+        expectedVersion: edited.json().version,
+        specialInstructions: '   ',
+      },
+    });
+    expect(deletedNote.statusCode).toBe(200);
+    expect(deletedNote.json().items[0].specialInstructions).toBeNull();
+
+    const restoredNote = await app.inject({
+      method: 'PATCH',
+      url: `/orders/${created.json().id}/items/${itemId}/instructions`,
+      payload: {
+        commandId: 'configured-note-restore',
+        expectedVersion: deletedNote.json().version,
+        specialInstructions: 'solo 1 rodaja de tomate',
+      },
+    });
+    expect(restoredNote.statusCode).toBe(200);
+
+    const tooLong = await app.inject({
+      method: 'PATCH',
+      url: `/orders/${created.json().id}/items/${itemId}/instructions`,
+      payload: {
+        commandId: 'configured-note-too-long',
+        expectedVersion: restoredNote.json().version,
+        specialInstructions: 'x'.repeat(501),
+      },
+    });
+    expect(tooLong.statusCode).toBe(400);
+    expect(tooLong.json().error).toBe('SPECIAL_INSTRUCTIONS_TOO_LONG');
+
+    const staleEdit = await app.inject({
+      method: 'PATCH',
+      url: `/orders/${created.json().id}/items/${itemId}/instructions`,
+      payload: {
+        commandId: 'configured-note-stale',
+        expectedVersion: added.json().version,
+        specialInstructions: null,
+      },
+    });
+    expect(staleEdit.statusCode).toBe(409);
+    expect(staleEdit.json().error).toBe('STALE_ORDER_VERSION');
 
     const changedSqlite = new Database(tmpPath);
     changedSqlite
@@ -706,6 +795,7 @@ describe('Edge API Integration Tests', () => {
       name: 'Queso',
       priceDelta: { amount: 2000, currency: 'MXN' },
     });
+    expect(persisted.json().items[0].specialInstructions).toBe('solo 1 rodaja de tomate');
 
     const staleOrder = await app.inject({
       method: 'POST',
@@ -763,6 +853,18 @@ describe('Edge API Integration Tests', () => {
     });
     expect(sent.statusCode).toBe(200);
     expect(sent.json().items[0].status).toBe('SENT');
+    expect(sent.json().items[0].specialInstructions).toBe('solo 1 rodaja de tomate');
+    const sentEdit = await app.inject({
+      method: 'PATCH',
+      url: `/orders/${created.json().id}/items/${itemId}/instructions`,
+      payload: {
+        commandId: 'configured-note-after-send',
+        expectedVersion: sent.json().version,
+        specialInstructions: 'must fail',
+      },
+    });
+    expect(sentEdit.statusCode).toBe(409);
+    expect(sentEdit.json().error).toBe('ORDER_ITEM_SPECIAL_INSTRUCTIONS_FROZEN');
     const paid = await app.inject({
       method: 'POST',
       url: `/orders/${created.json().id}/payments`,
@@ -820,6 +922,7 @@ describe('Edge API Integration Tests', () => {
         { name: 'Queso', priceDelta: { amount: 2000, currency: 'MXN' } },
       ],
     });
+    expect(configuredResponse.json().items[0].specialInstructions).toBe('solo 1 rodaja de tomate');
 
     await newApp.close();
   });

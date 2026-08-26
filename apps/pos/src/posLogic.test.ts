@@ -3,6 +3,7 @@ import type { CategoryResponse, ProductResponse } from '@comanview/contracts';
 import { EdgeClientError } from '@comanview/client-sdk';
 import {
   ALL_CATEGORIES,
+  canEditItemSpecialInstructions,
   formatMoney,
   getActiveModifierGroups,
   getConfiguredProductTotal,
@@ -173,5 +174,15 @@ describe('POS presentation behavior', () => {
     expect(
       getErrorMessage(new EdgeClientError('technical', 'MODIFIER_UNAVAILABLE', 409)),
     ).toContain('Actualizamos el catálogo');
+  });
+
+  it('allows special-instructions editing only for DRAFT items', () => {
+    expect(canEditItemSpecialInstructions('DRAFT')).toBe(true);
+    expect(canEditItemSpecialInstructions('SENT')).toBe(false);
+    expect(
+      getErrorMessage(
+        new EdgeClientError('technical', 'ORDER_ITEM_SPECIAL_INSTRUCTIONS_FROZEN', 409),
+      ),
+    ).toContain('protegida');
   });
 });

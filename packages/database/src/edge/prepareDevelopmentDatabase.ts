@@ -7,6 +7,9 @@ const migrationPaths = [
   fileURLToPath(new URL('../../../../migrations/edge/0000_initial.sql', import.meta.url)),
   fileURLToPath(new URL('../../../../migrations/edge/0001_payments_cash.sql', import.meta.url)),
 ];
+const specialInstructionsMigrationPath = fileURLToPath(
+  new URL('../../../../migrations/edge/0002_order_item_special_instructions.sql', import.meta.url),
+);
 const defaultDatabasePath = fileURLToPath(
   new URL('../../../../apps/edge/edge-dev.db', import.meta.url),
 );
@@ -19,6 +22,12 @@ export function prepareDevelopmentDatabase(targetPath = databasePath): void {
     sqlite.pragma('foreign_keys = ON');
     for (const migrationPath of migrationPaths) {
       sqlite.exec(readFileSync(migrationPath, 'utf8'));
+    }
+    const hasSpecialInstructions = sqlite
+      .prepare("SELECT 1 FROM pragma_table_info('order_items') WHERE name = 'special_instructions'")
+      .get();
+    if (!hasSpecialInstructions) {
+      sqlite.exec(readFileSync(specialInstructionsMigrationPath, 'utf8'));
     }
 
     const seed = sqlite.transaction(() => {

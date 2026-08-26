@@ -11,6 +11,8 @@ import {
   TableAssignmentError,
   OrderBalanceNotZeroError,
   OrderCurrencyMismatchError,
+  OrderItemSpecialInstructionsFrozenError,
+  SpecialInstructionsTooLongError,
 } from '../errors.js';
 
 // ─── Test helpers ────────────────────────────────────────────────────────────
@@ -169,6 +171,28 @@ describe('Order Aggregate — Phase 1D', () => {
       expect(item.isDraft).toBe(true);
       expect(item.roundId).toBeNull();
       expect(order.version).toBe(v0 + 1);
+      expect(item.specialInstructions).toBeNull();
+    });
+
+    it('normalizes optional special instructions without changing the snapshot', () => {
+      const order = makeBaseOrder();
+      const item = order.addItem(makeSnapshot(), 'add-with-note', '  salsa aparte  ');
+
+      expect(item.specialInstructions).toBe('salsa aparte');
+      expect(item.snapshot).not.toHaveProperty('specialInstructions');
+      expect(order.getSubtotal().amount).toBe(10000);
+    });
+
+    it('normalizes whitespace-only special instructions to null', () => {
+      const order = makeBaseOrder();
+      expect(order.addItem(makeSnapshot(), undefined, '   \n ').specialInstructions).toBeNull();
+    });
+
+    it('rejects special instructions longer than 500 normalized characters', () => {
+      const order = makeBaseOrder();
+      expect(() => order.addItem(makeSnapshot(), undefined, 'x'.repeat(501))).toThrow(
+        SpecialInstructionsTooLongError,
+      );
     });
 
     it('snapshot is frozen — catalog changes cannot affect existing items (INV-04)', () => {
@@ -180,10 +204,11 @@ describe('Order Aggregate — Phase 1D', () => {
 
     it('emits ITEM_ADDED event', () => {
       const order = makeBaseOrder();
-      order.addItem(makeSnapshot(), 'cmd-add-1');
+      order.addItem(makeSnapshot(), 'cmd-add-1', '  salsa aparte  ');
       const ev = order.events.find((e) => e.eventType === 'ITEM_ADDED');
       expect(ev).toBeDefined();
       expect((ev as any).commandId).toBe('cmd-add-1');
+      expect((ev as any).specialInstructions).toBe('salsa aparte');
     });
 
     it('multiple items accumulate correctly', () => {
@@ -212,6 +237,50 @@ describe('Order Aggregate — Phase 1D', () => {
       const order = makeBaseOrder();
       order.cancel();
       expect(() => order.addItem(makeSnapshot())).toThrow(OrderNotOpenError);
+    });
+  });
+
+  describe('updateItemSpecialInstructions', () => {
+    it('sets, edits and deletes notes on a DRAFT item with versioned events', () => {
+      const order = makeBaseOrder();
+      const item = order.addItem(makeSnapshot());
+      const initialSubtotal = order.getSubtotal().amount;
+
+      order.updateItemSpecialInstructions(item.id, '  solo una rodaja  ', 'note-1');
+      expect(item.specialInstructions).toBe('solo una rodaja');
+      order.updateItemSpecialInstructions(item.id, 'salsa aparte', 'note-2');
+      expect(item.specialInstructions).toBe('salsa aparte');
+      order.updateItemSpecialInstructions(item.id, '   ', 'note-3');
+
+      expect(item.specialInstructions).toBeNull();
+      expect(order.getSubtotal().amount).toBe(initialSubtotal);
+      expect(
+        order.events.filter((event) => event.eventType === 'ITEM_SPECIAL_INSTRUCTIONS_UPDATED'),
+      ).toHaveLength(3);
+    });
+
+    it('rejects changes after the item is SENT and preserves the note', () => {
+      const order = makeBaseOrder();
+      const item = order.addItem(makeSnapshot(), undefined, 'sin cebolla');
+      order.sendDraftItems();
+
+      expect(() => order.updateItemSpecialInstructions(item.id, 'con cebolla')).toThrow(
+        OrderItemSpecialInstructionsFrozenError,
+      );
+      expect(item.specialInstructions).toBe('sin cebolla');
+    });
+
+    it('rejects missing items and closed Orders through aggregate guards', () => {
+      const order = makeBaseOrder();
+      expect(() => order.updateItemSpecialInstructions(EntityId.generate(), 'nota')).toThrow(
+        OrderItemNotFoundError,
+      );
+
+      const item = order.addItem(makeSnapshot(), undefined, 'nota original');
+      order.sendDraftItems();
+      payInFull(order);
+      order.close();
+      expect(() => order.updateItemSpecialInstructions(item.id, null)).toThrow(OrderNotOpenError);
     });
   });
 

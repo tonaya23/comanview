@@ -2260,6 +2260,10 @@ Cambios posteriores del catálogo MUST NOT modificar el snapshot.
 
 Esto aplica incluso mientras el ítem continúe DRAFT.
 
+`OrderItem` MAY contener `special_instructions: string | null` como estado transaccional propio, separado de `ProductSnapshot`, Product y Modifier. Edge normaliza whitespace exterior, convierte vacío a `null`, limita V1 a 500 caracteres y no incorpora este campo a ningún cálculo financiero.
+
+La mutación versionada pertenece al Aggregate Root: DRAFT permite crear, editar o eliminar el texto; SENT lo congela. Persistencia MUST rehidratarlo desde `order_items` sin consultar ni modificar el catálogo.
+
 ## 7.7 Estados de ítem
 
 ```text
@@ -2293,6 +2297,8 @@ READY
 ## 7.8 Sent Finality
 
 Un SENT OrderItem MUST NOT desaparecer ni modificarse silenciosamente.
+
+La finalidad SENT incluye `special_instructions`, que MUST conservarse históricamente y no admite edición silenciosa.
 
 ## 7.9 Rounds
 

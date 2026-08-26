@@ -5,6 +5,7 @@ import {
   EntityId,
   OrderType,
   OrderChannel,
+  normalizeSpecialInstructions,
 } from '@comanview/domain';
 import { ObjectNotFoundError, ConcurrencyError } from '../../../app/errors.js';
 import type { EdgeOperationalContext } from '../../../app/operationalContext.js';
@@ -19,6 +20,7 @@ import {
   CancelOrderRequest,
   RemoveOrderItemRequest,
   UpdateOrderTablesRequest,
+  UpdateOrderItemSpecialInstructionsRequest,
 } from '@comanview/contracts';
 
 export class OrderService {
@@ -86,10 +88,57 @@ export class OrderService {
     }
     const snapshot = product.createSnapshot(modifierSelections);
 
-    order.addItem(snapshot, request.commandId);
+    order.addItem(snapshot, request.commandId, request.specialInstructions);
 
     this.orderRepo.saveOrder(order, true, request.commandId);
 
+    return mapOrderToResponse(order);
+  }
+
+  async updateItemSpecialInstructions(
+    orderId: string,
+    itemId: string,
+    request: UpdateOrderItemSpecialInstructionsRequest,
+  ): Promise<OrderResponse> {
+    const order = this.orderRepo.getOrderById(EntityId.fromString(orderId));
+    if (!order) throw new ObjectNotFoundError(`Order ${orderId} not found`);
+
+    if (this.orderRepo.hasProcessedCommand(request.commandId)) {
+      const event = this.orderRepo.getProcessedCommandEvent(request.commandId);
+      if (
+        event?.aggregateId === orderId &&
+        event.eventType === 'ITEM_SPECIAL_INSTRUCTIONS_UPDATED'
+      ) {
+        const payload = JSON.parse(event.payload) as {
+          itemId?: string;
+          specialInstructions?: string | null;
+        };
+        if (
+          payload.itemId === itemId &&
+          payload.specialInstructions === normalizeSpecialInstructions(request.specialInstructions)
+        ) {
+          return mapOrderToResponse(order);
+        }
+      }
+      throw new AppError(
+        'COMMAND_ID_CONFLICT',
+        409,
+        'commandId was already used for a different operation.',
+      );
+    }
+
+    if (order.version !== request.expectedVersion) {
+      throw new ConcurrencyError(
+        `Expected version ${request.expectedVersion}, but got ${order.version}`,
+      );
+    }
+
+    order.updateItemSpecialInstructions(
+      EntityId.fromString(itemId),
+      request.specialInstructions,
+      request.commandId,
+    );
+    this.orderRepo.saveOrder(order, true, request.commandId);
     return mapOrderToResponse(order);
   }
 

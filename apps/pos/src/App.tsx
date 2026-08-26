@@ -11,6 +11,7 @@ import type {
 } from '@comanview/contracts';
 import {
   ALL_CATEGORIES,
+  canEditItemSpecialInstructions,
   formatMoney,
   getActiveModifierGroups,
   getConfiguredProductTotal,
@@ -54,6 +55,9 @@ export function App() {
   const [configuredProduct, setConfiguredProduct] = useState<ProductResponse | null>(null);
   const [selectedModifierIds, setSelectedModifierIds] = useState<string[]>([]);
   const [modifierValidation, setModifierValidation] = useState<string | null>(null);
+  const [configuredSpecialInstructions, setConfiguredSpecialInstructions] = useState('');
+  const [editingInstructionsItemId, setEditingInstructionsItemId] = useState<string | null>(null);
+  const [instructionsDraft, setInstructionsDraft] = useState('');
 
   const updateOrder = useCallback((next: OrderResponse) => {
     setOrder(next);
@@ -218,7 +222,11 @@ export function App() {
       'Nueva venta creada en Edge.',
     );
   }
-  async function addProduct(product: ProductResponse, modifierIds: string[] = []) {
+  async function addProduct(
+    product: ProductResponse,
+    modifierIds: string[] = [],
+    specialInstructions?: string | null,
+  ) {
     if (!order) return;
     const next = await mutate(
       `add-${product.id}`,
@@ -228,6 +236,7 @@ export function App() {
           expectedVersion: order.version,
           productId: product.id,
           selectedModifierIds: modifierIds,
+          specialInstructions,
         }),
       `${product.name} agregado.`,
     );
@@ -235,6 +244,7 @@ export function App() {
       setConfiguredProduct(null);
       setSelectedModifierIds([]);
       setModifierValidation(null);
+      setConfiguredSpecialInstructions('');
     }
   }
 
@@ -246,6 +256,7 @@ export function App() {
     setConfiguredProduct(product);
     setSelectedModifierIds([]);
     setModifierValidation(null);
+    setConfiguredSpecialInstructions('');
   }
 
   function toggleModifier(groupId: string, optionId: string) {
@@ -292,7 +303,32 @@ export function App() {
       );
       return;
     }
-    void addProduct(configuredProduct, selectedModifierIds);
+    void addProduct(configuredProduct, selectedModifierIds, configuredSpecialInstructions);
+  }
+
+  function beginEditSpecialInstructions(itemId: string, current: string | null) {
+    setEditingInstructionsItemId(itemId);
+    setInstructionsDraft(current ?? '');
+    clearFeedback();
+  }
+
+  async function saveSpecialInstructions(event: FormEvent) {
+    event.preventDefault();
+    if (!order || !editingInstructionsItemId) return;
+    const next = await mutate(
+      `instructions-${editingInstructionsItemId}`,
+      () =>
+        edge.updateOrderItemSpecialInstructions(order.id, editingInstructionsItemId, {
+          commandId: crypto.randomUUID(),
+          expectedVersion: order.version,
+          specialInstructions: instructionsDraft,
+        }),
+      instructionsDraft.trim() ? 'Nota especial guardada.' : 'Nota especial eliminada.',
+    );
+    if (next) {
+      setEditingInstructionsItemId(null);
+      setInstructionsDraft('');
+    }
   }
   async function removeItem(itemId: string) {
     if (!order) return;
@@ -653,6 +689,9 @@ export function App() {
                               ))}
                             </ul>
                           )}
+                          {item.specialInstructions && (
+                            <p className="special-instructions">Nota: {item.specialInstructions}</p>
+                          )}
                           <span>DRAFT · aún no enviado</span>
                         </div>
                         <div className="order-item-actions">
@@ -662,6 +701,18 @@ export function App() {
                               item.productSnapshot.basePrice.currency,
                             )}
                           </strong>
+                          <button
+                            type="button"
+                            className="note-button"
+                            disabled={
+                              !canOperateOrder || !canEditItemSpecialInstructions(item.status)
+                            }
+                            onClick={() =>
+                              beginEditSpecialInstructions(item.id, item.specialInstructions)
+                            }
+                          >
+                            {item.specialInstructions ? 'Editar nota' : 'Agregar nota'}
+                          </button>
                           <button
                             type="button"
                             disabled={!canOperateOrder}
@@ -704,6 +755,11 @@ export function App() {
                                 </li>
                               ))}
                             </ul>
+                          )}
+                          {item.specialInstructions && (
+                            <p className="special-instructions protected">
+                              Nota: {item.specialInstructions}
+                            </p>
                           )}
                           <span>SENT · historial protegido</span>
                         </div>
@@ -848,7 +904,10 @@ export function App() {
               <button
                 type="button"
                 aria-label="Cerrar configuración"
-                onClick={() => setConfiguredProduct(null)}
+                onClick={() => {
+                  setConfiguredProduct(null);
+                  setConfiguredSpecialInstructions('');
+                }}
               >
                 ×
               </button>
@@ -929,6 +988,16 @@ export function App() {
                 );
               })}
             </div>
+            <label className="special-instructions-field">
+              Instrucciones especiales
+              <textarea
+                maxLength={500}
+                placeholder="Ej. salsa aparte"
+                value={configuredSpecialInstructions}
+                onChange={(event) => setConfiguredSpecialInstructions(event.target.value)}
+              />
+              <small>{configuredSpecialInstructions.length}/500 · no modifica el precio</small>
+            </label>
             {modifierValidation && (
               <p className="modifier-validation" role="alert">
                 {modifierValidation}
@@ -958,6 +1027,45 @@ export function App() {
                   : 'Agregar a la venta'}
               </button>
             </footer>
+          </section>
+        </div>
+      )}
+
+      {editingInstructionsItemId && order && (
+        <div className="modal-backdrop">
+          <section
+            className="payment-modal instructions-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="instructions-title"
+          >
+            <div className="modal-heading">
+              <div>
+                <span className="eyebrow">Producto DRAFT</span>
+                <h2 id="instructions-title">Instrucciones especiales</h2>
+              </div>
+              <button type="button" onClick={() => setEditingInstructionsItemId(null)}>
+                ×
+              </button>
+            </div>
+            <form onSubmit={(event) => void saveSpecialInstructions(event)}>
+              <label>
+                Nota de preparación
+                <textarea
+                  maxLength={500}
+                  placeholder="Ej. solo 1 rodaja de tomate"
+                  value={instructionsDraft}
+                  onChange={(event) => setInstructionsDraft(event.target.value)}
+                  autoFocus
+                />
+                <small>{instructionsDraft.length}/500 · dejar vacío elimina la nota</small>
+              </label>
+              <button className="confirm-payment" disabled={isBusy} type="submit">
+                {pendingAction === `instructions-${editingInstructionsItemId}`
+                  ? 'Guardando en Edge…'
+                  : 'Guardar nota'}
+              </button>
+            </form>
           </section>
         </div>
       )}

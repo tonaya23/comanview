@@ -4,6 +4,8 @@ import {
   OrderNotOpenError,
   OrderItemSentError,
   OrderItemNotFoundError,
+  OrderItemSpecialInstructionsFrozenError,
+  SpecialInstructionsTooLongError,
   NoDraftItemsError,
   OrderBalanceNotZeroError,
   OrderHasDraftItemsError,
@@ -95,6 +97,12 @@ export function errorHandler(error: Error, request: FastifyRequest, reply: Fasti
     } else if (error instanceof OrderItemNotFoundError) {
       statusCode = 404;
       code = 'ORDER_ITEM_NOT_FOUND';
+    } else if (error instanceof OrderItemSpecialInstructionsFrozenError) {
+      statusCode = 409;
+      code = 'ORDER_ITEM_SPECIAL_INSTRUCTIONS_FROZEN';
+    } else if (error instanceof SpecialInstructionsTooLongError) {
+      statusCode = 400;
+      code = 'SPECIAL_INSTRUCTIONS_TOO_LONG';
     } else if (error instanceof NoDraftItemsError) {
       statusCode = 409;
       code = 'NO_DRAFT_ITEMS';

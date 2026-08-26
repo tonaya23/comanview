@@ -653,6 +653,30 @@ button:focus-visible {
   cursor: pointer;
 }
 
+.order-item-actions .note-button {
+  color: #245f55;
+  background: #e7f3ef;
+}
+
+.special-instructions {
+  max-width: 38ch;
+  margin: 4px 0;
+  padding: 7px 9px;
+  border-left: 3px solid #d5942d;
+  border-radius: 5px;
+  color: #60491e;
+  background: #fff3d8;
+  font-size: 0.75rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.special-instructions.protected {
+  border-left-color: #2b8a78;
+  color: #24554c;
+  background: #e7f3ef;
+}
+
 .order-summary {
   padding: 13px 18px 18px;
   border-top: 1px solid #dde5e1;
@@ -985,6 +1009,40 @@ button:focus-visible {
   background: #fbfcfb;
   font-size: 1.08rem;
   font-weight: 750;
+}
+
+.payment-modal textarea,
+.special-instructions-field textarea {
+  min-height: 112px;
+  resize: vertical;
+  padding: 12px 14px;
+  border: 1px solid #bfcfc9;
+  border-radius: 10px;
+  color: #153f39;
+  background: #fbfcfb;
+  font: inherit;
+  line-height: 1.45;
+}
+
+.special-instructions-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 15px;
+  color: #415c55;
+  font-size: 0.78rem;
+  font-weight: 750;
+}
+
+.special-instructions-field small,
+.instructions-modal label small {
+  color: #73837e;
+  font-size: 0.7rem;
+  font-weight: 650;
+}
+
+.instructions-modal {
+  width: min(520px, 100%);
 }
 
 .payment-balance,

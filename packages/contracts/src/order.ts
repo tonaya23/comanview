@@ -27,6 +27,7 @@ export const ProductSnapshotSchema = z.object({
 export const OrderItemSchema = z.object({
   id: z.string().uuid(),
   productSnapshot: ProductSnapshotSchema,
+  specialInstructions: z.string().max(500).nullable(),
   status: OrderItemSendStatusSchema,
   addedAt: z.string(),
   sentAt: z.string().nullable(),
@@ -77,6 +78,7 @@ export const AddOrderItemRequestSchema = z.object({
   expectedVersion: z.number().int(), // For OCC
   productId: z.string().uuid(),
   selectedModifierIds: z.array(z.string().uuid()).optional(),
+  specialInstructions: z.string().nullable().optional(),
 });
 export type AddOrderItemRequest = z.infer<typeof AddOrderItemRequestSchema>;
 
@@ -100,6 +102,15 @@ export const RemoveOrderItemRequestSchema = z.object({
   expectedVersion: z.number().int(),
 });
 export type RemoveOrderItemRequest = z.infer<typeof RemoveOrderItemRequestSchema>;
+
+export const UpdateOrderItemSpecialInstructionsRequestSchema = z.object({
+  commandId: z.string().min(1),
+  expectedVersion: z.number().int(),
+  specialInstructions: z.string().nullable(),
+});
+export type UpdateOrderItemSpecialInstructionsRequest = z.infer<
+  typeof UpdateOrderItemSpecialInstructionsRequestSchema
+>;
 
 export const UpdateOrderTablesRequestSchema = z.object({
   expectedVersion: z.number().int(),
