@@ -4,6 +4,7 @@ import {
   OrderNotOpenError,
   OrderItemSentError,
   OrderItemNotFoundError,
+  OrderItemProductMismatchError,
   OrderItemSpecialInstructionsFrozenError,
   SpecialInstructionsTooLongError,
   NoDraftItemsError,
@@ -97,6 +98,9 @@ export function errorHandler(error: Error, request: FastifyRequest, reply: Fasti
     } else if (error instanceof OrderItemNotFoundError) {
       statusCode = 404;
       code = 'ORDER_ITEM_NOT_FOUND';
+    } else if (error instanceof OrderItemProductMismatchError) {
+      statusCode = 409;
+      code = 'ORDER_ITEM_PRODUCT_MISMATCH';
     } else if (error instanceof OrderItemSpecialInstructionsFrozenError) {
       statusCode = 409;
       code = 'ORDER_ITEM_SPECIAL_INSTRUCTIONS_FROZEN';

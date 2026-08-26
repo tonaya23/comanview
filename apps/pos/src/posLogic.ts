@@ -77,6 +77,23 @@ export function getUnsatisfiedModifierGroups(
   });
 }
 
+export function getModifierGroupValidationMessage(
+  group: ProductModifierGroupResponse,
+  selectedModifierIds: string[],
+): string | null {
+  const optionIds = new Set(group.modifierGroup.options.map(({ id }) => id));
+  const selectedCount = selectedModifierIds.filter((id) => optionIds.has(id)).length;
+  if (selectedCount < group.modifierGroup.minSelections) {
+    return group.modifierGroup.minSelections === 1
+      ? `Selecciona 1 opción en ${group.modifierGroup.name}.`
+      : `Selecciona al menos ${group.modifierGroup.minSelections} opciones en ${group.modifierGroup.name}.`;
+  }
+  if (selectedCount > group.modifierGroup.maxSelections) {
+    return `Selecciona máximo ${group.modifierGroup.maxSelections} opciones en ${group.modifierGroup.name}.`;
+  }
+  return null;
+}
+
 export function getSnapshotTotal(snapshot: {
   basePrice: { amount: number };
   selectedModifiers: Array<{ priceDelta: { amount: number } }>;
@@ -105,6 +122,8 @@ const errorMessages: Record<string, string> = {
   MODIFIER_INACTIVE:
     'Una opción seleccionada fue retirada del catálogo. Actualizamos el catálogo; revisa tu selección.',
   ORDER_ITEM_SENT: 'El producto ya fue enviado y no puede eliminarse como borrador.',
+  ORDER_PAID_AMOUNT_EXCEEDS_TOTAL:
+    'La edición dejaría el total por debajo de lo ya pagado. Conserva o aumenta el importe.',
   ORDER_ITEM_SPECIAL_INSTRUCTIONS_FROZEN:
     'La nota quedó protegida porque el producto ya fue enviado.',
   SPECIAL_INSTRUCTIONS_TOO_LONG: 'La nota especial no puede superar 500 caracteres.',
@@ -126,7 +145,7 @@ const errorMessages: Record<string, string> = {
   INVALID_EDGE_RESPONSE: 'Edge respondió con datos inesperados. Intenta recargar la pantalla.',
 };
 
-export function canEditItemSpecialInstructions(status: 'DRAFT' | 'SENT'): boolean {
+export function canEditDraftItem(status: 'DRAFT' | 'SENT'): boolean {
   return status === 'DRAFT';
 }
 

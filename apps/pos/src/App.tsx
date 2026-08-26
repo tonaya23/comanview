@@ -11,13 +11,14 @@ import type {
 } from '@comanview/contracts';
 import {
   ALL_CATEGORIES,
-  canEditItemSpecialInstructions,
+  canEditDraftItem,
   formatMoney,
   getActiveModifierGroups,
   getConfiguredProductTotal,
   getEffectiveModifierPrice,
   getErrorMessage,
   getLocalBusinessDate,
+  getModifierGroupValidationMessage,
   getSnapshotTotal,
   getUnsatisfiedModifierGroups,
   getVisibleCategories,
@@ -53,11 +54,10 @@ export function App() {
   const [tipBasisPoints, setTipBasisPoints] = useState(1000);
   const [fixedTip, setFixedTip] = useState('0.00');
   const [configuredProduct, setConfiguredProduct] = useState<ProductResponse | null>(null);
+  const [editingConfiguredItemId, setEditingConfiguredItemId] = useState<string | null>(null);
   const [selectedModifierIds, setSelectedModifierIds] = useState<string[]>([]);
   const [modifierValidation, setModifierValidation] = useState<string | null>(null);
   const [configuredSpecialInstructions, setConfiguredSpecialInstructions] = useState('');
-  const [editingInstructionsItemId, setEditingInstructionsItemId] = useState<string | null>(null);
-  const [instructionsDraft, setInstructionsDraft] = useState('');
 
   const updateOrder = useCallback((next: OrderResponse) => {
     setOrder(next);
@@ -172,9 +172,13 @@ export function App() {
       }
       if (
         problem instanceof EdgeClientError &&
-        ['INVALID_MODIFIER_SELECTION', 'MODIFIER_UNAVAILABLE', 'MODIFIER_INACTIVE'].includes(
-          problem.code,
-        )
+        [
+          'INVALID_MODIFIER_SELECTION',
+          'MODIFIER_UNAVAILABLE',
+          'MODIFIER_INACTIVE',
+          'PRODUCT_UNAVAILABLE',
+          'PRODUCT_INACTIVE',
+        ].includes(problem.code)
       ) {
         try {
           const nextProducts = await edge.getProducts();
@@ -183,10 +187,7 @@ export function App() {
             const nextConfigured =
               nextProducts.find(({ id }) => id === configuredProduct.id) ?? null;
             setConfiguredProduct(nextConfigured);
-            if (
-              nextConfigured &&
-              ['MODIFIER_UNAVAILABLE', 'MODIFIER_INACTIVE'].includes(problem.code)
-            ) {
+            if (nextConfigured) {
               const selectableIds = new Set(
                 getActiveModifierGroups(nextConfigured).flatMap(({ modifierGroup }) =>
                   modifierGroup.options
@@ -242,6 +243,7 @@ export function App() {
     );
     if (next) {
       setConfiguredProduct(null);
+      setEditingConfiguredItemId(null);
       setSelectedModifierIds([]);
       setModifierValidation(null);
       setConfiguredSpecialInstructions('');
@@ -254,6 +256,7 @@ export function App() {
       return;
     }
     setConfiguredProduct(product);
+    setEditingConfiguredItemId(null);
     setSelectedModifierIds([]);
     setModifierValidation(null);
     setConfiguredSpecialInstructions('');
@@ -294,41 +297,53 @@ export function App() {
     });
   }
 
-  function submitConfiguredProduct() {
-    if (!configuredProduct) return;
+  async function submitConfiguredProduct() {
+    if (!configuredProduct || !order) return;
     const missing = getUnsatisfiedModifierGroups(configuredProduct, selectedModifierIds);
     if (missing.length > 0) {
-      setModifierValidation(
-        `Completa la selección requerida en ${missing[0]?.modifierGroup.name}.`,
-      );
+      setModifierValidation('Completa las selecciones indicadas antes de confirmar.');
       return;
     }
-    void addProduct(configuredProduct, selectedModifierIds, configuredSpecialInstructions);
-  }
+    if (!editingConfiguredItemId) {
+      await addProduct(configuredProduct, selectedModifierIds, configuredSpecialInstructions);
+      return;
+    }
 
-  function beginEditSpecialInstructions(itemId: string, current: string | null) {
-    setEditingInstructionsItemId(itemId);
-    setInstructionsDraft(current ?? '');
-    clearFeedback();
-  }
-
-  async function saveSpecialInstructions(event: FormEvent) {
-    event.preventDefault();
-    if (!order || !editingInstructionsItemId) return;
     const next = await mutate(
-      `instructions-${editingInstructionsItemId}`,
+      `edit-${editingConfiguredItemId}`,
       () =>
-        edge.updateOrderItemSpecialInstructions(order.id, editingInstructionsItemId, {
+        edge.updateDraftOrderItemConfiguration(order.id, editingConfiguredItemId, {
           commandId: crypto.randomUUID(),
           expectedVersion: order.version,
-          specialInstructions: instructionsDraft,
+          selectedModifierIds,
+          specialInstructions: configuredSpecialInstructions,
         }),
-      instructionsDraft.trim() ? 'Nota especial guardada.' : 'Nota especial eliminada.',
+      `${configuredProduct.name} actualizado.`,
     );
     if (next) {
-      setEditingInstructionsItemId(null);
-      setInstructionsDraft('');
+      setConfiguredProduct(null);
+      setEditingConfiguredItemId(null);
+      setSelectedModifierIds([]);
+      setModifierValidation(null);
+      setConfiguredSpecialInstructions('');
     }
+  }
+
+  function beginEditDraftItem(item: OrderResponse['items'][number]) {
+    if (!canEditDraftItem(item.status)) return;
+    const product = products.find(({ id }) => id === item.productSnapshot.productId);
+    if (!product) {
+      setError('El producto ya no está disponible en el catálogo local para editarlo.');
+      return;
+    }
+    clearFeedback();
+    setConfiguredProduct(product);
+    setEditingConfiguredItemId(item.id);
+    setSelectedModifierIds(
+      item.productSnapshot.selectedModifiers.map(({ modifierOptionId }) => modifierOptionId),
+    );
+    setConfiguredSpecialInstructions(item.specialInstructions ?? '');
+    setModifierValidation(null);
   }
   async function removeItem(itemId: string) {
     if (!order) return;
@@ -703,15 +718,11 @@ export function App() {
                           </strong>
                           <button
                             type="button"
-                            className="note-button"
-                            disabled={
-                              !canOperateOrder || !canEditItemSpecialInstructions(item.status)
-                            }
-                            onClick={() =>
-                              beginEditSpecialInstructions(item.id, item.specialInstructions)
-                            }
+                            className="edit-button"
+                            disabled={!canOperateOrder}
+                            onClick={() => beginEditDraftItem(item)}
                           >
-                            {item.specialInstructions ? 'Editar nota' : 'Agregar nota'}
+                            Editar
                           </button>
                           <button
                             type="button"
@@ -898,7 +909,9 @@ export function App() {
           >
             <div className="modal-heading">
               <div>
-                <span className="eyebrow">Configura el producto</span>
+                <span className="eyebrow">
+                  {editingConfiguredItemId ? 'Edita el borrador' : 'Configura el producto'}
+                </span>
                 <h2 id="modifier-title">{configuredProduct.name}</h2>
               </div>
               <button
@@ -906,6 +919,9 @@ export function App() {
                 aria-label="Cerrar configuración"
                 onClick={() => {
                   setConfiguredProduct(null);
+                  setEditingConfiguredItemId(null);
+                  setSelectedModifierIds([]);
+                  setModifierValidation(null);
                   setConfiguredSpecialInstructions('');
                 }}
               >
@@ -925,8 +941,15 @@ export function App() {
               {getActiveModifierGroups(configuredProduct).map((group) => {
                 const optionIds = new Set(group.modifierGroup.options.map(({ id }) => id));
                 const selectionCount = selectedModifierIds.filter((id) => optionIds.has(id)).length;
+                const validationMessage = getModifierGroupValidationMessage(
+                  group,
+                  selectedModifierIds,
+                );
                 return (
-                  <fieldset className="modifier-group" key={group.modifierGroup.id}>
+                  <fieldset
+                    className={validationMessage ? 'modifier-group invalid' : 'modifier-group'}
+                    key={group.modifierGroup.id}
+                  >
                     <legend>
                       <span>{group.modifierGroup.name}</span>
                       <small>
@@ -984,6 +1007,11 @@ export function App() {
                     <small className="modifier-selection-count">
                       {selectionCount} de {group.modifierGroup.maxSelections} seleccionados
                     </small>
+                    {validationMessage && (
+                      <small className="modifier-group-validation" role="alert">
+                        {validationMessage}
+                      </small>
+                    )}
                   </fieldset>
                 );
               })}
@@ -1020,52 +1048,18 @@ export function App() {
                   isBusy ||
                   getUnsatisfiedModifierGroups(configuredProduct, selectedModifierIds).length > 0
                 }
-                onClick={submitConfiguredProduct}
+                onClick={() => void submitConfiguredProduct()}
               >
-                {pendingAction === `add-${configuredProduct.id}`
+                {pendingAction ===
+                (editingConfiguredItemId
+                  ? `edit-${editingConfiguredItemId}`
+                  : `add-${configuredProduct.id}`)
                   ? 'Confirmando con Edge…'
-                  : 'Agregar a la venta'}
+                  : editingConfiguredItemId
+                    ? 'Guardar cambios'
+                    : 'Agregar a la venta'}
               </button>
             </footer>
-          </section>
-        </div>
-      )}
-
-      {editingInstructionsItemId && order && (
-        <div className="modal-backdrop">
-          <section
-            className="payment-modal instructions-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="instructions-title"
-          >
-            <div className="modal-heading">
-              <div>
-                <span className="eyebrow">Producto DRAFT</span>
-                <h2 id="instructions-title">Instrucciones especiales</h2>
-              </div>
-              <button type="button" onClick={() => setEditingInstructionsItemId(null)}>
-                ×
-              </button>
-            </div>
-            <form onSubmit={(event) => void saveSpecialInstructions(event)}>
-              <label>
-                Nota de preparación
-                <textarea
-                  maxLength={500}
-                  placeholder="Ej. solo 1 rodaja de tomate"
-                  value={instructionsDraft}
-                  onChange={(event) => setInstructionsDraft(event.target.value)}
-                  autoFocus
-                />
-                <small>{instructionsDraft.length}/500 · dejar vacío elimina la nota</small>
-              </label>
-              <button className="confirm-payment" disabled={isBusy} type="submit">
-                {pendingAction === `instructions-${editingInstructionsItemId}`
-                  ? 'Guardando en Edge…'
-                  : 'Guardar nota'}
-              </button>
-            </form>
           </section>
         </div>
       )}

@@ -612,6 +612,8 @@ describe('Edge API Integration Tests', () => {
     const extrasGroupId = '01991a00-0000-7000-8000-000000000904';
     const mediumId = '01991a00-0000-7000-8000-000000000911';
     const cheeseId = '01991a00-0000-7000-8000-000000000912';
+    const threeQuartersId = '01991a00-0000-7000-8000-000000000913';
+    const baconId = '01991a00-0000-7000-8000-000000000914';
     sqlite.exec(`
       INSERT INTO tax_profiles
         (id, name, rate_basis_points, calculation_mode, active, is_default)
@@ -623,11 +625,13 @@ describe('Edge API Integration Tests', () => {
               12900, 'MXN', 1, 1, 1);
       INSERT INTO modifier_groups (id, name, min_selections, max_selections, active)
       VALUES ('${requiredGroupId}', 'Término', 1, 1, 1),
-             ('${extrasGroupId}', 'Extras', 0, 1, 1);
+             ('${extrasGroupId}', 'Extras', 0, 2, 1);
       INSERT INTO modifier_options
         (id, group_id, name, price_delta_amount, price_delta_currency, active, available, display_order)
       VALUES ('${mediumId}', '${requiredGroupId}', 'Medio', 0, 'MXN', 1, 1, 1),
-             ('${cheeseId}', '${extrasGroupId}', 'Queso', 1500, 'MXN', 1, 1, 1);
+             ('${threeQuartersId}', '${requiredGroupId}', '3/4', 0, 'MXN', 1, 1, 2),
+             ('${cheeseId}', '${extrasGroupId}', 'Queso', 1500, 'MXN', 1, 1, 1),
+             ('${baconId}', '${extrasGroupId}', 'Tocino', 2500, 'MXN', 1, 1, 2);
       INSERT INTO product_modifier_groups (product_id, modifier_group_id, display_order)
       VALUES ('${configuredProductId}', '${extrasGroupId}', 20),
              ('${configuredProductId}', '${requiredGroupId}', 10);
@@ -770,6 +774,111 @@ describe('Edge API Integration Tests', () => {
     expect(staleEdit.statusCode).toBe(409);
     expect(staleEdit.json().error).toBe('STALE_ORDER_VERSION');
 
+    const partialPayment = await app.inject({
+      method: 'POST',
+      url: `/orders/${created.json().id}/payments`,
+      payload: {
+        commandId: 'configured-partial-before-edit',
+        expectedVersion: restoredNote.json().version,
+        method: 'CARD',
+        amountApplied: 5000,
+        tip: { type: 'NONE' },
+      },
+    });
+    expect(partialPayment.statusCode).toBe(200);
+    expect(partialPayment.json().balanceDue.amount).toBe(9900);
+
+    const missingRequiredEdit = await app.inject({
+      method: 'PATCH',
+      url: `/orders/${created.json().id}/items/${itemId}/configuration`,
+      payload: {
+        commandId: 'configured-draft-edit-missing-required',
+        expectedVersion: partialPayment.json().version,
+        selectedModifierIds: [],
+        specialInstructions: null,
+      },
+    });
+    expect(missingRequiredEdit.statusCode).toBe(409);
+    expect(missingRequiredEdit.json().error).toBe('INVALID_MODIFIER_SELECTION');
+
+    const configurationPayload = {
+      commandId: 'configured-draft-edit-idempotent',
+      expectedVersion: partialPayment.json().version,
+      selectedModifierIds: [threeQuartersId, baconId],
+      specialInstructions: '  nueva nota integral  ',
+    };
+    const configurationEdited = await app.inject({
+      method: 'PATCH',
+      url: `/orders/${created.json().id}/items/${itemId}/configuration`,
+      payload: configurationPayload,
+    });
+    expect(configurationEdited.statusCode).toBe(200);
+    expect(configurationEdited.json().items[0].id).toBe(itemId);
+    expect(configurationEdited.json().items[0].productSnapshot.selectedModifiers).toEqual([
+      {
+        modifierOptionId: threeQuartersId,
+        name: '3/4',
+        priceDelta: { amount: 0, currency: 'MXN' },
+      },
+      {
+        modifierOptionId: baconId,
+        name: 'Tocino',
+        priceDelta: { amount: 2500, currency: 'MXN' },
+      },
+    ]);
+    expect(configurationEdited.json().items[0].specialInstructions).toBe('nueva nota integral');
+    expect(configurationEdited.json().subtotal.amount).toBe(15400);
+    expect(configurationEdited.json().paidAmount.amount).toBe(5000);
+    expect(configurationEdited.json().balanceDue.amount).toBe(10400);
+
+    const configurationRetry = await app.inject({
+      method: 'PATCH',
+      url: `/orders/${created.json().id}/items/${itemId}/configuration`,
+      payload: configurationPayload,
+    });
+    expect(configurationRetry.statusCode).toBe(200);
+    expect(configurationRetry.json().version).toBe(configurationEdited.json().version);
+    const configurationConflict = await app.inject({
+      method: 'PATCH',
+      url: `/orders/${created.json().id}/items/${itemId}/configuration`,
+      payload: { ...configurationPayload, selectedModifierIds: [mediumId] },
+    });
+    expect(configurationConflict.statusCode).toBe(409);
+    expect(configurationConflict.json().error).toBe('COMMAND_ID_CONFLICT');
+    const configurationEventSqlite = new Database(tmpPath);
+    const configurationEventCount = configurationEventSqlite
+      .prepare('SELECT COUNT(*) AS count FROM event_log WHERE command_id = ?')
+      .get(configurationPayload.commandId).count;
+    configurationEventSqlite.close();
+    expect(configurationEventCount).toBe(1);
+
+    const staleConfiguration = await app.inject({
+      method: 'PATCH',
+      url: `/orders/${created.json().id}/items/${itemId}/configuration`,
+      payload: {
+        commandId: 'configured-draft-edit-stale',
+        expectedVersion: partialPayment.json().version,
+        selectedModifierIds: [mediumId],
+        specialInstructions: null,
+      },
+    });
+    expect(staleConfiguration.statusCode).toBe(409);
+    expect(staleConfiguration.json().error).toBe('STALE_ORDER_VERSION');
+
+    const configurationRestored = await app.inject({
+      method: 'PATCH',
+      url: `/orders/${created.json().id}/items/${itemId}/configuration`,
+      payload: {
+        commandId: 'configured-draft-edit-restore',
+        expectedVersion: configurationEdited.json().version,
+        selectedModifierIds: [mediumId, cheeseId],
+        specialInstructions: 'solo 1 rodaja de tomate',
+      },
+    });
+    expect(configurationRestored.statusCode).toBe(200);
+    expect(configurationRestored.json().subtotal.amount).toBe(14900);
+    expect(configurationRestored.json().balanceDue.amount).toBe(9900);
+
     const changedSqlite = new Database(tmpPath);
     changedSqlite
       .prepare(
@@ -796,6 +905,19 @@ describe('Edge API Integration Tests', () => {
       priceDelta: { amount: 2000, currency: 'MXN' },
     });
     expect(persisted.json().items[0].specialInstructions).toBe('solo 1 rodaja de tomate');
+
+    const unavailableEdit = await app.inject({
+      method: 'PATCH',
+      url: `/orders/${created.json().id}/items/${itemId}/configuration`,
+      payload: {
+        commandId: 'configured-draft-edit-unavailable',
+        expectedVersion: persisted.json().version,
+        selectedModifierIds: [mediumId, cheeseId],
+        specialInstructions: 'must not persist',
+      },
+    });
+    expect(unavailableEdit.statusCode).toBe(409);
+    expect(unavailableEdit.json().error).toBe('MODIFIER_UNAVAILABLE');
 
     const staleOrder = await app.inject({
       method: 'POST',
@@ -854,6 +976,18 @@ describe('Edge API Integration Tests', () => {
     expect(sent.statusCode).toBe(200);
     expect(sent.json().items[0].status).toBe('SENT');
     expect(sent.json().items[0].specialInstructions).toBe('solo 1 rodaja de tomate');
+    const sentConfigurationEdit = await app.inject({
+      method: 'PATCH',
+      url: `/orders/${created.json().id}/items/${itemId}/configuration`,
+      payload: {
+        commandId: 'configured-draft-edit-after-send',
+        expectedVersion: sent.json().version,
+        selectedModifierIds: [mediumId],
+        specialInstructions: null,
+      },
+    });
+    expect(sentConfigurationEdit.statusCode).toBe(409);
+    expect(sentConfigurationEdit.json().error).toBe('ORDER_ITEM_SENT');
     const sentEdit = await app.inject({
       method: 'PATCH',
       url: `/orders/${created.json().id}/items/${itemId}/instructions`,
@@ -872,7 +1006,7 @@ describe('Edge API Integration Tests', () => {
         commandId: 'configured-payment',
         expectedVersion: sent.json().version,
         method: 'CARD',
-        amountApplied: 14900,
+        amountApplied: 9900,
         tip: { type: 'NONE' },
       },
     });

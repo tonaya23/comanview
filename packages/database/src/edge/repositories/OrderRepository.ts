@@ -187,18 +187,52 @@ export class OrderRepository {
               roundId: item.roundId?.toString() ?? null,
               quantity: item.quantity,
               specialInstructions: item.specialInstructions,
+              ...(item.isDraft
+                ? {
+                    productId: snap.productId.toString(),
+                    productName: snap.productName,
+                    basePriceAmount: snap.basePrice.amount,
+                    basePriceCurrency: snap.basePrice.currency,
+                    taxRateBasisPoints: snap.taxRateBasisPoints,
+                    taxCalculationMode: snap.taxCalculationMode,
+                    stationId: snap.stationId?.toString() ?? null,
+                  }
+                : {}),
             },
           })
           .run();
 
-        // 4a. Modifier snapshots are immutable and are persisted only with the new item.
-        // Re-saving an Order (DRAFT → SENT, payments, close) must not duplicate deltas.
-        const persistedModifier = db
-          .select({ id: schema.orderItemModifiers.id })
+        // 4a. A DRAFT snapshot changes only after an explicit aggregate command.
+        // Reconcile its modifier rows when the authoritative snapshot differs. SENT
+        // snapshots remain immutable and are never rewritten by normal persistence.
+        const persistedModifiers = db
+          .select({
+            modifierOptionId: schema.orderItemModifiers.modifierOptionId,
+            name: schema.orderItemModifiers.name,
+            priceDeltaAmount: schema.orderItemModifiers.priceDeltaAmount,
+            priceDeltaCurrency: schema.orderItemModifiers.priceDeltaCurrency,
+          })
           .from(schema.orderItemModifiers)
           .where(eq(schema.orderItemModifiers.orderItemId, item.id.toString()))
-          .get();
-        if (!persistedModifier) {
+          .all();
+        const persistedConfiguration = persistedModifiers
+          .map((modifier) => ({ ...modifier }))
+          .sort((left, right) => left.modifierOptionId.localeCompare(right.modifierOptionId));
+        const currentConfiguration = [...snap.modifiers]
+          .map((modifier) => ({
+            modifierOptionId: modifier.id.toString(),
+            name: modifier.name,
+            priceDeltaAmount: modifier.priceDelta.amount,
+            priceDeltaCurrency: modifier.priceDelta.currency,
+          }))
+          .sort((left, right) => left.modifierOptionId.localeCompare(right.modifierOptionId));
+        const configurationChanged =
+          JSON.stringify(persistedConfiguration) !== JSON.stringify(currentConfiguration);
+
+        if (configurationChanged && (persistedModifiers.length === 0 || item.isDraft)) {
+          db.delete(schema.orderItemModifiers)
+            .where(eq(schema.orderItemModifiers.orderItemId, item.id.toString()))
+            .run();
           for (const mod of snap.modifiers) {
             db.insert(schema.orderItemModifiers)
               .values({

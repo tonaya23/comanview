@@ -112,6 +112,16 @@ export type UpdateOrderItemSpecialInstructionsRequest = z.infer<
   typeof UpdateOrderItemSpecialInstructionsRequestSchema
 >;
 
+export const UpdateDraftOrderItemConfigurationRequestSchema = z.object({
+  commandId: z.string().min(1),
+  expectedVersion: z.number().int(),
+  selectedModifierIds: z.array(z.string().uuid()),
+  specialInstructions: z.string().nullable(),
+});
+export type UpdateDraftOrderItemConfigurationRequest = z.infer<
+  typeof UpdateDraftOrderItemConfigurationRequestSchema
+>;
+
 export const UpdateOrderTablesRequestSchema = z.object({
   expectedVersion: z.number().int(),
   tableIds: z.array(z.string().uuid()),

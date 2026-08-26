@@ -22,6 +22,7 @@ import {
   OrderCurrencyMismatchError,
   OrderPaidAmountExceedsTotalError,
   OrderItemSpecialInstructionsFrozenError,
+  OrderItemProductMismatchError,
   SpecialInstructionsTooLongError,
 } from './errors.js';
 import {
@@ -30,6 +31,7 @@ import {
   OrderItemAddedEvent,
   OrderItemRemovedEvent,
   OrderItemSpecialInstructionsUpdatedEvent,
+  OrderItemConfigurationUpdatedEvent,
   RoundSentEvent,
   OrderClosedEvent,
   OrderCancelledEvent,
@@ -339,6 +341,67 @@ export class Order {
       occurredAt: new Date(),
       commandId: commandId ?? null,
       itemId,
+      specialInstructions: normalizedInstructions,
+    };
+    this.emit(event);
+  }
+
+  updateDraftItemConfiguration(
+    itemId: EntityId,
+    snapshot: ProductSnapshot,
+    specialInstructions: string | null,
+    commandId?: string,
+  ): void {
+    this.assertIsOpen();
+
+    const item = this.props.items.find((candidate) => candidate.id.equals(itemId));
+    if (!item) throw new OrderItemNotFoundError(itemId.toString());
+    if (item.isSent) throw new OrderItemSentError(itemId.toString());
+    if (!item.snapshot.productId.equals(snapshot.productId)) {
+      throw new OrderItemProductMismatchError(itemId.toString());
+    }
+    if (snapshot.basePrice.currency !== this.props.currency) {
+      throw new OrderCurrencyMismatchError(
+        this.props.id.toString(),
+        this.props.currency,
+        snapshot.basePrice.currency,
+      );
+    }
+
+    const normalizedInstructions = normalizeSpecialInstructions(specialInstructions);
+    if (
+      normalizedInstructions !== null &&
+      normalizedInstructions.length > MAX_SPECIAL_INSTRUCTIONS_LENGTH
+    ) {
+      throw new SpecialInstructionsTooLongError(MAX_SPECIAL_INSTRUCTIONS_LENGTH);
+    }
+
+    const modifierTotal = snapshot.modifiers.reduce(
+      (total, modifier) => total.add(modifier.priceDelta),
+      Money.zero(this.props.currency),
+    );
+    const replacementLineTotal = snapshot.basePrice.add(modifierTotal).multiply(item.quantity);
+    const resultingSubtotal = this.getSubtotal()
+      .subtract(item.getLineTotal())
+      .add(replacementLineTotal);
+    if (this.getPaidAmount().greaterThan(resultingSubtotal)) {
+      throw new OrderPaidAmountExceedsTotalError(this.id.toString());
+    }
+
+    item._replaceDraftConfiguration(snapshot, normalizedInstructions);
+    this.bumpVersion();
+
+    const event: OrderItemConfigurationUpdatedEvent = {
+      eventId: EntityId.generate(),
+      eventType: 'ITEM_CONFIGURATION_UPDATED',
+      orderId: this.id,
+      occurredAt: new Date(),
+      commandId: commandId ?? null,
+      itemId,
+      productId: snapshot.productId,
+      modifierOptionIds: [...snapshot.modifiers]
+        .map((modifier) => modifier.id)
+        .sort((left, right) => left.toString().localeCompare(right.toString())),
       specialInstructions: normalizedInstructions,
     };
     this.emit(event);

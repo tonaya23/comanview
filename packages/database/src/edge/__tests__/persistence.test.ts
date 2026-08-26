@@ -23,6 +23,8 @@ import {
   Category,
   CashRegister,
   CashSession,
+  ProductSnapshot,
+  ModifierSnapshot,
 } from '@comanview/domain';
 import { Money } from '@comanview/money';
 
@@ -309,6 +311,56 @@ describe('Edge Persistence Integration Tests', () => {
     expect(closed.items[0]!.sendStatus).toBe('SENT');
     expect(closed.items[0]!.specialInstructions).toBe('solo una rodaja');
     expect(closed.items[0]!.snapshot).not.toHaveProperty('specialInstructions');
+  });
+
+  it('6c. persists an explicitly replaced DRAFT snapshot and modifier rows', () => {
+    const db = createTestDb();
+    const orderRepo = new OrderRepository(db);
+    const order = makeOrder();
+    const productId = EntityId.generate();
+    const original = new ProductSnapshot({
+      productId,
+      productName: 'Original',
+      basePrice: Money.fromMinorUnits(1000, 'MXN'),
+      taxRateBasisPoints: 1600,
+      taxCalculationMode: 'TAX_INCLUDED',
+      stationId: null,
+      modifiers: [],
+    });
+    const item = order.addItem(original);
+    orderRepo.saveOrder(order, false);
+
+    const draft = orderRepo.getOrderById(order.id)!;
+    draft.updateDraftItemConfiguration(
+      item.id,
+      new ProductSnapshot({
+        productId,
+        productName: 'Authoritative edit',
+        basePrice: Money.fromMinorUnits(1200, 'MXN'),
+        taxRateBasisPoints: 800,
+        taxCalculationMode: 'TAX_INCLUDED',
+        stationId: null,
+        modifiers: [
+          new ModifierSnapshot({
+            id: EntityId.generate(),
+            name: 'Extra',
+            priceDelta: Money.fromMinorUnits(300, 'MXN'),
+          }),
+        ],
+      }),
+      'editada',
+    );
+    orderRepo.saveOrder(draft, false);
+
+    const recovered = orderRepo.getOrderById(order.id)!;
+    expect(recovered.items[0]!.id.equals(item.id)).toBe(true);
+    expect(recovered.items[0]!.snapshot.productName).toBe('Authoritative edit');
+    expect(recovered.items[0]!.snapshot.basePrice.amount).toBe(1200);
+    expect(recovered.items[0]!.snapshot.taxRateBasisPoints).toBe(800);
+    expect(recovered.items[0]!.snapshot.modifiers).toHaveLength(1);
+    expect(recovered.items[0]!.snapshot.modifiers[0]!.priceDelta.amount).toBe(300);
+    expect(recovered.items[0]!.specialInstructions).toBe('editada');
+    expect(recovered.getSubtotal().amount).toBe(1500);
   });
 
   // ── 7. Multiple Rounds preserved ─────────────────────────────────────────

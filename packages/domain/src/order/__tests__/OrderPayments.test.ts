@@ -180,6 +180,45 @@ describe('Order Payments', () => {
     expect(order.getBalanceDue().amount).toBe(800);
   });
 
+  it('recalculates balance after a paid DRAFT edit and rejects totals below paid amount', () => {
+    const { order, item } = makeOrderWithTotal(1000);
+    completePayment(order, 400);
+    const productId = item.snapshot.productId;
+
+    order.updateDraftItemConfiguration(
+      item.id,
+      new ProductSnapshot({
+        productId,
+        productName: 'Sale item edited',
+        basePrice: Money.fromMinorUnits(800, 'MXN'),
+        taxRateBasisPoints: 1600,
+        taxCalculationMode: 'TAX_INCLUDED',
+        stationId: null,
+        modifiers: [],
+      }),
+      null,
+    );
+    expect(order.getPaidAmount().amount).toBe(400);
+    expect(order.getBalanceDue().amount).toBe(400);
+
+    expect(() =>
+      order.updateDraftItemConfiguration(
+        item.id,
+        new ProductSnapshot({
+          productId,
+          productName: 'Invalid lower total',
+          basePrice: Money.fromMinorUnits(300, 'MXN'),
+          taxRateBasisPoints: 1600,
+          taxCalculationMode: 'TAX_INCLUDED',
+          stationId: null,
+          modifiers: [],
+        }),
+        null,
+      ),
+    ).toThrow(OrderPaidAmountExceedsTotalError);
+    expect(order.getSubtotal().amount).toBe(800);
+  });
+
   it('supports partial Payments followed by new items and later Rounds', () => {
     const { order } = makeOrderWithTotal(1000);
     order.sendDraftItems('first-round');

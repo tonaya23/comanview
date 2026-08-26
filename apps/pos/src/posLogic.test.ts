@@ -3,7 +3,7 @@ import type { CategoryResponse, ProductResponse } from '@comanview/contracts';
 import { EdgeClientError } from '@comanview/client-sdk';
 import {
   ALL_CATEGORIES,
-  canEditItemSpecialInstructions,
+  canEditDraftItem,
   formatMoney,
   getActiveModifierGroups,
   getConfiguredProductTotal,
@@ -12,6 +12,7 @@ import {
   getVisibleCategories,
   getVisibleProducts,
   getLocalBusinessDate,
+  getModifierGroupValidationMessage,
   getSnapshotTotal,
   getUnsatisfiedModifierGroups,
   minorUnitsToInput,
@@ -159,6 +160,32 @@ describe('POS presentation behavior', () => {
       14900,
     );
     expect(getUnsatisfiedModifierGroups(configured, [])).toHaveLength(1);
+    expect(getModifierGroupValidationMessage(configured.modifierGroups[1]!, [])).toBe(
+      'Selecciona 1 opción en Término.',
+    );
+  });
+
+  it('reports every incomplete required modifier group independently', () => {
+    const configured = product({
+      modifierGroups: ['Término', 'Tamaño'].map((name, index) => ({
+        displayOrder: index,
+        modifierGroup: {
+          id: `01991a00-0000-7000-8000-00000000050${index}`,
+          name,
+          minSelections: 1,
+          maxSelections: 1,
+          active: true,
+          options: [],
+        },
+        priceDeltaOverrides: {},
+      })),
+    });
+
+    expect(
+      getUnsatisfiedModifierGroups(configured, []).map((group) =>
+        getModifierGroupValidationMessage(group, []),
+      ),
+    ).toEqual(['Selecciona 1 opción en Término.', 'Selecciona 1 opción en Tamaño.']);
   });
 
   it('shows modifier deltas in the historical item total', () => {
@@ -176,9 +203,9 @@ describe('POS presentation behavior', () => {
     ).toContain('Actualizamos el catálogo');
   });
 
-  it('allows special-instructions editing only for DRAFT items', () => {
-    expect(canEditItemSpecialInstructions('DRAFT')).toBe(true);
-    expect(canEditItemSpecialInstructions('SENT')).toBe(false);
+  it('allows configuration editing only for DRAFT items', () => {
+    expect(canEditDraftItem('DRAFT')).toBe(true);
+    expect(canEditDraftItem('SENT')).toBe(false);
     expect(
       getErrorMessage(
         new EdgeClientError('technical', 'ORDER_ITEM_SPECIAL_INSTRUCTIONS_FROZEN', 409),

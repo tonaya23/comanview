@@ -2260,6 +2260,8 @@ Cambios posteriores del catálogo MUST NOT modificar el snapshot.
 
 Esto aplica incluso mientras el ítem continúe DRAFT.
 
+La edición explícita de configuración de un DRAFT se modela como un comando versionado sobre `Order`: conserva `OrderItem.id`, vuelve a validar Product/modifiers actuales en Edge y reemplaza atómicamente el snapshot y `special_instructions`. Una actualización del catálogo aislada nunca dispara este comando ni reescribe DRAFTs automáticamente.
+
 `OrderItem` MAY contener `special_instructions: string | null` como estado transaccional propio, separado de `ProductSnapshot`, Product y Modifier. Edge normaliza whitespace exterior, convierte vacío a `null`, limita V1 a 500 caracteres y no incorpora este campo a ningún cálculo financiero.
 
 La mutación versionada pertenece al Aggregate Root: DRAFT permite crear, editar o eliminar el texto; SENT lo congela. Persistencia MUST rehidratarlo desde `order_items` sin consultar ni modificar el catálogo.

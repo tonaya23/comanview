@@ -17,6 +17,8 @@ import {
   UpdateOrderTablesRequest,
   UpdateOrderItemSpecialInstructionsRequestSchema,
   UpdateOrderItemSpecialInstructionsRequest,
+  UpdateDraftOrderItemConfigurationRequestSchema,
+  UpdateDraftOrderItemConfigurationRequest,
 } from '@comanview/contracts';
 
 export function orderRoutes(orderService: OrderService): FastifyPluginAsyncZod {
@@ -48,6 +50,22 @@ export function orderRoutes(orderService: OrderService): FastifyPluginAsyncZod {
         const { id, itemId } = request.params as { id: string; itemId: string };
         const body = request.body as UpdateOrderItemSpecialInstructionsRequest;
         const order = await orderService.updateItemSpecialInstructions(id, itemId, body);
+        reply.send(order);
+      },
+    );
+
+    // PATCH /orders/:id/items/:itemId/configuration
+    fastify.patch(
+      '/:id/items/:itemId/configuration',
+      {
+        schema: {
+          body: UpdateDraftOrderItemConfigurationRequestSchema,
+        },
+      },
+      async (request, reply) => {
+        const { id, itemId } = request.params as { id: string; itemId: string };
+        const body = request.body as UpdateDraftOrderItemConfigurationRequest;
+        const order = await orderService.updateDraftItemConfiguration(id, itemId, body);
         reply.send(order);
       },
     );

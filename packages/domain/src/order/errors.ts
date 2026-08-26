@@ -24,6 +24,15 @@ export class OrderItemNotFoundError extends DomainError {
   }
 }
 
+export class OrderItemProductMismatchError extends DomainError {
+  constructor(itemId: string) {
+    super(
+      `OrderItem ${itemId} configuration cannot be replaced with a different Product.`,
+      'ORDER_ITEM_PRODUCT_MISMATCH',
+    );
+  }
+}
+
 export class OrderItemSpecialInstructionsFrozenError extends DomainError {
   constructor(itemId: string) {
     super(

@@ -1484,6 +1484,8 @@ Cambios posteriores del catálogo MUST NOT modificar el snapshot.
 
 Esto aplica incluso mientras el ítem continúe DRAFT.
 
+Un operador MAY editar explícitamente la configuración de un `OrderItem` DRAFT. Esa acción MUST conservar la identidad del ítem y hacer que Edge valide el Product y modifiers actuales, resuelva precios autoritativos y reemplace el snapshot de ese DRAFT. Los cambios del catálogo por sí solos MUST NOT ejecutar este reemplazo ni actualizar DRAFTs automáticamente.
+
 Cada `OrderItem` MAY mantener `special_instructions` como texto plano transaccional separado del `ProductSnapshot`, del catálogo y de los modificadores. Edge MUST normalizar whitespace exterior; texto vacío MUST persistirse como `null`; el máximo V1 será 500 caracteres. Este campo MUST NOT afectar precio, impuestos, subtotal ni total.
 
 Mientras el ítem sea DRAFT, `special_instructions` MAY crearse, editarse o eliminarse explícitamente. Al pasar a SENT queda congelado junto con la historia operativa del ítem y MUST NOT modificarse mediante el flujo normal.

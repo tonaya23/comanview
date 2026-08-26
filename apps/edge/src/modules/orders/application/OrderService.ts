@@ -2,6 +2,8 @@ import { OrderRepository, CatalogRepository } from '@comanview/database';
 import {
   InvalidModifierSelectionError,
   Order,
+  OrderItemNotFoundError,
+  Product,
   EntityId,
   OrderType,
   OrderChannel,
@@ -21,6 +23,7 @@ import {
   RemoveOrderItemRequest,
   UpdateOrderTablesRequest,
   UpdateOrderItemSpecialInstructionsRequest,
+  UpdateDraftOrderItemConfigurationRequest,
 } from '@comanview/contracts';
 
 export class OrderService {
@@ -72,26 +75,69 @@ export class OrderService {
     const product = this.catalogRepo.getProductById(EntityId.fromString(request.productId));
     if (!product) throw new ObjectNotFoundError(`Product ${request.productId} not found`);
 
-    const modifierSelections = new Map<string, EntityId[]>();
-    for (const selectedId of request.selectedModifierIds ?? []) {
-      const optionId = EntityId.fromString(selectedId);
-      const owningGroup = product.modifierGroups.find((pmg) =>
-        pmg.modifierGroup.options.some((option) => option.id.equals(optionId)),
-      );
-      if (!owningGroup) {
-        throw new InvalidModifierSelectionError(
-          `ModifierOption ${selectedId} is not assigned to Product ${product.id.toString()}.`,
-        );
-      }
-      const groupId = owningGroup.modifierGroup.id.toString();
-      modifierSelections.set(groupId, [...(modifierSelections.get(groupId) ?? []), optionId]);
-    }
-    const snapshot = product.createSnapshot(modifierSelections);
+    const snapshot = this.createAuthoritativeSnapshot(product, request.selectedModifierIds ?? []);
 
     order.addItem(snapshot, request.commandId, request.specialInstructions);
 
     this.orderRepo.saveOrder(order, true, request.commandId);
 
+    return mapOrderToResponse(order);
+  }
+
+  async updateDraftItemConfiguration(
+    orderId: string,
+    itemId: string,
+    request: UpdateDraftOrderItemConfigurationRequest,
+  ): Promise<OrderResponse> {
+    const order = this.orderRepo.getOrderById(EntityId.fromString(orderId));
+    if (!order) throw new ObjectNotFoundError(`Order ${orderId} not found`);
+
+    const requestedModifierIds = [...request.selectedModifierIds].sort();
+    const normalizedInstructions = normalizeSpecialInstructions(request.specialInstructions);
+    if (this.orderRepo.hasProcessedCommand(request.commandId)) {
+      const event = this.orderRepo.getProcessedCommandEvent(request.commandId);
+      if (event?.aggregateId === orderId && event.eventType === 'ITEM_CONFIGURATION_UPDATED') {
+        const payload = JSON.parse(event.payload) as {
+          itemId?: string;
+          modifierOptionIds?: string[];
+          specialInstructions?: string | null;
+        };
+        if (
+          payload.itemId === itemId &&
+          JSON.stringify([...(payload.modifierOptionIds ?? [])].sort()) ===
+            JSON.stringify(requestedModifierIds) &&
+          payload.specialInstructions === normalizedInstructions
+        ) {
+          return mapOrderToResponse(order);
+        }
+      }
+      throw new AppError(
+        'COMMAND_ID_CONFLICT',
+        409,
+        'commandId was already used for a different operation.',
+      );
+    }
+
+    if (order.version !== request.expectedVersion) {
+      throw new ConcurrencyError(
+        `Expected version ${request.expectedVersion}, but got ${order.version}`,
+      );
+    }
+
+    const item = order.items.find((candidate) => candidate.id.toString() === itemId);
+    if (!item) throw new OrderItemNotFoundError(itemId);
+    const productId = item.snapshot.productId;
+    const product = this.catalogRepo.getProductById(productId);
+    if (!product) throw new ObjectNotFoundError(`Product ${productId.toString()} not found`);
+    const snapshot = this.createAuthoritativeSnapshot(product, request.selectedModifierIds);
+
+    order.updateDraftItemConfiguration(
+      item.id,
+      snapshot,
+      request.specialInstructions,
+      request.commandId,
+    );
+    this.orderRepo.saveOrder(order, true, request.commandId);
     return mapOrderToResponse(order);
   }
 
@@ -233,5 +279,23 @@ export class OrderService {
 
     this.orderRepo.saveOrder(order, true);
     return mapOrderToResponse(order);
+  }
+
+  private createAuthoritativeSnapshot(product: Product, selectedModifierIds: string[]) {
+    const modifierSelections = new Map<string, EntityId[]>();
+    for (const selectedId of selectedModifierIds) {
+      const optionId = EntityId.fromString(selectedId);
+      const owningGroup = product.modifierGroups.find((pmg) =>
+        pmg.modifierGroup.options.some((option) => option.id.equals(optionId)),
+      );
+      if (!owningGroup) {
+        throw new InvalidModifierSelectionError(
+          `ModifierOption ${selectedId} is not assigned to Product ${product.id.toString()}.`,
+        );
+      }
+      const groupId = owningGroup.modifierGroup.id.toString();
+      modifierSelections.set(groupId, [...(modifierSelections.get(groupId) ?? []), optionId]);
+    }
+    return product.createSnapshot(modifierSelections);
   }
 }

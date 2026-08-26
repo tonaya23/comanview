@@ -12,6 +12,7 @@ import {
   OrderBalanceNotZeroError,
   OrderCurrencyMismatchError,
   OrderItemSpecialInstructionsFrozenError,
+  OrderItemProductMismatchError,
   SpecialInstructionsTooLongError,
 } from '../errors.js';
 
@@ -23,9 +24,10 @@ function makeSnapshot(
   basePriceMinor = 10000,
   currency = DEFAULT_CURRENCY,
   modifiers: ModifierSnapshot[] = [],
+  productId = EntityId.generate(),
 ): ProductSnapshot {
   return new ProductSnapshot({
-    productId: EntityId.generate(),
+    productId,
     productName: 'Burger',
     basePrice: Money.fromMinorUnits(basePriceMinor, currency),
     taxRateBasisPoints: 1600,
@@ -281,6 +283,65 @@ describe('Order Aggregate — Phase 1D', () => {
       payInFull(order);
       order.close();
       expect(() => order.updateItemSpecialInstructions(item.id, null)).toThrow(OrderNotOpenError);
+    });
+  });
+
+  describe('updateDraftItemConfiguration', () => {
+    it('explicitly replaces modifiers and instructions while preserving item identity', () => {
+      const order = makeBaseOrder();
+      const productId = EntityId.generate();
+      const originalModifier = makeModifier(2000);
+      const item = order.addItem(
+        makeSnapshot(10000, 'MXN', [originalModifier], productId),
+        undefined,
+        'nota original',
+      );
+      const replacementModifier = makeModifier(500);
+      const versionBefore = order.version;
+
+      order.updateDraftItemConfiguration(
+        item.id,
+        makeSnapshot(10000, 'MXN', [replacementModifier], productId),
+        '  nueva nota  ',
+        'edit-draft-1',
+      );
+
+      expect(order.items[0]!.id.equals(item.id)).toBe(true);
+      expect(order.items[0]!.snapshot.modifiers.map((modifier) => modifier.id.toString())).toEqual([
+        replacementModifier.id.toString(),
+      ]);
+      expect(order.items[0]!.specialInstructions).toBe('nueva nota');
+      expect(order.getSubtotal().amount).toBe(10500);
+      expect(order.version).toBe(versionBefore + 1);
+      expect(order.events.at(-1)).toMatchObject({
+        eventType: 'ITEM_CONFIGURATION_UPDATED',
+        commandId: 'edit-draft-1',
+        specialInstructions: 'nueva nota',
+      });
+    });
+
+    it('rejects configuration replacement for SENT items', () => {
+      const order = makeBaseOrder();
+      const productId = EntityId.generate();
+      const item = order.addItem(makeSnapshot(10000, 'MXN', [], productId));
+      order.sendDraftItems();
+
+      expect(() =>
+        order.updateDraftItemConfiguration(
+          item.id,
+          makeSnapshot(10000, 'MXN', [], productId),
+          null,
+        ),
+      ).toThrow(OrderItemSentError);
+    });
+
+    it('rejects replacing an item with a snapshot from another Product', () => {
+      const order = makeBaseOrder();
+      const item = order.addItem(makeSnapshot());
+
+      expect(() => order.updateDraftItemConfiguration(item.id, makeSnapshot(), null)).toThrow(
+        OrderItemProductMismatchError,
+      );
     });
   });
 

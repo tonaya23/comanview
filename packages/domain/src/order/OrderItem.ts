@@ -107,6 +107,12 @@ export class OrderItem implements OrderItemView {
     this.props.specialInstructions = value;
   }
 
+  /** Internal: called by Order.updateDraftItemConfiguration() only. */
+  _replaceDraftConfiguration(snapshot: ProductSnapshot, specialInstructions: string | null): void {
+    this.props.snapshot = snapshot;
+    this.props.specialInstructions = specialInstructions;
+  }
+
   /** Internal: to be called by KDS integration at application layer. */
   _updatePrepStatus(status: OrderItemPrepStatus): void {
     this.props.prepStatus = status;
