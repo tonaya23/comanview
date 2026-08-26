@@ -1,7 +1,11 @@
 import { CatalogRepository } from '@comanview/database';
 import { Product, EntityId, TaxProfile, ProductType } from '@comanview/domain';
 import { Money } from '@comanview/money';
-import { CreateProductRequest, SetProductAvailabilityRequest, ProductResponse } from '@comanview/contracts';
+import {
+  CreateProductRequest,
+  SetProductAvailabilityRequest,
+  ProductResponse,
+} from '@comanview/contracts';
 
 // Simplified for now, only creates REGULAR products without modifiers for testing
 export class CatalogService {
@@ -23,7 +27,9 @@ export class CatalogService {
       name: request.name,
       description: request.description,
       productType: request.productType,
-      categoryId: request.categoryId ? EntityId.fromString(request.categoryId) : EntityId.generate(),
+      categoryId: request.categoryId
+        ? EntityId.fromString(request.categoryId)
+        : EntityId.generate(),
       taxProfile,
       basePrice: Money.fromMinorUnits(request.basePrice.amount, request.basePrice.currency),
       stationId: request.stationId ? EntityId.fromString(request.stationId) : null,
@@ -55,7 +61,10 @@ export class CatalogService {
     return this.catalogRepo.getAllCategories();
   }
 
-  async setProductAvailability(id: string, request: SetProductAvailabilityRequest): Promise<ProductResponse | null> {
+  async setProductAvailability(
+    id: string,
+    request: SetProductAvailabilityRequest,
+  ): Promise<ProductResponse | null> {
     const product = this.catalogRepo.getProductById(EntityId.fromString(id));
     if (!product) return null;
 
@@ -93,14 +102,15 @@ export class CatalogService {
       displayOrder: product.displayOrder,
       active: product.active,
       available: product.available,
-      modifierGroups: product.modifierGroups.map(pmg => ({
+      modifierGroups: product.modifierGroups.map((pmg) => ({
+        displayOrder: pmg.displayOrder,
         modifierGroup: {
           id: pmg.modifierGroup.id.toString(),
           name: pmg.modifierGroup.name,
           minSelections: pmg.modifierGroup.minSelections,
           maxSelections: pmg.modifierGroup.maxSelections,
           active: pmg.modifierGroup.active,
-          options: pmg.modifierGroup.options.map(o => ({
+          options: pmg.modifierGroup.options.map((o) => ({
             id: o.id.toString(),
             name: o.name,
             defaultPriceDelta: {
@@ -112,7 +122,12 @@ export class CatalogService {
             displayOrder: o.displayOrder,
           })),
         },
-        priceDeltaOverrides: {}, // Simplified for now since domain doesn't expose it
+        priceDeltaOverrides: Object.fromEntries(
+          pmg.modifierGroup.options.flatMap((option) => {
+            const override = pmg.getPriceOverride(option.id);
+            return override ? [[option.id.toString(), override.toJSON()]] : [];
+          }),
+        ),
       })),
     };
   }

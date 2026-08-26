@@ -4,10 +4,15 @@ import { EdgeClientError } from '@comanview/client-sdk';
 import {
   ALL_CATEGORIES,
   formatMoney,
+  getActiveModifierGroups,
+  getConfiguredProductTotal,
+  getEffectiveModifierPrice,
   getErrorMessage,
   getVisibleCategories,
   getVisibleProducts,
   getLocalBusinessDate,
+  getSnapshotTotal,
+  getUnsatisfiedModifierGroups,
   minorUnitsToInput,
   parseMoneyInputToMinorUnits,
   percentageAmountHalfUp,
@@ -97,5 +102,76 @@ describe('POS presentation behavior', () => {
 
   it('uses an explicit local business date', () => {
     expect(getLocalBusinessDate(new Date(2026, 7, 25, 23, 30))).toBe('2026-08-25');
+  });
+
+  it('orders modifier groups and previews authoritative override prices with integers', () => {
+    const configured = product({
+      modifierGroups: [
+        {
+          displayOrder: 20,
+          modifierGroup: {
+            id: '01991a00-0000-7000-8000-000000000402',
+            name: 'Extras',
+            minSelections: 0,
+            maxSelections: 2,
+            active: true,
+            options: [
+              {
+                id: '01991a00-0000-7000-8000-000000000421',
+                name: 'Queso',
+                defaultPriceDelta: { amount: 1500, currency: 'MXN' },
+                active: true,
+                available: true,
+                displayOrder: 10,
+              },
+            ],
+          },
+          priceDeltaOverrides: {
+            '01991a00-0000-7000-8000-000000000421': { amount: 2000, currency: 'MXN' },
+          },
+        },
+        {
+          displayOrder: 10,
+          modifierGroup: {
+            id: '01991a00-0000-7000-8000-000000000401',
+            name: 'Término',
+            minSelections: 1,
+            maxSelections: 1,
+            active: true,
+            options: [],
+          },
+          priceDeltaOverrides: {},
+        },
+      ],
+    });
+
+    expect(
+      getActiveModifierGroups(configured).map(({ modifierGroup }) => modifierGroup.name),
+    ).toEqual(['Término', 'Extras']);
+    expect(
+      getEffectiveModifierPrice(
+        configured.modifierGroups[0]!,
+        '01991a00-0000-7000-8000-000000000421',
+      ),
+    ).toBe(2000);
+    expect(getConfiguredProductTotal(configured, ['01991a00-0000-7000-8000-000000000421'])).toBe(
+      14900,
+    );
+    expect(getUnsatisfiedModifierGroups(configured, [])).toHaveLength(1);
+  });
+
+  it('shows modifier deltas in the historical item total', () => {
+    expect(
+      getSnapshotTotal({
+        basePrice: { amount: 12900 },
+        selectedModifiers: [{ priceDelta: { amount: 0 } }, { priceDelta: { amount: 2000 } }],
+      }),
+    ).toBe(14900);
+  });
+
+  it('explains stale unavailable modifier selections operationally', () => {
+    expect(
+      getErrorMessage(new EdgeClientError('technical', 'MODIFIER_UNAVAILABLE', 409)),
+    ).toContain('Actualizamos el catálogo');
   });
 });

@@ -9,7 +9,7 @@ import {
   TaxProfileInactiveError,
   ModifierUnavailableError,
   ModifierInactiveError,
-  InvalidModifierSelectionError
+  InvalidModifierSelectionError,
 } from './errors.js';
 
 export type ProductType = 'STANDARD' | 'RECIPE' | 'NON_INVENTORY';
@@ -35,25 +35,53 @@ export interface ProductProps {
 export class Product {
   constructor(private readonly props: ProductProps) {}
 
-  get id(): EntityId { return this.props.id; }
-  get categoryId(): EntityId { return this.props.categoryId; }
-  get name(): string { return this.props.name; }
-  get description(): string { return this.props.description; }
-  get productType(): ProductType { return this.props.productType; }
-  get basePrice(): Money { return this.props.basePrice; }
-  get taxProfile(): TaxProfile { return this.props.taxProfile; }
-  get stationId(): EntityId | null { return this.props.stationId; }
-  get active(): boolean { return this.props.active; }
-  get available(): boolean { return this.props.available; }
-  get displayOrder(): number { return this.props.displayOrder; }
-  get sku(): string | null { return this.props.sku; }
-  get barcode(): string | null { return this.props.barcode; }
-  get modifierGroups(): ReadonlyArray<ProductModifierGroup> { return this.props.modifierGroups; }
+  get id(): EntityId {
+    return this.props.id;
+  }
+  get categoryId(): EntityId {
+    return this.props.categoryId;
+  }
+  get name(): string {
+    return this.props.name;
+  }
+  get description(): string {
+    return this.props.description;
+  }
+  get productType(): ProductType {
+    return this.props.productType;
+  }
+  get basePrice(): Money {
+    return this.props.basePrice;
+  }
+  get taxProfile(): TaxProfile {
+    return this.props.taxProfile;
+  }
+  get stationId(): EntityId | null {
+    return this.props.stationId;
+  }
+  get active(): boolean {
+    return this.props.active;
+  }
+  get available(): boolean {
+    return this.props.available;
+  }
+  get displayOrder(): number {
+    return this.props.displayOrder;
+  }
+  get sku(): string | null {
+    return this.props.sku;
+  }
+  get barcode(): string | null {
+    return this.props.barcode;
+  }
+  get modifierGroups(): ReadonlyArray<ProductModifierGroup> {
+    return this.props.modifierGroups;
+  }
 
   /**
    * Generates an immutable snapshot of the product for an order.
    * Validates active/available status and selection rules.
-   * 
+   *
    * @param selectedOptions Map of ModifierGroup ID -> Array of selected ModifierOption IDs
    */
   public createSnapshot(selectedOptions: Map<string, EntityId[]>): ProductSnapshot {
@@ -68,29 +96,51 @@ export class Product {
     }
 
     const modifierSnapshots: ModifierSnapshot[] = [];
+    const knownGroupIds = new Set(
+      this.modifierGroups.map((pmg) => pmg.modifierGroup.id.toString()),
+    );
+
+    for (const [groupId, optionIds] of selectedOptions) {
+      if (!knownGroupIds.has(groupId)) {
+        throw new InvalidModifierSelectionError(
+          `ModifierGroup ${groupId} is not assigned to this Product.`,
+        );
+      }
+      if (new Set(optionIds.map((id) => id.toString())).size !== optionIds.length) {
+        throw new InvalidModifierSelectionError(
+          `ModifierGroup ${groupId} contains duplicate selections.`,
+        );
+      }
+    }
 
     for (const pmg of this.modifierGroups) {
       const group = pmg.modifierGroup;
       if (!group.active) {
-        // If a group is inactive, it's treated as if it doesn't exist for the product (cannot select from it)
-        // But if we passed selections for it, we should probably throw or ignore.
-        // Let's assume an inactive group cannot contribute to selections.
+        if ((selectedOptions.get(group.id.toString())?.length ?? 0) > 0) {
+          throw new InvalidModifierSelectionError(`ModifierGroup ${group.name} is inactive.`);
+        }
         continue;
       }
 
       const selectionsForGroup = selectedOptions.get(group.id.toString()) || [];
 
       if (selectionsForGroup.length < group.minSelections) {
-        throw new InvalidModifierSelectionError(`Group ${group.name} requires at least ${group.minSelections} selections.`);
+        throw new InvalidModifierSelectionError(
+          `Group ${group.name} requires at least ${group.minSelections} selections.`,
+        );
       }
       if (selectionsForGroup.length > group.maxSelections) {
-        throw new InvalidModifierSelectionError(`Group ${group.name} allows at most ${group.maxSelections} selections.`);
+        throw new InvalidModifierSelectionError(
+          `Group ${group.name} allows at most ${group.maxSelections} selections.`,
+        );
       }
 
       for (const optionId of selectionsForGroup) {
         const option = group.getOption(optionId);
         if (!option) {
-          throw new InvalidModifierSelectionError(`Option ${optionId.toString()} not found in group ${group.name}.`);
+          throw new InvalidModifierSelectionError(
+            `Option ${optionId.toString()} not found in group ${group.name}.`,
+          );
         }
         if (!option.active) {
           throw new ModifierInactiveError(option.id.toString());
@@ -100,11 +150,13 @@ export class Product {
         }
 
         const finalPrice = pmg.getPriceForOption(option.id)!;
-        modifierSnapshots.push(new ModifierSnapshot({
-          id: option.id,
-          name: option.name,
-          priceDelta: finalPrice,
-        }));
+        modifierSnapshots.push(
+          new ModifierSnapshot({
+            id: option.id,
+            name: option.name,
+            priceDelta: finalPrice,
+          }),
+        );
       }
     }
 
@@ -115,7 +167,7 @@ export class Product {
       taxRateBasisPoints: this.taxProfile.rateBasisPoints,
       taxCalculationMode: this.taxProfile.calculationMode,
       stationId: this.stationId,
-      modifiers: modifierSnapshots
+      modifiers: modifierSnapshots,
     });
   }
 

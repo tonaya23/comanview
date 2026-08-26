@@ -157,10 +157,35 @@ describe('Product Domain', () => {
   });
 
   it('throws when maxSelections rule is violated', () => {
-    const { product, ids } = setupData();
-    // 3 selections, but maxSelections is 2. (We duplicate one ID just for testing the rule limit)
+    const { productProps, modGroup, ids } = setupData();
+    const thirdOption = new ModifierOption({
+      id: EntityId.generate(),
+      name: 'Avocado',
+      defaultPriceDelta: Money.fromMinorUnits(180, 'MXN'),
+      active: true,
+      available: true,
+      displayOrder: 3,
+    });
+    const group = new ModifierGroup({
+      id: modGroup.id,
+      name: modGroup.name,
+      minSelections: 1,
+      maxSelections: 2,
+      active: true,
+      options: [
+        modGroup.getOption(ids.modOpt1Id)!,
+        modGroup.getOption(ids.modOpt2Id)!,
+        thirdOption,
+      ],
+    });
+    const product = new Product({
+      ...productProps,
+      modifierGroups: [
+        new ProductModifierGroup({ modifierGroup: group, priceDeltaOverrides: new Map() }),
+      ],
+    });
     const selections = new Map<string, EntityId[]>([
-      [ids.modGroupId.toString(), [ids.modOpt1Id, ids.modOpt2Id, ids.modOpt1Id]],
+      [ids.modGroupId.toString(), [ids.modOpt1Id, ids.modOpt2Id, thirdOption.id]],
     ]);
 
     expect(() => product.createSnapshot(selections)).toThrow(InvalidModifierSelectionError);
@@ -221,5 +246,90 @@ describe('Product Domain', () => {
     const selections = new Map<string, EntityId[]>([[ids.modGroupId.toString(), [ids.modOpt1Id]]]);
 
     expect(() => product.createSnapshot(selections)).toThrow(ModifierUnavailableError);
+  });
+
+  it('throws when modifier is inactive', () => {
+    const { ids, productProps, modGroup } = setupData();
+    const inactiveOption = new ModifierOption({
+      id: ids.modOpt1Id,
+      name: 'Extra Cheese',
+      defaultPriceDelta: Money.fromMinorUnits(150, 'MXN'),
+      active: false,
+      available: true,
+      displayOrder: 1,
+    });
+    const group = new ModifierGroup({
+      id: modGroup.id,
+      name: modGroup.name,
+      minSelections: 1,
+      maxSelections: 2,
+      active: true,
+      options: [inactiveOption, modGroup.getOption(ids.modOpt2Id)!],
+    });
+    const product = new Product({
+      ...productProps,
+      modifierGroups: [
+        new ProductModifierGroup({ modifierGroup: group, priceDeltaOverrides: new Map() }),
+      ],
+    });
+
+    expect(() =>
+      product.createSnapshot(
+        new Map<string, EntityId[]>([[ids.modGroupId.toString(), [ids.modOpt1Id]]]),
+      ),
+    ).toThrow(ModifierInactiveError);
+  });
+
+  it('rejects duplicate selections and selections for an unrelated group', () => {
+    const { product, ids } = setupData();
+
+    expect(() =>
+      product.createSnapshot(
+        new Map<string, EntityId[]>([[ids.modGroupId.toString(), [ids.modOpt1Id, ids.modOpt1Id]]]),
+      ),
+    ).toThrow(InvalidModifierSelectionError);
+    expect(() =>
+      product.createSnapshot(new Map([[EntityId.generate().toString(), [ids.modOpt1Id]]])),
+    ).toThrow(InvalidModifierSelectionError);
+  });
+
+  it('keeps an existing snapshot historical when current catalog data changes', () => {
+    const { product, productProps, ids, modGroup } = setupData();
+    const selections = new Map<string, EntityId[]>([[ids.modGroupId.toString(), [ids.modOpt2Id]]]);
+    const historical = product.createSnapshot(selections);
+    const renamedOption = new ModifierOption({
+      id: ids.modOpt2Id,
+      name: 'Smoked Bacon',
+      defaultPriceDelta: Money.fromMinorUnits(400, 'MXN'),
+      active: true,
+      available: true,
+      displayOrder: 2,
+    });
+    const currentGroup = new ModifierGroup({
+      id: modGroup.id,
+      name: modGroup.name,
+      minSelections: modGroup.minSelections,
+      maxSelections: modGroup.maxSelections,
+      active: true,
+      options: [modGroup.getOption(ids.modOpt1Id)!, renamedOption],
+    });
+    const currentProduct = new Product({
+      ...productProps,
+      name: 'New Burger',
+      basePrice: Money.fromMinorUnits(13000, 'MXN'),
+      modifierGroups: [
+        new ProductModifierGroup({ modifierGroup: currentGroup, priceDeltaOverrides: new Map() }),
+      ],
+    });
+    const current = currentProduct.createSnapshot(selections);
+
+    expect(historical.productName).toBe('Burger');
+    expect(historical.basePrice.amount).toBe(12000);
+    expect(historical.modifiers[0]).toMatchObject({ name: 'Bacon' });
+    expect(historical.modifiers[0]?.priceDelta.amount).toBe(250);
+    expect(current.productName).toBe('New Burger');
+    expect(current.basePrice.amount).toBe(13000);
+    expect(current.modifiers[0]).toMatchObject({ name: 'Smoked Bacon' });
+    expect(current.modifiers[0]?.priceDelta.amount).toBe(400);
   });
 });

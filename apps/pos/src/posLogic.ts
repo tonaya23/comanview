@@ -1,4 +1,8 @@
-import type { CategoryResponse, ProductResponse } from '@comanview/contracts';
+import type {
+  CategoryResponse,
+  ProductModifierGroupResponse,
+  ProductResponse,
+} from '@comanview/contracts';
 import { EdgeClientError } from '@comanview/client-sdk';
 
 export const ALL_CATEGORIES = 'ALL';
@@ -25,6 +29,64 @@ export function getVisibleCategories(categories: CategoryResponse[]): CategoryRe
     .sort((left, right) => left.name.localeCompare(right.name));
 }
 
+export function getActiveModifierGroups(product: ProductResponse): ProductModifierGroupResponse[] {
+  return product.modifierGroups
+    .filter(({ modifierGroup }) => modifierGroup.active)
+    .sort(
+      (left, right) =>
+        left.displayOrder - right.displayOrder ||
+        left.modifierGroup.name.localeCompare(right.modifierGroup.name),
+    );
+}
+
+export function getEffectiveModifierPrice(
+  group: ProductModifierGroupResponse,
+  modifierOptionId: string,
+): number {
+  const option = group.modifierGroup.options.find(({ id }) => id === modifierOptionId);
+  return (
+    group.priceDeltaOverrides[modifierOptionId]?.amount ?? option?.defaultPriceDelta.amount ?? 0
+  );
+}
+
+export function getConfiguredProductTotal(
+  product: ProductResponse,
+  selectedModifierIds: string[],
+): number {
+  return getActiveModifierGroups(product).reduce(
+    (total, group) =>
+      total +
+      selectedModifierIds.reduce(
+        (groupTotal, optionId) => groupTotal + getEffectiveModifierPrice(group, optionId),
+        0,
+      ),
+    product.basePrice.amount,
+  );
+}
+
+export function getUnsatisfiedModifierGroups(
+  product: ProductResponse,
+  selectedModifierIds: string[],
+): ProductModifierGroupResponse[] {
+  return getActiveModifierGroups(product).filter(({ modifierGroup }) => {
+    const optionIds = new Set(modifierGroup.options.map(({ id }) => id));
+    const selectedCount = selectedModifierIds.filter((id) => optionIds.has(id)).length;
+    return (
+      selectedCount < modifierGroup.minSelections || selectedCount > modifierGroup.maxSelections
+    );
+  });
+}
+
+export function getSnapshotTotal(snapshot: {
+  basePrice: { amount: number };
+  selectedModifiers: Array<{ priceDelta: { amount: number } }>;
+}): number {
+  return snapshot.selectedModifiers.reduce(
+    (total, modifier) => total + modifier.priceDelta.amount,
+    snapshot.basePrice.amount,
+  );
+}
+
 export function formatMoney(amount: number, currency: string): string {
   return new Intl.NumberFormat('es-MX', {
     style: 'currency',
@@ -37,6 +99,11 @@ const errorMessages: Record<string, string> = {
   PRODUCT_UNAVAILABLE:
     'Este producto ya no está disponible. Actualiza el catálogo e intenta de nuevo.',
   PRODUCT_INACTIVE: 'Este producto fue retirado del catálogo.',
+  INVALID_MODIFIER_SELECTION: 'Revisa las opciones obligatorias y los límites de selección.',
+  MODIFIER_UNAVAILABLE:
+    'Una opción seleccionada ya no está disponible. Actualizamos el catálogo; revisa tu selección.',
+  MODIFIER_INACTIVE:
+    'Una opción seleccionada fue retirada del catálogo. Actualizamos el catálogo; revisa tu selección.',
   ORDER_ITEM_SENT: 'El producto ya fue enviado y no puede eliminarse como borrador.',
   NO_DRAFT_ITEMS: 'No hay productos nuevos por enviar.',
   STALE_ORDER_VERSION:

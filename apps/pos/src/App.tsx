@@ -12,8 +12,13 @@ import type {
 import {
   ALL_CATEGORIES,
   formatMoney,
+  getActiveModifierGroups,
+  getConfiguredProductTotal,
+  getEffectiveModifierPrice,
   getErrorMessage,
   getLocalBusinessDate,
+  getSnapshotTotal,
+  getUnsatisfiedModifierGroups,
   getVisibleCategories,
   getVisibleProducts,
   minorUnitsToInput,
@@ -46,6 +51,9 @@ export function App() {
   const [tipMode, setTipMode] = useState<'NONE' | 'PERCENTAGE' | 'FIXED_AMOUNT'>('NONE');
   const [tipBasisPoints, setTipBasisPoints] = useState(1000);
   const [fixedTip, setFixedTip] = useState('0.00');
+  const [configuredProduct, setConfiguredProduct] = useState<ProductResponse | null>(null);
+  const [selectedModifierIds, setSelectedModifierIds] = useState<string[]>([]);
+  const [modifierValidation, setModifierValidation] = useState<string | null>(null);
 
   const updateOrder = useCallback((next: OrderResponse) => {
     setOrder(next);
@@ -158,6 +166,37 @@ export function App() {
           /* original error is clearer */
         }
       }
+      if (
+        problem instanceof EdgeClientError &&
+        ['INVALID_MODIFIER_SELECTION', 'MODIFIER_UNAVAILABLE', 'MODIFIER_INACTIVE'].includes(
+          problem.code,
+        )
+      ) {
+        try {
+          const nextProducts = await edge.getProducts();
+          setProducts(nextProducts);
+          if (configuredProduct) {
+            const nextConfigured =
+              nextProducts.find(({ id }) => id === configuredProduct.id) ?? null;
+            setConfiguredProduct(nextConfigured);
+            if (
+              nextConfigured &&
+              ['MODIFIER_UNAVAILABLE', 'MODIFIER_INACTIVE'].includes(problem.code)
+            ) {
+              const selectableIds = new Set(
+                getActiveModifierGroups(nextConfigured).flatMap(({ modifierGroup }) =>
+                  modifierGroup.options
+                    .filter((option) => option.active && option.available)
+                    .map(({ id }) => id),
+                ),
+              );
+              setSelectedModifierIds((current) => current.filter((id) => selectableIds.has(id)));
+            }
+          }
+        } catch {
+          /* the authoritative mutation error remains the useful feedback */
+        }
+      }
       setError(getErrorMessage(problem));
       return null;
     } finally {
@@ -179,18 +218,81 @@ export function App() {
       'Nueva venta creada en Edge.',
     );
   }
-  async function addProduct(product: ProductResponse) {
+  async function addProduct(product: ProductResponse, modifierIds: string[] = []) {
     if (!order) return;
-    await mutate(
+    const next = await mutate(
       `add-${product.id}`,
       () =>
         edge.addOrderItem(order.id, {
           commandId: crypto.randomUUID(),
           expectedVersion: order.version,
           productId: product.id,
+          selectedModifierIds: modifierIds,
         }),
       `${product.name} agregado.`,
     );
+    if (next) {
+      setConfiguredProduct(null);
+      setSelectedModifierIds([]);
+      setModifierValidation(null);
+    }
+  }
+
+  function chooseProduct(product: ProductResponse) {
+    if (getActiveModifierGroups(product).length === 0) {
+      void addProduct(product);
+      return;
+    }
+    setConfiguredProduct(product);
+    setSelectedModifierIds([]);
+    setModifierValidation(null);
+  }
+
+  function toggleModifier(groupId: string, optionId: string) {
+    if (!configuredProduct) return;
+    const group = getActiveModifierGroups(configuredProduct).find(
+      ({ modifierGroup }) => modifierGroup.id === groupId,
+    );
+    if (!group) return;
+    const option = group.modifierGroup.options.find(({ id }) => id === optionId);
+    if (!option?.active || !option.available) return;
+
+    const groupOptionIds = new Set(group.modifierGroup.options.map(({ id }) => id));
+    const alreadySelected = selectedModifierIds.includes(optionId);
+    const groupSelectionCount = selectedModifierIds.filter((id) => groupOptionIds.has(id)).length;
+    if (group.modifierGroup.maxSelections === 1) {
+      if (alreadySelected) return;
+      setModifierValidation(null);
+      setSelectedModifierIds((current) => [
+        ...current.filter((id) => !groupOptionIds.has(id)),
+        optionId,
+      ]);
+      return;
+    }
+    if (!alreadySelected && groupSelectionCount >= group.modifierGroup.maxSelections) {
+      setModifierValidation(
+        `${group.modifierGroup.name} permite máximo ${group.modifierGroup.maxSelections}.`,
+      );
+      return;
+    }
+
+    setModifierValidation(null);
+    setSelectedModifierIds((current) => {
+      if (alreadySelected) return current.filter((id) => id !== optionId);
+      return [...current, optionId];
+    });
+  }
+
+  function submitConfiguredProduct() {
+    if (!configuredProduct) return;
+    const missing = getUnsatisfiedModifierGroups(configuredProduct, selectedModifierIds);
+    if (missing.length > 0) {
+      setModifierValidation(
+        `Completa la selección requerida en ${missing[0]?.modifierGroup.name}.`,
+      );
+      return;
+    }
+    void addProduct(configuredProduct, selectedModifierIds);
   }
   async function removeItem(itemId: string) {
     if (!order) return;
@@ -444,7 +546,7 @@ export function App() {
                   className={`product-card ${!product.available ? 'product-card--unavailable' : ''}`}
                   key={product.id}
                   disabled={!product.available || !canOperateOrder}
-                  onClick={() => void addProduct(product)}
+                  onClick={() => chooseProduct(product)}
                 >
                   <span className="product-card-accent" />
                   <span className="product-name">{product.name}</span>
@@ -456,7 +558,13 @@ export function App() {
                       {formatMoney(product.basePrice.amount, product.basePrice.currency)}
                     </strong>
                     <span>
-                      {product.available ? (order ? 'Agregar +' : 'Crea una venta') : 'Agotado'}
+                      {product.available
+                        ? order
+                          ? getActiveModifierGroups(product).length > 0
+                            ? 'Configurar'
+                            : 'Agregar +'
+                          : 'Crea una venta'
+                        : 'Agotado'}
                     </span>
                   </span>
                 </button>
@@ -527,12 +635,30 @@ export function App() {
                       <article className="order-item order-item--draft" key={item.id}>
                         <div>
                           <strong>{item.productSnapshot.productName}</strong>
+                          {item.productSnapshot.selectedModifiers.length > 0 && (
+                            <ul className="order-item-modifiers">
+                              {item.productSnapshot.selectedModifiers.map((modifier) => (
+                                <li key={modifier.modifierOptionId}>
+                                  {modifier.name}
+                                  {modifier.priceDelta.amount !== 0 && (
+                                    <span>
+                                      +
+                                      {formatMoney(
+                                        modifier.priceDelta.amount,
+                                        modifier.priceDelta.currency,
+                                      )}
+                                    </span>
+                                  )}
+                                </li>
+                              ))}
+                            </ul>
+                          )}
                           <span>DRAFT · aún no enviado</span>
                         </div>
                         <div className="order-item-actions">
                           <strong>
                             {formatMoney(
-                              item.productSnapshot.basePrice.amount,
+                              getSnapshotTotal(item.productSnapshot),
                               item.productSnapshot.basePrice.currency,
                             )}
                           </strong>
@@ -561,11 +687,29 @@ export function App() {
                       <article className="order-item order-item--sent" key={item.id}>
                         <div>
                           <strong>{item.productSnapshot.productName}</strong>
+                          {item.productSnapshot.selectedModifiers.length > 0 && (
+                            <ul className="order-item-modifiers">
+                              {item.productSnapshot.selectedModifiers.map((modifier) => (
+                                <li key={modifier.modifierOptionId}>
+                                  {modifier.name}
+                                  {modifier.priceDelta.amount !== 0 && (
+                                    <span>
+                                      +
+                                      {formatMoney(
+                                        modifier.priceDelta.amount,
+                                        modifier.priceDelta.currency,
+                                      )}
+                                    </span>
+                                  )}
+                                </li>
+                              ))}
+                            </ul>
+                          )}
                           <span>SENT · historial protegido</span>
                         </div>
                         <strong>
                           {formatMoney(
-                            item.productSnapshot.basePrice.amount,
+                            getSnapshotTotal(item.productSnapshot),
                             item.productSnapshot.basePrice.currency,
                           )}
                         </strong>
@@ -687,6 +831,136 @@ export function App() {
           )}
         </aside>
       </main>
+
+      {configuredProduct && (
+        <div className="modal-backdrop">
+          <section
+            className="payment-modal modifier-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="modifier-title"
+          >
+            <div className="modal-heading">
+              <div>
+                <span className="eyebrow">Configura el producto</span>
+                <h2 id="modifier-title">{configuredProduct.name}</h2>
+              </div>
+              <button
+                type="button"
+                aria-label="Cerrar configuración"
+                onClick={() => setConfiguredProduct(null)}
+              >
+                ×
+              </button>
+            </div>
+            <p className="modifier-base-price">
+              Precio base{' '}
+              <strong>
+                {formatMoney(
+                  configuredProduct.basePrice.amount,
+                  configuredProduct.basePrice.currency,
+                )}
+              </strong>
+            </p>
+            <div className="modifier-groups">
+              {getActiveModifierGroups(configuredProduct).map((group) => {
+                const optionIds = new Set(group.modifierGroup.options.map(({ id }) => id));
+                const selectionCount = selectedModifierIds.filter((id) => optionIds.has(id)).length;
+                return (
+                  <fieldset className="modifier-group" key={group.modifierGroup.id}>
+                    <legend>
+                      <span>{group.modifierGroup.name}</span>
+                      <small>
+                        {group.modifierGroup.minSelections > 0
+                          ? `Requerido · ${group.modifierGroup.minSelections}`
+                          : 'Opcional'}{' '}
+                        · máx. {group.modifierGroup.maxSelections}
+                      </small>
+                    </legend>
+                    <div className="modifier-options">
+                      {[...group.modifierGroup.options]
+                        .sort(
+                          (left, right) =>
+                            left.displayOrder - right.displayOrder ||
+                            left.name.localeCompare(right.name),
+                        )
+                        .map((option) => {
+                          const selected = selectedModifierIds.includes(option.id);
+                          const available = option.active && option.available;
+                          const price = getEffectiveModifierPrice(group, option.id);
+                          return (
+                            <button
+                              type="button"
+                              className={selected ? 'modifier-option selected' : 'modifier-option'}
+                              aria-pressed={selected}
+                              disabled={!available}
+                              key={option.id}
+                              onClick={() => toggleModifier(group.modifierGroup.id, option.id)}
+                            >
+                              <span className="modifier-choice">
+                                <span aria-hidden="true">
+                                  {group.modifierGroup.maxSelections === 1
+                                    ? selected
+                                      ? '◉'
+                                      : '○'
+                                    : selected
+                                      ? '☑'
+                                      : '☐'}
+                                </span>
+                                <strong>{option.name}</strong>
+                              </span>
+                              <span className="modifier-price">
+                                {!available
+                                  ? option.active
+                                    ? 'Agotado'
+                                    : 'No disponible'
+                                  : price === 0
+                                    ? 'Sin costo'
+                                    : `+${formatMoney(price, option.defaultPriceDelta.currency)}`}
+                              </span>
+                            </button>
+                          );
+                        })}
+                    </div>
+                    <small className="modifier-selection-count">
+                      {selectionCount} de {group.modifierGroup.maxSelections} seleccionados
+                    </small>
+                  </fieldset>
+                );
+              })}
+            </div>
+            {modifierValidation && (
+              <p className="modifier-validation" role="alert">
+                {modifierValidation}
+              </p>
+            )}
+            <footer className="modifier-footer">
+              <div>
+                <span>Total del producto</span>
+                <strong>
+                  {formatMoney(
+                    getConfiguredProductTotal(configuredProduct, selectedModifierIds),
+                    configuredProduct.basePrice.currency,
+                  )}
+                </strong>
+              </div>
+              <button
+                type="button"
+                className="confirm-payment"
+                disabled={
+                  isBusy ||
+                  getUnsatisfiedModifierGroups(configuredProduct, selectedModifierIds).length > 0
+                }
+                onClick={submitConfiguredProduct}
+              >
+                {pendingAction === `add-${configuredProduct.id}`
+                  ? 'Confirmando con Edge…'
+                  : 'Agregar a la venta'}
+              </button>
+            </footer>
+          </section>
+        </div>
+      )}
 
       {showOpenCash && (
         <div className="modal-backdrop">

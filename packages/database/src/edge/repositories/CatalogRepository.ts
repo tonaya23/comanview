@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { asc, eq } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import * as schema from '../schema.js';
 import {
@@ -159,15 +159,14 @@ export class CatalogRepository {
         .where(eq(schema.modifierPriceOverrides.productId, product.id.toString()))
         .run();
 
-      for (let i = 0; i < product.modifierGroups.length; i++) {
-        const pmg = product.modifierGroups[i]!;
+      for (const pmg of product.modifierGroups) {
         const group = pmg.modifierGroup;
 
         db.insert(schema.productModifierGroups)
           .values({
             productId: product.id.toString(),
             modifierGroupId: group.id.toString(),
-            displayOrder: i,
+            displayOrder: pmg.displayOrder,
           })
           .run();
 
@@ -200,11 +199,15 @@ export class CatalogRepository {
   }
 
   getAllCategories(): { id: string; name: string; active: boolean }[] {
-    return this.db.select().from(schema.categories).all().map(c => ({
-      id: c.id,
-      name: c.name,
-      active: Boolean(c.active),
-    }));
+    return this.db
+      .select()
+      .from(schema.categories)
+      .all()
+      .map((c) => ({
+        id: c.id,
+        name: c.name,
+        active: Boolean(c.active),
+      }));
   }
 
   /**
@@ -244,6 +247,7 @@ export class CatalogRepository {
       .select()
       .from(schema.productModifierGroups)
       .where(eq(schema.productModifierGroups.productId, id.toString()))
+      .orderBy(asc(schema.productModifierGroups.displayOrder))
       .all();
 
     // Load ALL price overrides for this product once
@@ -255,7 +259,10 @@ export class CatalogRepository {
 
     const overrideMap = new Map<string, Money>();
     for (const ov of overrideRows) {
-      overrideMap.set(ov.modifierOptionId, Money.fromMinorUnits(ov.priceDeltaAmount, ov.priceDeltaCurrency));
+      overrideMap.set(
+        ov.modifierOptionId,
+        Money.fromMinorUnits(ov.priceDeltaAmount, ov.priceDeltaCurrency),
+      );
     }
 
     const modifierGroups: ProductModifierGroup[] = [];
@@ -272,16 +279,20 @@ export class CatalogRepository {
         .select()
         .from(schema.modifierOptions)
         .where(eq(schema.modifierOptions.groupId, pmgRow.modifierGroupId))
+        .orderBy(asc(schema.modifierOptions.displayOrder))
         .all();
 
-      const options: ModifierOption[] = optionRows.map((o) => new ModifierOption({
-        id: EntityId.fromString(o.id),
-        name: o.name,
-        defaultPriceDelta: Money.fromMinorUnits(o.priceDeltaAmount, o.priceDeltaCurrency),
-        active: Boolean(o.active),
-        available: Boolean(o.available),
-        displayOrder: o.displayOrder,
-      }));
+      const options: ModifierOption[] = optionRows.map(
+        (o) =>
+          new ModifierOption({
+            id: EntityId.fromString(o.id),
+            name: o.name,
+            defaultPriceDelta: Money.fromMinorUnits(o.priceDeltaAmount, o.priceDeltaCurrency),
+            active: Boolean(o.active),
+            available: Boolean(o.available),
+            displayOrder: o.displayOrder,
+          }),
+      );
 
       const group = new ModifierGroup({
         id: EntityId.fromString(groupRow.id),
@@ -292,10 +303,13 @@ export class CatalogRepository {
         options,
       });
 
-      modifierGroups.push(new ProductModifierGroup({
-        modifierGroup: group,
-        priceDeltaOverrides: overrideMap,
-      }));
+      modifierGroups.push(
+        new ProductModifierGroup({
+          modifierGroup: group,
+          displayOrder: pmgRow.displayOrder,
+          priceDeltaOverrides: overrideMap,
+        }),
+      );
     }
 
     const props: ProductProps = {

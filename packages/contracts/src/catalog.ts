@@ -33,6 +33,7 @@ export const ModifierOptionSchema = z.object({
   available: z.boolean(),
   displayOrder: z.number().int(),
 });
+export type ModifierOptionResponse = z.infer<typeof ModifierOptionSchema>;
 
 // Modifier Group
 export const ModifierGroupSchema = z.object({
@@ -43,12 +44,15 @@ export const ModifierGroupSchema = z.object({
   active: z.boolean(),
   options: z.array(ModifierOptionSchema),
 });
+export type ModifierGroupResponse = z.infer<typeof ModifierGroupSchema>;
 
 // Product Modifier Group
 export const ProductModifierGroupSchema = z.object({
   modifierGroup: ModifierGroupSchema,
+  displayOrder: z.number().int(),
   priceDeltaOverrides: z.record(z.string().uuid(), MoneySchema),
 });
+export type ProductModifierGroupResponse = z.infer<typeof ProductModifierGroupSchema>;
 
 // Product
 export const ProductSchema = z.object({

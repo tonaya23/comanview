@@ -47,9 +47,7 @@ export class OrderRepository {
     return !!row;
   }
 
-  getProcessedCommandEvent(
-    commandId: string,
-  ): { aggregateId: string; eventType: string } | null {
+  getProcessedCommandEvent(commandId: string): { aggregateId: string; eventType: string } | null {
     const row = this.db
       .select({ aggregateId: schema.eventLog.aggregateId, eventType: schema.eventLog.eventType })
       .from(schema.eventLog)
@@ -185,19 +183,26 @@ export class OrderRepository {
           })
           .run();
 
-        // 4a. Modifier snapshots — insert only once per item (historical)
-        for (const mod of snap.modifiers) {
-          db.insert(schema.orderItemModifiers)
-            .values({
-              id: EntityId.generate().toString(),
-              orderItemId: item.id.toString(),
-              modifierOptionId: mod.id.toString(),
-              name: mod.name,
-              priceDeltaAmount: mod.priceDelta.amount,
-              priceDeltaCurrency: mod.priceDelta.currency,
-            })
-            .onConflictDoNothing()
-            .run();
+        // 4a. Modifier snapshots are immutable and are persisted only with the new item.
+        // Re-saving an Order (DRAFT → SENT, payments, close) must not duplicate deltas.
+        const persistedModifier = db
+          .select({ id: schema.orderItemModifiers.id })
+          .from(schema.orderItemModifiers)
+          .where(eq(schema.orderItemModifiers.orderItemId, item.id.toString()))
+          .get();
+        if (!persistedModifier) {
+          for (const mod of snap.modifiers) {
+            db.insert(schema.orderItemModifiers)
+              .values({
+                id: EntityId.generate().toString(),
+                orderItemId: item.id.toString(),
+                modifierOptionId: mod.id.toString(),
+                name: mod.name,
+                priceDeltaAmount: mod.priceDelta.amount,
+                priceDeltaCurrency: mod.priceDelta.currency,
+              })
+              .run();
+          }
         }
       }
 

@@ -272,6 +272,8 @@ describe('Edge Persistence Integration Tests', () => {
     const snap = product.createSnapshot(selectedOptions);
     order.addItem(snap);
     orderRepo.saveOrder(order, false);
+    order.sendDraftItems();
+    orderRepo.saveOrder(order, false);
 
     const found = orderRepo.getOrderById(order.id);
     const item = found!.items[0]!;
@@ -279,6 +281,7 @@ describe('Edge Persistence Integration Tests', () => {
     expect(item.snapshot.modifiers[0]!.name).toBe('Extra Cheese');
     expect(item.snapshot.modifiers[0]!.priceDelta.amount).toBe(150);
     expect(item.snapshot.modifiers[0]!.priceDelta.currency).toBe('MXN');
+    expect(found!.getSubtotal().amount).toBe(20150);
   });
 
   // ── 7. Multiple Rounds preserved ─────────────────────────────────────────

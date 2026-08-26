@@ -120,6 +120,7 @@ describe('Edge API Integration Tests', () => {
 
   let orderId: string;
   let orderVersion: number;
+  let configuredOrderId: string;
 
   it('5. POST /orders', async () => {
     const response = await app.inject({
@@ -598,6 +599,195 @@ describe('Edge API Integration Tests', () => {
     expect(body.error).toBe('ORDER_ALREADY_CLOSED');
   });
 
+  it('24. configura modifiers contra catálogo actual y conserva el snapshot histórico', async () => {
+    const Database = require('better-sqlite3');
+    const sqlite = new Database(tmpPath);
+    const configuredProductId = '01991a00-0000-7000-8000-000000000901';
+    const configuredTaxId = '01991a00-0000-7000-8000-000000000902';
+    const requiredGroupId = '01991a00-0000-7000-8000-000000000903';
+    const extrasGroupId = '01991a00-0000-7000-8000-000000000904';
+    const mediumId = '01991a00-0000-7000-8000-000000000911';
+    const cheeseId = '01991a00-0000-7000-8000-000000000912';
+    sqlite.exec(`
+      INSERT INTO tax_profiles
+        (id, name, rate_basis_points, calculation_mode, active, is_default)
+      VALUES ('${configuredTaxId}', 'IVA configured', 1600, 'TAX_INCLUDED', 1, 0);
+      INSERT INTO products
+        (id, name, description, product_type, tax_profile_id, base_price_amount,
+         base_price_currency, display_order, active, available)
+      VALUES ('${configuredProductId}', 'API Burger', '', 'STANDARD', '${configuredTaxId}',
+              12900, 'MXN', 1, 1, 1);
+      INSERT INTO modifier_groups (id, name, min_selections, max_selections, active)
+      VALUES ('${requiredGroupId}', 'Término', 1, 1, 1),
+             ('${extrasGroupId}', 'Extras', 0, 1, 1);
+      INSERT INTO modifier_options
+        (id, group_id, name, price_delta_amount, price_delta_currency, active, available, display_order)
+      VALUES ('${mediumId}', '${requiredGroupId}', 'Medio', 0, 'MXN', 1, 1, 1),
+             ('${cheeseId}', '${extrasGroupId}', 'Queso', 1500, 'MXN', 1, 1, 1);
+      INSERT INTO product_modifier_groups (product_id, modifier_group_id, display_order)
+      VALUES ('${configuredProductId}', '${extrasGroupId}', 20),
+             ('${configuredProductId}', '${requiredGroupId}', 10);
+      INSERT INTO modifier_price_overrides
+        (product_id, modifier_option_id, price_delta_amount, price_delta_currency)
+      VALUES ('${configuredProductId}', '${cheeseId}', 2000, 'MXN');
+    `);
+    sqlite.close();
+
+    const catalog = await app.inject({ method: 'GET', url: '/catalog/products' });
+    const configured = catalog.json().find((product: any) => product.id === configuredProductId);
+    expect(configured.modifierGroups.map((group: any) => group.modifierGroup.name)).toEqual([
+      'Término',
+      'Extras',
+    ]);
+    expect(configured.modifierGroups[1].priceDeltaOverrides[cheeseId]).toEqual({
+      amount: 2000,
+      currency: 'MXN',
+    });
+
+    const created = await app.inject({
+      method: 'POST',
+      url: '/orders',
+      payload: { orderType: 'COUNTER', channel: 'POS', currency: 'MXN' },
+    });
+    configuredOrderId = created.json().id;
+    const addPayload = {
+      commandId: 'configured-add-idempotent',
+      expectedVersion: created.json().version,
+      productId: configuredProductId,
+      selectedModifierIds: [mediumId, cheeseId],
+    };
+    const added = await app.inject({
+      method: 'POST',
+      url: `/orders/${created.json().id}/items`,
+      payload: addPayload,
+    });
+    expect(added.statusCode).toBe(200);
+    expect(added.json().subtotal).toEqual({ amount: 14900, currency: 'MXN' });
+    expect(added.json().items[0].productSnapshot.selectedModifiers).toEqual([
+      { modifierOptionId: mediumId, name: 'Medio', priceDelta: { amount: 0, currency: 'MXN' } },
+      {
+        modifierOptionId: cheeseId,
+        name: 'Queso',
+        priceDelta: { amount: 2000, currency: 'MXN' },
+      },
+    ]);
+
+    const retry = await app.inject({
+      method: 'POST',
+      url: `/orders/${created.json().id}/items`,
+      payload: { ...addPayload, expectedVersion: added.json().version },
+    });
+    expect(retry.statusCode).toBe(200);
+    expect(retry.json().items).toHaveLength(1);
+    expect(retry.json().version).toBe(added.json().version);
+
+    const changedSqlite = new Database(tmpPath);
+    changedSqlite
+      .prepare(
+        'UPDATE modifier_options SET name = ?, price_delta_amount = ?, available = 0 WHERE id = ?',
+      )
+      .run('Queso nuevo', 3000, cheeseId);
+    changedSqlite
+      .prepare('UPDATE products SET name = ?, base_price_amount = ? WHERE id = ?')
+      .run('API Burger nueva', 13900, configuredProductId);
+    changedSqlite
+      .prepare('UPDATE tax_profiles SET rate_basis_points = ? WHERE id = ?')
+      .run(800, configuredTaxId);
+    changedSqlite.close();
+
+    const persisted = await app.inject({
+      method: 'GET',
+      url: `/orders/${created.json().id}`,
+    });
+    expect(persisted.json().items[0].productSnapshot.productName).toBe('API Burger');
+    expect(persisted.json().items[0].productSnapshot.basePrice.amount).toBe(12900);
+    expect(persisted.json().items[0].productSnapshot.taxRateBasisPoints).toBe(1600);
+    expect(persisted.json().items[0].productSnapshot.selectedModifiers[1]).toMatchObject({
+      name: 'Queso',
+      priceDelta: { amount: 2000, currency: 'MXN' },
+    });
+
+    const staleOrder = await app.inject({
+      method: 'POST',
+      url: '/orders',
+      payload: { orderType: 'COUNTER', channel: 'POS', currency: 'MXN' },
+    });
+    const staleAdd = await app.inject({
+      method: 'POST',
+      url: `/orders/${staleOrder.json().id}/items`,
+      payload: {
+        commandId: 'configured-stale-option',
+        expectedVersion: staleOrder.json().version,
+        productId: configuredProductId,
+        selectedModifierIds: [mediumId, cheeseId],
+      },
+    });
+    expect(staleAdd.statusCode).toBe(409);
+    expect(staleAdd.json().error).toBe('MODIFIER_UNAVAILABLE');
+
+    const currentOrder = await app.inject({
+      method: 'POST',
+      url: '/orders',
+      payload: { orderType: 'COUNTER', channel: 'POS', currency: 'MXN' },
+    });
+    const currentAdd = await app.inject({
+      method: 'POST',
+      url: `/orders/${currentOrder.json().id}/items`,
+      payload: {
+        commandId: 'configured-current-catalog',
+        expectedVersion: currentOrder.json().version,
+        productId: configuredProductId,
+        selectedModifierIds: [mediumId],
+      },
+    });
+    expect(currentAdd.statusCode).toBe(200);
+    expect(currentAdd.json().items[0].productSnapshot).toMatchObject({
+      productName: 'API Burger nueva',
+      basePrice: { amount: 13900, currency: 'MXN' },
+      taxRateBasisPoints: 800,
+      selectedModifiers: [{ name: 'Medio', priceDelta: { amount: 0, currency: 'MXN' } }],
+    });
+    const removedCurrent = await app.inject({
+      method: 'DELETE',
+      url: `/orders/${currentOrder.json().id}/items/${currentAdd.json().items[0].id}`,
+      payload: { expectedVersion: currentAdd.json().version },
+    });
+    expect(removedCurrent.statusCode).toBe(200);
+    expect(removedCurrent.json().items).toHaveLength(0);
+    expect(removedCurrent.json().subtotal.amount).toBe(0);
+
+    const sent = await app.inject({
+      method: 'POST',
+      url: `/orders/${created.json().id}/rounds`,
+      payload: { expectedVersion: persisted.json().version },
+    });
+    expect(sent.statusCode).toBe(200);
+    expect(sent.json().items[0].status).toBe('SENT');
+    const paid = await app.inject({
+      method: 'POST',
+      url: `/orders/${created.json().id}/payments`,
+      payload: {
+        commandId: 'configured-payment',
+        expectedVersion: sent.json().version,
+        method: 'CARD',
+        amountApplied: 14900,
+        tip: { type: 'NONE' },
+      },
+    });
+    expect(paid.statusCode).toBe(200);
+    expect(paid.json().balanceDue.amount).toBe(0);
+    const closed = await app.inject({
+      method: 'POST',
+      url: `/orders/${created.json().id}/close`,
+      payload: {
+        commandId: 'configured-close',
+        expectedVersion: paid.json().version,
+      },
+    });
+    expect(closed.statusCode).toBe(200);
+    expect(closed.json().status).toBe('CLOSED');
+  });
+
   it('13 & 16. Order persiste entre requests y reinicializar app', async () => {
     // Close the app entirely
     await app.close();
@@ -615,6 +805,21 @@ describe('Edge API Integration Tests', () => {
     const body = response.json();
     expect(body.status).toBe('CLOSED');
     expect(body.version).toBe(orderVersion);
+
+    const configuredResponse = await newApp.inject({
+      method: 'GET',
+      url: `/orders/${configuredOrderId}`,
+    });
+    expect(configuredResponse.statusCode).toBe(200);
+    expect(configuredResponse.json().status).toBe('CLOSED');
+    expect(configuredResponse.json().items[0].productSnapshot).toMatchObject({
+      productName: 'API Burger',
+      basePrice: { amount: 12900, currency: 'MXN' },
+      selectedModifiers: [
+        { name: 'Medio', priceDelta: { amount: 0, currency: 'MXN' } },
+        { name: 'Queso', priceDelta: { amount: 2000, currency: 'MXN' } },
+      ],
+    });
 
     await newApp.close();
   });

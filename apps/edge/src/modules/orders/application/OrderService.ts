@@ -1,5 +1,11 @@
 import { OrderRepository, CatalogRepository } from '@comanview/database';
-import { Order, EntityId, OrderType, OrderChannel } from '@comanview/domain';
+import {
+  InvalidModifierSelectionError,
+  Order,
+  EntityId,
+  OrderType,
+  OrderChannel,
+} from '@comanview/domain';
 import { ObjectNotFoundError, ConcurrencyError } from '../../../app/errors.js';
 import type { EdgeOperationalContext } from '../../../app/operationalContext.js';
 import { AppError } from '../../../app/errorHandler.js';
@@ -65,6 +71,19 @@ export class OrderService {
     if (!product) throw new ObjectNotFoundError(`Product ${request.productId} not found`);
 
     const modifierSelections = new Map<string, EntityId[]>();
+    for (const selectedId of request.selectedModifierIds ?? []) {
+      const optionId = EntityId.fromString(selectedId);
+      const owningGroup = product.modifierGroups.find((pmg) =>
+        pmg.modifierGroup.options.some((option) => option.id.equals(optionId)),
+      );
+      if (!owningGroup) {
+        throw new InvalidModifierSelectionError(
+          `ModifierOption ${selectedId} is not assigned to Product ${product.id.toString()}.`,
+        );
+      }
+      const groupId = owningGroup.modifierGroup.id.toString();
+      modifierSelections.set(groupId, [...(modifierSelections.get(groupId) ?? []), optionId]);
+    }
     const snapshot = product.createSnapshot(modifierSelections);
 
     order.addItem(snapshot, request.commandId);

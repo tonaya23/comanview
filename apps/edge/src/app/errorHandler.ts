@@ -116,13 +116,15 @@ export function errorHandler(error: Error, request: FastifyRequest, reply: Fasti
     } else if (error instanceof TaxProfileInactiveError) {
       statusCode = 409;
       code = 'TAX_PROFILE_INACTIVE';
-    } else if (
-      error instanceof InvalidModifierSelectionError ||
-      error instanceof ModifierUnavailableError ||
-      error instanceof ModifierInactiveError
-    ) {
+    } else if (error instanceof InvalidModifierSelectionError) {
       statusCode = 409;
       code = 'INVALID_MODIFIER_SELECTION';
+    } else if (error instanceof ModifierUnavailableError) {
+      statusCode = 409;
+      code = 'MODIFIER_UNAVAILABLE';
+    } else if (error instanceof ModifierInactiveError) {
+      statusCode = 409;
+      code = 'MODIFIER_INACTIVE';
     } else if (error instanceof TableAssignmentError) {
       statusCode = 409;
       code = 'DOMAIN_CONFLICT';
