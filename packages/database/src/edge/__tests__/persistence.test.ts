@@ -1,10 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { readFileSync } from 'node:fs';
+import { readFileSync, unlinkSync } from 'node:fs';
 import { join, dirname } from 'node:path';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import * as schema from '../schema.js';
+import { createEdgeDatabase } from '../db.js';
 import { CatalogRepository } from '../repositories/CatalogRepository.js';
 import { OrderRepository } from '../repositories/OrderRepository.js';
 import {
@@ -83,7 +85,6 @@ function makeOrder(currency = 'MXN') {
 // ─── Suite ───────────────────────────────────────────────────────────────────
 
 describe('Edge Persistence Integration Tests', () => {
-
   // ── 1. Migration + Pragmas ─────────────────────────────────────────────────
 
   it('1. migration applies cleanly on a fresh DB', () => {
@@ -112,9 +113,21 @@ describe('Edge Persistence Integration Tests', () => {
       expect(fkMode).toBe(1);
     } finally {
       sqlite.close();
-      try { require('fs').unlinkSync(tmpPath); } catch { /* ignore */ }
-      try { require('fs').unlinkSync(tmpPath + '-shm'); } catch { /* ignore */ }
-      try { require('fs').unlinkSync(tmpPath + '-wal'); } catch { /* ignore */ }
+      try {
+        require('fs').unlinkSync(tmpPath);
+      } catch {
+        /* ignore */
+      }
+      try {
+        require('fs').unlinkSync(tmpPath + '-shm');
+      } catch {
+        /* ignore */
+      }
+      try {
+        require('fs').unlinkSync(tmpPath + '-wal');
+      } catch {
+        /* ignore */
+      }
     }
   });
 
@@ -211,7 +224,9 @@ describe('Edge Persistence Integration Tests', () => {
       displayOrder: 0,
       active: true,
       available: true,
-      modifierGroups: [new ProductModifierGroup({ modifierGroup: group, priceDeltaOverrides: new Map() })],
+      modifierGroups: [
+        new ProductModifierGroup({ modifierGroup: group, priceDeltaOverrides: new Map() }),
+      ],
     });
 
     catalogRepo.saveProduct(product);
@@ -422,21 +437,23 @@ describe('Edge Persistence Integration Tests', () => {
     // Try to insert an order_item referencing a non-existent order — FK violation
     expect(() => {
       db.transaction((tx) => {
-        tx.insert(schema.orderItems).values({
-          id: EntityId.generate().toString(),
-          orderId: 'nonexistent-order-id',
-          productId: EntityId.generate().toString(),
-          productName: 'Test',
-          basePriceAmount: 100,
-          basePriceCurrency: 'MXN',
-          taxRateBasisPoints: 1600,
-          taxCalculationMode: 'TAX_INCLUDED',
-          stationId: null,
-          quantity: 1,
-          sendStatus: 'DRAFT',
-          prepStatus: 'PENDING',
-          roundId: null,
-        }).run();
+        tx.insert(schema.orderItems)
+          .values({
+            id: EntityId.generate().toString(),
+            orderId: 'nonexistent-order-id',
+            productId: EntityId.generate().toString(),
+            productName: 'Test',
+            basePriceAmount: 100,
+            basePriceCurrency: 'MXN',
+            taxRateBasisPoints: 1600,
+            taxCalculationMode: 'TAX_INCLUDED',
+            stationId: null,
+            quantity: 1,
+            sendStatus: 'DRAFT',
+            prepStatus: 'PENDING',
+            roundId: null,
+          })
+          .run();
       });
     }).toThrow();
   });
@@ -469,28 +486,30 @@ describe('Edge Persistence Integration Tests', () => {
     const db = drizzle(sqlite, { schema });
 
     expect(() =>
-      db.insert(schema.rounds).values({
-        id: EntityId.generate().toString(),
-        orderId: 'bad-order-id',
-        roundNumber: 1,
-        sentAt: new Date(),
-      }).run()
+      db
+        .insert(schema.rounds)
+        .values({
+          id: EntityId.generate().toString(),
+          orderId: 'bad-order-id',
+          roundNumber: 1,
+          sentAt: new Date(),
+        })
+        .run(),
     ).toThrow();
   });
 
   // ── 18. Re-opening the database preserves state (File-based) ──────────────
 
   it('18. state survives database close and reopen', () => {
-    const os = require('os');
-    const path = require('path');
-    const { createEdgeDatabase } = require('../db.js');
+    const tmpPath = join(tmpdir(), `comanview-test-reopen-${Date.now()}.db`);
 
-    const tmpPath = path.join(os.tmpdir(), `comanview-test-reopen-${Date.now()}.db`);
-    
     // 1. Create DB and migration
+    const migrationDatabase = new Database(tmpPath);
+    migrationDatabase.exec(readFileSync(MIGRATION_PATH, 'utf-8'));
+    migrationDatabase.close();
+
     let dbHandle = createEdgeDatabase(tmpPath);
     let db = dbHandle.db;
-    dbHandle.sqlite.exec(readFileSync(MIGRATION_PATH, 'utf-8'));
 
     const catalogRepo = new CatalogRepository(db);
     const orderRepo = new OrderRepository(db);
@@ -498,7 +517,7 @@ describe('Edge Persistence Integration Tests', () => {
     const product = makeProduct();
     catalogRepo.saveProduct(product);
 
-    const order = makeOrder('USD');
+    const order = makeOrder('MXN');
     order.addItem(product.createSnapshot(new Map()));
     order.sendDraftItems();
     orderRepo.saveOrder(order, true);
@@ -514,16 +533,28 @@ describe('Edge Persistence Integration Tests', () => {
     const recovered = orderRepo2.getOrderById(order.id);
     expect(recovered).not.toBeNull();
     expect(recovered!.status).toBe('OPEN');
-    expect(recovered!.currency).toBe('USD');
+    expect(recovered!.currency).toBe('MXN');
     expect(recovered!.version).toBe(3); // created + item added + round sent
     expect(recovered!.rounds).toHaveLength(1);
     expect(recovered!.items).toHaveLength(1);
 
     // Clean up
     dbHandle.close();
-    try { require('fs').unlinkSync(tmpPath); } catch { /* ignore */ }
-    try { require('fs').unlinkSync(tmpPath + '-shm'); } catch { /* ignore */ }
-    try { require('fs').unlinkSync(tmpPath + '-wal'); } catch { /* ignore */ }
+    try {
+      unlinkSync(tmpPath);
+    } catch {
+      /* ignore */
+    }
+    try {
+      unlinkSync(tmpPath + '-shm');
+    } catch {
+      /* ignore */
+    }
+    try {
+      unlinkSync(tmpPath + '-wal');
+    } catch {
+      /* ignore */
+    }
   });
 
   // ── 19. Event Log outbox deduplication ────────────────────────────────────
@@ -534,7 +565,7 @@ describe('Edge Persistence Integration Tests', () => {
 
     const order = makeOrder();
     repo.saveOrder(order, true);
-    
+
     const { sql } = require('drizzle-orm');
     const countQuery = db.select({ count: sql`count(*)` }).from(schema.eventLog);
     const count1 = (countQuery.get() as any).count;
@@ -547,4 +578,3 @@ describe('Edge Persistence Integration Tests', () => {
     expect(count2).toBe(1); // Should still be 1 because eventId is the same and onConflictDoNothing applies
   });
 });
-

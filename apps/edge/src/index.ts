@@ -12,9 +12,11 @@
  * - Browser clients express intent; Edge validates and commits authoritative state.
  */
 
-import fastify from 'fastify';
+import fastify, { LogController } from 'fastify';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { serializerCompiler, validatorCompiler, ZodTypeProvider } from 'fastify-type-provider-zod';
-import { initDatabase, closeDatabase, getDatabase } from './infrastructure/database.js';
+import { initDatabase, closeDatabase } from './infrastructure/database.js';
 import { errorHandler } from './app/errorHandler.js';
 import { CatalogRepository, OrderRepository } from '@comanview/database';
 import { CatalogService } from './modules/catalog/application/CatalogService.js';
@@ -26,6 +28,9 @@ import { HealthResponseSchema } from '@comanview/contracts';
 export async function buildApp(dbPath: string = ':memory:') {
   const app = fastify({
     logger: true,
+    logController: new LogController({
+      disableRequestLogging: (request) => request.url === '/health',
+    }),
   }).withTypeProvider<ZodTypeProvider>();
 
   app.setValidatorCompiler(validatorCompiler);
@@ -61,18 +66,14 @@ export async function buildApp(dbPath: string = ':memory:') {
       // Basic check: is the DB queryable?
       let dbStatus: 'OK' | 'ERROR' = 'OK';
       try {
-        const sqlite = getDatabase();
-        // Since we don't have access to the raw sqlite connection directly from drizzle easily in a standard way
-        // We just do a simple query
-        const sql = require('drizzle-orm').sql;
-        sqlite.run(sql`SELECT 1`);
+        catalogRepo.getAllCategories();
       } catch (err) {
         app.log.error({ err }, 'Database health check failed');
         dbStatus = 'ERROR';
       }
 
       const status = dbStatus === 'OK' ? 'UP' : 'DOWN';
-      
+
       reply.send({
         status,
         edgeService: {
@@ -83,7 +84,7 @@ export async function buildApp(dbPath: string = ':memory:') {
           status: dbStatus,
         },
       });
-    }
+    },
   );
 
   app.addHook('onClose', async () => {
@@ -94,7 +95,7 @@ export async function buildApp(dbPath: string = ':memory:') {
 }
 
 // If executed directly, start the server
-if (process.argv[1] && process.argv[1].includes('index.ts')) {
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
   const start = async () => {
     // Development default path for testing Edge
     const app = await buildApp('./edge-dev.db');

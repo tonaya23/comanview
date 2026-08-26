@@ -26,11 +26,13 @@
     "lint": "eslint src",
     "test": "vitest run --passWithNoTests",
     "test:integration": "vitest run --config vitest.integration.config.ts",
+    "dev:prepare": "tsx src/edge/prepareDevelopmentDatabase.ts",
     "db:generate": "drizzle-kit generate"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",
     "drizzle-kit": "^0.31.10",
+    "tsx": "^4.23.12",
     "typescript": "^5.8.3",
     "vitest": "^3.2.4"
   },

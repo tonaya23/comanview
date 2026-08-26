@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import * as schema from '../schema.js';
 import {
@@ -13,10 +13,7 @@ import {
   OrderItemProps,
   RoundProps,
 } from '@comanview/domain';
-import {
-  ProductSnapshot,
-  ModifierSnapshot,
-} from '@comanview/domain';
+import { ProductSnapshot, ModifierSnapshot } from '@comanview/domain';
 import { Money } from '@comanview/money';
 
 type DB = BetterSQLite3Database<typeof schema>;
@@ -112,6 +109,30 @@ export class OrderRepository {
       }
 
       // 4. Order items — upsert (status can change: DRAFT → SENT)
+      // Remove only DRAFT rows that the aggregate explicitly removed. SENT rows are
+      // historical and must never be deleted, even if persistence code receives an
+      // inconsistent aggregate.
+      const currentItemIds = new Set(order.items.map((item) => item.id.toString()));
+      const persistedDraftItems = db
+        .select({ id: schema.orderItems.id })
+        .from(schema.orderItems)
+        .where(
+          and(
+            eq(schema.orderItems.orderId, order.id.toString()),
+            eq(schema.orderItems.sendStatus, 'DRAFT'),
+          ),
+        )
+        .all();
+
+      for (const persistedItem of persistedDraftItems) {
+        if (currentItemIds.has(persistedItem.id)) continue;
+
+        db.delete(schema.orderItemModifiers)
+          .where(eq(schema.orderItemModifiers.orderItemId, persistedItem.id))
+          .run();
+        db.delete(schema.orderItems).where(eq(schema.orderItems.id, persistedItem.id)).run();
+      }
+
       for (const item of order.items) {
         const snap = item.snapshot;
         db.insert(schema.orderItems)
@@ -166,9 +187,7 @@ export class OrderRepository {
               eventType: event.eventType,
               aggregateId: order.id.toString(),
               version: order.version,
-              payload: JSON.stringify(event, (_k, v) =>
-                v instanceof EntityId ? v.toString() : v
-              ),
+              payload: JSON.stringify(event, (_k, v) => (v instanceof EntityId ? v.toString() : v)),
               occurredAt: event.occurredAt,
               commandId: (event as any).commandId ?? null,
               syncStatus: 'PENDING',
@@ -229,11 +248,14 @@ export class OrderRepository {
         .where(eq(schema.orderItemModifiers.orderItemId, itemRow.id))
         .all();
 
-      const modifiers: ModifierSnapshot[] = modRows.map((m) => new ModifierSnapshot({
-        id: EntityId.fromString(m.modifierOptionId),
-        name: m.name,
-        priceDelta: Money.fromMinorUnits(m.priceDeltaAmount, m.priceDeltaCurrency),
-      }));
+      const modifiers: ModifierSnapshot[] = modRows.map(
+        (m) =>
+          new ModifierSnapshot({
+            id: EntityId.fromString(m.modifierOptionId),
+            name: m.name,
+            priceDelta: Money.fromMinorUnits(m.priceDeltaAmount, m.priceDeltaCurrency),
+          }),
+      );
 
       const snapshot = new ProductSnapshot({
         productId: EntityId.fromString(itemRow.productId),

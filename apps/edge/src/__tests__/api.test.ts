@@ -11,11 +11,14 @@ describe('Edge API Integration Tests', () => {
 
   beforeAll(async () => {
     tmpPath = path.join(os.tmpdir(), `comanview-api-test-${Date.now()}.db`);
-    
+
     // Create DB with migration
     const Database = require('better-sqlite3');
     const sqlite = new Database(tmpPath);
-    const sql = readFileSync(path.resolve(__dirname, '../../../../migrations/edge/0000_initial.sql'), 'utf-8');
+    const sql = readFileSync(
+      path.resolve(__dirname, '../../../../migrations/edge/0000_initial.sql'),
+      'utf-8',
+    );
     sqlite.exec(sql);
     sqlite.close();
 
@@ -25,9 +28,21 @@ describe('Edge API Integration Tests', () => {
 
   afterAll(async () => {
     await app.close();
-    try { require('fs').unlinkSync(tmpPath); } catch { /* ignore */ }
-    try { require('fs').unlinkSync(tmpPath + '-shm'); } catch { /* ignore */ }
-    try { require('fs').unlinkSync(tmpPath + '-wal'); } catch { /* ignore */ }
+    try {
+      require('fs').unlinkSync(tmpPath);
+    } catch {
+      /* ignore */
+    }
+    try {
+      require('fs').unlinkSync(tmpPath + '-shm');
+    } catch {
+      /* ignore */
+    }
+    try {
+      require('fs').unlinkSync(tmpPath + '-wal');
+    } catch {
+      /* ignore */
+    }
   });
 
   it('1. GET /health', async () => {
@@ -35,7 +50,7 @@ describe('Edge API Integration Tests', () => {
       method: 'GET',
       url: '/health',
     });
-    
+
     expect(response.statusCode).toBe(200);
     const body = response.json();
     expect(body.status).toBe('UP');
@@ -56,11 +71,11 @@ describe('Edge API Integration Tests', () => {
         taxProfileId: 'f47ac10b-58cc-4372-a567-0e02b2c3d479',
         basePrice: {
           amount: 1500,
-          currency: 'USD'
-        }
-      }
+          currency: 'USD',
+        },
+      },
     });
-    
+
     const body = response.json();
     if (response.statusCode !== 201) console.error('TEST 2 FAILED', response.statusCode, body);
     expect(response.statusCode).toBe(201);
@@ -73,7 +88,7 @@ describe('Edge API Integration Tests', () => {
       method: 'GET',
       url: `/catalog/products/${productId}`,
     });
-    
+
     expect(response.statusCode).toBe(200);
     const body = response.json();
     expect(body.id).toBe(productId);
@@ -85,10 +100,10 @@ describe('Edge API Integration Tests', () => {
       method: 'PATCH',
       url: `/catalog/products/${productId}/availability`,
       payload: {
-        available: false
-      }
+        available: false,
+      },
     });
-    
+
     expect(response.statusCode).toBe(200);
     const body = response.json();
     expect(body.available).toBe(false);
@@ -97,7 +112,7 @@ describe('Edge API Integration Tests', () => {
     const restoreResp = await app.inject({
       method: 'PATCH',
       url: `/catalog/products/${productId}/availability`,
-      payload: { available: true }
+      payload: { available: true },
     });
     expect(restoreResp.statusCode).toBe(200);
     expect(restoreResp.json().available).toBe(true);
@@ -114,9 +129,9 @@ describe('Edge API Integration Tests', () => {
         orderType: 'TABLE',
         channel: 'WAITER',
         currency: 'USD',
-      }
+      },
     });
-    
+
     expect(response.statusCode).toBe(201);
     const body = response.json();
     expect(body.orderType).toBe('TABLE');
@@ -135,17 +150,18 @@ describe('Edge API Integration Tests', () => {
         commandId: 'c1111111-1111-1111-1111-111111111111',
         expectedVersion: orderVersion,
         productId: productId,
-      }
+      },
     });
-    
+
     const body = response.json();
     if (response.statusCode !== 200) console.error('TEST 6 FAILED', response.statusCode, body);
     expect(response.statusCode).toBe(200);
     expect(body.items.length).toBe(1);
+    expect(body.subtotal).toEqual({ amount: 1500, currency: 'USD' });
     expect(body.version).toBe(orderVersion + 1);
     orderVersion = body.version;
     itemId = body.items[0].id;
-    
+
     // 7. Verify snapshot was created from catalog
     expect(body.items[0].productSnapshot.productName).toBe('Test Burger');
     expect(body.items[0].productSnapshot.basePrice.amount).toBe(1500);
@@ -158,10 +174,11 @@ describe('Edge API Integration Tests', () => {
       url: `/orders/${orderId}/tables`,
       payload: {
         expectedVersion: orderVersion,
-        tableIds: [tableId]
-      }
+        tableIds: [tableId],
+      },
     });
-    if (response.statusCode !== 200) console.error('TEST 17 FAILED', response.statusCode, response.json());
+    if (response.statusCode !== 200)
+      console.error('TEST 17 FAILED', response.statusCode, response.json());
     expect(response.statusCode).toBe(200);
     const body = response.json();
     expect(body.tableIds).toContain(tableId);
@@ -178,15 +195,15 @@ describe('Edge API Integration Tests', () => {
         commandId: 'c1111111-1111-1111-1111-111111111111', // SAME commandId as test 6
         expectedVersion: orderVersion, // Current version (doesn't matter — already processed)
         productId: productId,
-      }
+      },
     });
-    
+
     const body = response.json();
     if (response.statusCode !== 200) console.error('TEST 12 FAILED', response.statusCode, body);
     expect(response.statusCode).toBe(200);
     // Items count should still be 1, version should be the same
     expect(body.items.length).toBe(1);
-    expect(body.version).toBe(orderVersion); 
+    expect(body.version).toBe(orderVersion);
   });
 
   it('11. Optimistic concurrency conflict (STALE_ORDER_VERSION)', async () => {
@@ -197,9 +214,9 @@ describe('Edge API Integration Tests', () => {
         commandId: 'c2222222-2222-2222-2222-222222222222',
         expectedVersion: orderVersion - 1, // WRONG VERSION
         productId: productId,
-      }
+      },
     });
-    
+
     expect(response.statusCode).toBe(409);
     const body = response.json();
     expect(body.error).toBe('STALE_ORDER_VERSION');
@@ -211,9 +228,9 @@ describe('Edge API Integration Tests', () => {
       url: `/orders/${orderId}/rounds`,
       payload: {
         expectedVersion: orderVersion,
-      }
+      },
     });
-    
+
     const body = response.json();
     if (response.statusCode !== 200) console.error('TEST 8 FAILED', response.statusCode, body);
     expect(response.statusCode).toBe(200);
@@ -230,9 +247,9 @@ describe('Edge API Integration Tests', () => {
       url: `/orders/${orderId}/items/${itemId}`,
       payload: {
         expectedVersion: orderVersion,
-      }
+      },
     });
-    
+
     expect(response.statusCode).toBe(409);
     const body = response.json();
     expect(body.error).toBe('ORDER_ITEM_SENT');
@@ -247,9 +264,9 @@ describe('Edge API Integration Tests', () => {
         commandId: 'c3333333-3333-3333-3333-333333333333',
         expectedVersion: orderVersion,
         productId: productId,
-      }
+      },
     });
-    
+
     const addBody = addResp.json();
     if (addResp.statusCode !== 200) console.error('TEST 9 ADD FAILED', addResp.statusCode, addBody);
     expect(addResp.statusCode).toBe(200);
@@ -265,15 +282,25 @@ describe('Edge API Integration Tests', () => {
       url: `/orders/${orderId}/items/${newItemId}`,
       payload: {
         expectedVersion: orderVersion,
-      }
+      },
     });
-    
+
     const body = response.json();
-    if (response.statusCode !== 200) console.error('TEST 9 DELETE FAILED', response.statusCode, body);
+    if (response.statusCode !== 200)
+      console.error('TEST 9 DELETE FAILED', response.statusCode, body);
     expect(response.statusCode).toBe(200);
     expect(body.items.length).toBe(1); // Back to 1 item (the SENT one)
+    expect(body.subtotal).toEqual({ amount: 1500, currency: 'USD' });
     expect(body.version).toBe(orderVersion + 1);
     orderVersion = body.version;
+
+    const persistedResponse = await app.inject({
+      method: 'GET',
+      url: `/orders/${orderId}`,
+    });
+    expect(persistedResponse.statusCode).toBe(200);
+    expect(persistedResponse.json().items).toHaveLength(1);
+    expect(persistedResponse.json().subtotal).toEqual({ amount: 1500, currency: 'USD' });
   });
 
   it('15. Error estructurado para estado inválido', async () => {
@@ -281,10 +308,11 @@ describe('Edge API Integration Tests', () => {
     const closeResp = await app.inject({
       method: 'POST',
       url: `/orders/${orderId}/close`,
-      payload: { balanceDueAmount: 0, expectedVersion: orderVersion }
+      payload: { balanceDueAmount: 0, expectedVersion: orderVersion },
     });
 
-    if (closeResp.statusCode !== 200) console.error('TEST 15 CLOSE FAILED', closeResp.statusCode, closeResp.json());
+    if (closeResp.statusCode !== 200)
+      console.error('TEST 15 CLOSE FAILED', closeResp.statusCode, closeResp.json());
     expect(closeResp.statusCode).toBe(200);
     orderVersion = closeResp.json().version;
 
@@ -294,9 +322,9 @@ describe('Edge API Integration Tests', () => {
       url: `/orders/${orderId}/cancel`,
       payload: {
         expectedVersion: orderVersion,
-      }
+      },
     });
-    
+
     expect(response.statusCode).toBe(409);
     const body = response.json();
     expect(body.error).toBe('ORDER_ALREADY_CLOSED');
@@ -305,7 +333,7 @@ describe('Edge API Integration Tests', () => {
   it('13 & 16. Order persiste entre requests y reinicializar app', async () => {
     // Close the app entirely
     await app.close();
-    
+
     // Start a new instance pointing to the same db
     const newApp = await buildApp(tmpPath);
     await newApp.ready();

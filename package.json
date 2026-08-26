@@ -11,6 +11,8 @@
   "packageManager": "pnpm@9.15.0",
   "scripts": {
     "dev": "turbo run dev",
+    "dev:edge": "pnpm build && pnpm --filter @comanview/database dev:prepare && pnpm --filter @comanview/edge dev",
+    "dev:pos": "pnpm build && pnpm --filter @comanview/database dev:prepare && pnpm --parallel --filter @comanview/edge --filter @comanview/pos dev",
     "build": "turbo run build",
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { EntityId } from '../../shared/EntityId.js';
 import { Money } from '@comanview/money';
-import { Product } from '../Product.js';
+import { Product, type ProductProps } from '../Product.js';
 import { TaxProfile } from '../TaxProfile.js';
 import { ModifierGroup } from '../ModifierGroup.js';
 import { ModifierOption } from '../ModifierOption.js';
@@ -12,7 +12,7 @@ import {
   TaxProfileInactiveError,
   ModifierUnavailableError,
   ModifierInactiveError,
-  InvalidModifierSelectionError
+  InvalidModifierSelectionError,
 } from '../errors.js';
 
 describe('Product Domain', () => {
@@ -68,11 +68,11 @@ describe('Product Domain', () => {
       modifierGroup: modGroup,
       priceDeltaOverrides: new Map([
         // Override bacon price for this product
-        [ids.modOpt2Id.toString(), Money.fromMinorUnits(250, 'MXN')]
+        [ids.modOpt2Id.toString(), Money.fromMinorUnits(250, 'MXN')],
       ]),
     });
 
-    const product = new Product({
+    const productProps: ProductProps = {
       id: ids.productId,
       categoryId: ids.categoryId,
       name: 'Burger',
@@ -87,62 +87,63 @@ describe('Product Domain', () => {
       sku: 'BURG-01',
       barcode: null,
       modifierGroups: [pmg],
-    });
+    };
+    const product = new Product(productProps);
 
-    return { ids, taxProfile, opt1, opt2, modGroup, pmg, product };
+    return { ids, taxProfile, opt1, opt2, modGroup, pmg, product, productProps };
   };
 
   it('creates a valid snapshot with proper selection and price override', () => {
     const { product, ids } = setupData();
     const selections = new Map<string, EntityId[]>([
-      [ids.modGroupId.toString(), [ids.modOpt1Id, ids.modOpt2Id]]
+      [ids.modGroupId.toString(), [ids.modOpt1Id, ids.modOpt2Id]],
     ]);
 
     const snapshot = product.createSnapshot(selections);
-    
+
     expect(snapshot.productId.equals(ids.productId)).toBe(true);
     expect(snapshot.productName).toBe('Burger');
     expect(snapshot.basePrice.amount).toBe(12000);
     expect(snapshot.taxRateBasisPoints).toBe(1600);
     expect(snapshot.modifiers).toHaveLength(2);
 
-    const m1 = snapshot.modifiers.find(m => m.id.equals(ids.modOpt1Id));
+    const m1 = snapshot.modifiers.find((m) => m.id.equals(ids.modOpt1Id));
     expect(m1?.priceDelta.amount).toBe(150); // Default price
 
-    const m2 = snapshot.modifiers.find(m => m.id.equals(ids.modOpt2Id));
+    const m2 = snapshot.modifiers.find((m) => m.id.equals(ids.modOpt2Id));
     expect(m2?.priceDelta.amount).toBe(250); // Overridden price
   });
 
   it('throws when product is inactive', () => {
-    const { product, ids } = setupData();
-    const inactiveProduct = new Product({ ...product, active: false } as any);
-    
-    const selections = new Map<string, EntityId[]>([
-      [ids.modGroupId.toString(), [ids.modOpt1Id]]
-    ]);
+    const { productProps, ids } = setupData();
+    const inactiveProduct = new Product({ ...productProps, active: false });
+
+    const selections = new Map<string, EntityId[]>([[ids.modGroupId.toString(), [ids.modOpt1Id]]]);
 
     expect(() => inactiveProduct.createSnapshot(selections)).toThrow(ProductInactiveError);
   });
 
   it('throws when product is unavailable', () => {
-    const { product, ids } = setupData();
-    const unavailableProduct = new Product({ ...product, available: false } as any);
-    
-    const selections = new Map<string, EntityId[]>([
-      [ids.modGroupId.toString(), [ids.modOpt1Id]]
-    ]);
+    const { productProps, ids } = setupData();
+    const unavailableProduct = new Product({ ...productProps, available: false });
+
+    const selections = new Map<string, EntityId[]>([[ids.modGroupId.toString(), [ids.modOpt1Id]]]);
 
     expect(() => unavailableProduct.createSnapshot(selections)).toThrow(ProductUnavailableError);
   });
 
   it('throws when tax profile is inactive', () => {
-    const { product, taxProfile, ids } = setupData();
-    const inactiveTax = new TaxProfile({ ...taxProfile, active: false } as any);
-    const badProduct = new Product({ ...product, taxProfile: inactiveTax } as any);
+    const { productProps, taxProfile, ids } = setupData();
+    const inactiveTax = new TaxProfile({
+      id: taxProfile.id,
+      name: taxProfile.name,
+      rateBasisPoints: taxProfile.rateBasisPoints,
+      calculationMode: taxProfile.calculationMode,
+      active: false,
+    });
+    const badProduct = new Product({ ...productProps, taxProfile: inactiveTax });
 
-    const selections = new Map<string, EntityId[]>([
-      [ids.modGroupId.toString(), [ids.modOpt1Id]]
-    ]);
+    const selections = new Map<string, EntityId[]>([[ids.modGroupId.toString(), [ids.modOpt1Id]]]);
 
     expect(() => badProduct.createSnapshot(selections)).toThrow(TaxProfileInactiveError);
   });
@@ -159,7 +160,7 @@ describe('Product Domain', () => {
     const { product, ids } = setupData();
     // 3 selections, but maxSelections is 2. (We duplicate one ID just for testing the rule limit)
     const selections = new Map<string, EntityId[]>([
-      [ids.modGroupId.toString(), [ids.modOpt1Id, ids.modOpt2Id, ids.modOpt1Id]]
+      [ids.modGroupId.toString(), [ids.modOpt1Id, ids.modOpt2Id, ids.modOpt1Id]],
     ]);
 
     expect(() => product.createSnapshot(selections)).toThrow(InvalidModifierSelectionError);
@@ -168,17 +169,15 @@ describe('Product Domain', () => {
   it('throws when an option does not exist in the group', () => {
     const { product, ids } = setupData();
     const badOptId = EntityId.generate();
-    
-    const selections = new Map<string, EntityId[]>([
-      [ids.modGroupId.toString(), [badOptId]]
-    ]);
+
+    const selections = new Map<string, EntityId[]>([[ids.modGroupId.toString(), [badOptId]]]);
 
     expect(() => product.createSnapshot(selections)).toThrow(InvalidModifierSelectionError);
   });
 
   it('throws when modifier is unavailable', () => {
     const { ids, taxProfile, modGroup } = setupData();
-    
+
     const badOpt = new ModifierOption({
       id: ids.modOpt1Id,
       name: 'Extra Cheese',
@@ -189,13 +188,17 @@ describe('Product Domain', () => {
     });
 
     const modGroup2 = new ModifierGroup({
-      ...modGroup,
-      options: [badOpt, modGroup.getOption(ids.modOpt2Id)!]
-    } as any);
+      id: modGroup.id,
+      name: modGroup.name,
+      minSelections: modGroup.minSelections,
+      maxSelections: modGroup.maxSelections,
+      active: modGroup.active,
+      options: [badOpt, modGroup.getOption(ids.modOpt2Id)!],
+    });
 
     const pmg = new ProductModifierGroup({
       modifierGroup: modGroup2,
-      priceDeltaOverrides: new Map()
+      priceDeltaOverrides: new Map(),
     });
 
     const product = new Product({
@@ -215,9 +218,7 @@ describe('Product Domain', () => {
       modifierGroups: [pmg],
     });
 
-    const selections = new Map<string, EntityId[]>([
-      [ids.modGroupId.toString(), [ids.modOpt1Id]]
-    ]);
+    const selections = new Map<string, EntityId[]>([[ids.modGroupId.toString(), [ids.modOpt1Id]]]);
 
     expect(() => product.createSnapshot(selections)).toThrow(ModifierUnavailableError);
   });

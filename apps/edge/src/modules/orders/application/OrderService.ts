@@ -2,18 +2,27 @@ import { OrderRepository, CatalogRepository } from '@comanview/database';
 import { Order, EntityId, OrderType, OrderChannel } from '@comanview/domain';
 import { Money } from '@comanview/money';
 import { ObjectNotFoundError, ConcurrencyError } from '../../../app/errors.js';
-import { CreateOrderRequest, AddOrderItemRequest, SendRoundRequest, CloseOrderRequest, OrderResponse, CancelOrderRequest, RemoveOrderItemRequest, UpdateOrderTablesRequest } from '@comanview/contracts';
+import {
+  CreateOrderRequest,
+  AddOrderItemRequest,
+  SendRoundRequest,
+  CloseOrderRequest,
+  OrderResponse,
+  CancelOrderRequest,
+  RemoveOrderItemRequest,
+  UpdateOrderTablesRequest,
+} from '@comanview/contracts';
 
 export class OrderService {
   constructor(
     private readonly orderRepo: OrderRepository,
-    private readonly catalogRepo: CatalogRepository
+    private readonly catalogRepo: CatalogRepository,
   ) {}
 
   async createOrder(request: CreateOrderRequest): Promise<OrderResponse> {
     const tenantId = EntityId.generate();
     const locationId = EntityId.generate();
-    const tableIds = request.tableIds ? request.tableIds.map(t => EntityId.fromString(t)) : [];
+    const tableIds = request.tableIds ? request.tableIds.map((t) => EntityId.fromString(t)) : [];
 
     const order = Order.create({
       orderType: request.orderType as OrderType,
@@ -40,7 +49,9 @@ export class OrderService {
     if (!order) throw new ObjectNotFoundError(`Order ${orderId} not found`);
 
     if (order.version !== request.expectedVersion) {
-      throw new ConcurrencyError(`Expected version ${request.expectedVersion}, but got ${order.version}`);
+      throw new ConcurrencyError(
+        `Expected version ${request.expectedVersion}, but got ${order.version}`,
+      );
     }
 
     if (this.orderRepo.hasProcessedCommand(request.commandId)) {
@@ -52,20 +63,26 @@ export class OrderService {
 
     const modifierSelections = new Map<string, EntityId[]>();
     const snapshot = product.createSnapshot(modifierSelections);
-    
+
     order.addItem(snapshot, request.commandId);
 
     this.orderRepo.saveOrder(order, true, request.commandId);
-    
+
     return this.mapToResponse(order);
   }
 
-  async removeItem(orderId: string, itemId: string, request: RemoveOrderItemRequest): Promise<OrderResponse> {
+  async removeItem(
+    orderId: string,
+    itemId: string,
+    request: RemoveOrderItemRequest,
+  ): Promise<OrderResponse> {
     const order = this.orderRepo.getOrderById(EntityId.fromString(orderId));
     if (!order) throw new ObjectNotFoundError(`Order ${orderId} not found`);
 
     if (order.version !== request.expectedVersion) {
-      throw new ConcurrencyError(`Expected version ${request.expectedVersion}, but got ${order.version}`);
+      throw new ConcurrencyError(
+        `Expected version ${request.expectedVersion}, but got ${order.version}`,
+      );
     }
 
     order.removeItem(EntityId.fromString(itemId));
@@ -78,7 +95,9 @@ export class OrderService {
     if (!order) throw new ObjectNotFoundError(`Order ${orderId} not found`);
 
     if (order.version !== request.expectedVersion) {
-      throw new ConcurrencyError(`Expected version ${request.expectedVersion}, but got ${order.version}`);
+      throw new ConcurrencyError(
+        `Expected version ${request.expectedVersion}, but got ${order.version}`,
+      );
     }
 
     order.sendDraftItems();
@@ -91,7 +110,9 @@ export class OrderService {
     if (!order) throw new ObjectNotFoundError(`Order ${orderId} not found`);
 
     if (order.version !== request.expectedVersion) {
-      throw new ConcurrencyError(`Expected version ${request.expectedVersion}, but got ${order.version}`);
+      throw new ConcurrencyError(
+        `Expected version ${request.expectedVersion}, but got ${order.version}`,
+      );
     }
 
     const balanceDue = Money.fromMinorUnits(request.balanceDueAmount, order.currency);
@@ -105,7 +126,9 @@ export class OrderService {
     if (!order) throw new ObjectNotFoundError(`Order ${orderId} not found`);
 
     if (order.version !== request.expectedVersion) {
-      throw new ConcurrencyError(`Expected version ${request.expectedVersion}, but got ${order.version}`);
+      throw new ConcurrencyError(
+        `Expected version ${request.expectedVersion}, but got ${order.version}`,
+      );
     }
 
     order.cancel();
@@ -118,17 +141,21 @@ export class OrderService {
     if (!order) throw new ObjectNotFoundError(`Order ${orderId} not found`);
 
     if (order.version !== request.expectedVersion) {
-      throw new ConcurrencyError(`Expected version ${request.expectedVersion}, but got ${order.version}`);
+      throw new ConcurrencyError(
+        `Expected version ${request.expectedVersion}, but got ${order.version}`,
+      );
     }
 
-    const tableIds = request.tableIds.map(t => EntityId.fromString(t));
+    const tableIds = request.tableIds.map((t) => EntityId.fromString(t));
     order.updateTables(tableIds);
-    
+
     this.orderRepo.saveOrder(order, true);
     return this.mapToResponse(order);
   }
 
   private mapToResponse(order: Order): OrderResponse {
+    const subtotal = order.getSubtotal();
+
     return {
       id: order.id.toString(),
       tenantId: order.tenantId.toString(),
@@ -137,8 +164,8 @@ export class OrderService {
       channel: order.orderChannel,
       currency: order.currency,
       status: order.status,
-      tableIds: order.tableIds.map(t => t.toString()),
-      items: order.items.map(i => ({
+      tableIds: order.tableIds.map((t) => t.toString()),
+      items: order.items.map((i) => ({
         id: i.id.toString(),
         status: i.sendStatus,
         addedAt: order.createdAt.toISOString(),
@@ -153,7 +180,7 @@ export class OrderService {
           taxRateBasisPoints: i.snapshot.taxRateBasisPoints,
           taxCalculationMode: i.snapshot.taxCalculationMode,
           stationId: i.snapshot.stationId?.toString() ?? null,
-          selectedModifiers: i.snapshot.modifiers.map(m => ({
+          selectedModifiers: i.snapshot.modifiers.map((m) => ({
             modifierOptionId: m.id.toString(),
             name: m.name,
             priceDelta: {
@@ -163,12 +190,16 @@ export class OrderService {
           })),
         },
       })),
-      rounds: order.rounds.map(r => ({
+      rounds: order.rounds.map((r) => ({
         id: r.id.toString(),
         roundNumber: r.roundNumber,
         sentAt: r.sentAt.toISOString(),
         itemIds: [],
       })),
+      subtotal: {
+        amount: subtotal.amount,
+        currency: subtotal.currency,
+      },
       version: order.version,
       createdAt: order.createdAt.toISOString(),
       updatedAt: order.createdAt.toISOString(),

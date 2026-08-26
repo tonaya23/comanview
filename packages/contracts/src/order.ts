@@ -49,6 +49,7 @@ export const OrderSchema = z.object({
   tableIds: z.array(z.string().uuid()),
   items: z.array(OrderItemSchema),
   rounds: z.array(RoundSchema),
+  subtotal: MoneySchema,
   version: z.number().int(),
   createdAt: z.string(),
   updatedAt: z.string(),
