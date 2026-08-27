@@ -111,6 +111,20 @@ export function formatMoney(amount: number, currency: string): string {
   }).format(amount / 100);
 }
 
+export function getCashDifferencePresentation(amount: number, currency: string) {
+  if (amount < 0) {
+    return { label: 'Faltante', value: formatMoney(amount, currency), tone: 'shortage' as const };
+  }
+  if (amount > 0) {
+    return {
+      label: 'Sobrante',
+      value: `+${formatMoney(amount, currency)}`,
+      tone: 'surplus' as const,
+    };
+  }
+  return { label: 'Caja cuadrada', value: formatMoney(0, currency), tone: 'balanced' as const };
+}
+
 const errorMessages: Record<string, string> = {
   PRECHECK_REQUIRES_OPEN_ORDER:
     'La precuenta solo está disponible mientras la venta sigue abierta.',
@@ -155,6 +169,10 @@ const errorMessages: Record<string, string> = {
   OVERRIDE_PERMISSION_DENIED: 'El usuario indicado no puede autorizar esta operación.',
   REASON_REQUIRED: 'Indica un motivo para realizar esta operación.',
   AUDIT_PERSISTENCE_FAILED: 'No se pudo guardar la auditoría; la operación no fue aplicada.',
+  INVALID_CASH_MOVEMENT: 'El movimiento requiere importe positivo y motivo.',
+  INVALID_CASH_COUNT: 'El efectivo contado debe ser un importe válido no negativo.',
+  CASH_SESSION_ALREADY_CLOSED: 'La CashSession ya fue cerrada.',
+  CASH_SESSION_HAS_PENDING_PAYMENTS: 'Existen Payments pendientes; resuélvelos antes del Corte Z.',
 };
 
 export function canEditDraftItem(status: 'DRAFT' | 'SENT'): boolean {

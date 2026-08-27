@@ -7,6 +7,7 @@ export interface CashRegisterProps {
   name: string;
   currency: string;
   active: boolean;
+  blindCashCount?: boolean;
   createdAt: Date;
 }
 
@@ -30,6 +31,9 @@ export class CashRegister {
   }
   get active(): boolean {
     return this.props.active;
+  }
+  get blindCashCount(): boolean {
+    return this.props.blindCashCount ?? true;
   }
   get createdAt(): Date {
     return this.props.createdAt;

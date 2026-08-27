@@ -88,7 +88,14 @@ describe('CASH remainder tip', () => {
       ],
     });
     const currentCash = await app.inject({ method: 'GET', url: '/cash-sessions/current' });
-    expect(currentCash.json().session.expectedCash).toEqual({ amount: 5000, currency: 'MXN' });
+    expect(currentCash.json().session.expectedCash).toBeNull();
+    const xReport = await app.inject({
+      method: 'POST',
+      url: '/cash-sessions/current/x-report',
+      payload: { commandId: 'remainder-expected-cash-x' },
+    });
+    expect(xReport.statusCode).toBe(201);
+    expect(xReport.json().expectedCash).toEqual({ amount: 5000, currency: 'MXN' });
 
     const retry = await app.inject({
       method: 'POST',

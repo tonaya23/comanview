@@ -34,6 +34,33 @@ export function renderEscPosTicket(job: PrintJob): Uint8Array {
   line(job.jobType.replaceAll('_', ' '));
   command(ESC, 0x45, 0x00); // Bold off.
   command(ESC, 0x61, 0x00); // Left.
+  if ('cashSessionId' in payload) {
+    line(`SESSION: ${payload.cashSessionId}`);
+    line(`BUSINESS DATE: ${payload.businessDate}`);
+    line();
+    line(`OPENING: ${money(payload.openingFloat)}`);
+    line(`CASH SALES: ${money(payload.cashSales)}`);
+    line(`CARD SALES: ${money(payload.cardSales)}`);
+    line(`OTHER SALES: ${money(payload.otherSales)}`);
+    line(`CASH TIPS: ${money(payload.cashTips)}`);
+    line(`CARD TIPS: ${money(payload.cardTips)}`);
+    line(`OTHER TIPS: ${money(payload.otherTips)}`);
+    line(`CASH IN: ${money(payload.cashIn)}`);
+    line(`CASH OUT: ${money(payload.cashOut)}`);
+    line(`EXPECTED: ${money(payload.expectedCash)}`);
+    if (payload.countedCash) line(`COUNTED: ${money(payload.countedCash)}`);
+    if (payload.difference) line(`DIFFERENCE: ${money(payload.difference)}`);
+    command(ESC, 0x64, 0x03);
+    command(GS, 0x56, 0x00);
+    const length = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
+    const output = new Uint8Array(length);
+    let offset = 0;
+    for (const chunk of chunks) {
+      output.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return output;
+  }
   line(`ORDER: ${payload.orderNumber}`);
   if (payload.kind === 'STATION_TICKET') line(`ROUND: ${payload.roundNumber}`);
   line();

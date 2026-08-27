@@ -5,6 +5,7 @@ import {
   ALL_CATEGORIES,
   canEditDraftItem,
   formatMoney,
+  getCashDifferencePresentation,
   getActiveModifierGroups,
   getConfiguredProductTotal,
   getEffectiveModifierPrice,
@@ -61,6 +62,23 @@ describe('POS presentation behavior', () => {
       getVisibleProducts(products, '01991a00-0000-7000-8000-000000000001').map((item) => item.name),
     ).toEqual(['Primero', 'Segundo']);
     expect(getVisibleProducts(products, ALL_CATEGORIES)).toHaveLength(3);
+  });
+
+  it('presents the authoritative cash difference with operational meaning', () => {
+    expect(getCashDifferencePresentation(-1000, 'MXN')).toMatchObject({
+      label: 'Faltante',
+      tone: 'shortage',
+    });
+    expect(getCashDifferencePresentation(-1000, 'MXN').value).toContain('-');
+    expect(getCashDifferencePresentation(1000, 'MXN')).toMatchObject({
+      label: 'Sobrante',
+      tone: 'surplus',
+    });
+    expect(getCashDifferencePresentation(1000, 'MXN').value).toMatch(/^\+/);
+    expect(getCashDifferencePresentation(0, 'MXN')).toMatchObject({
+      label: 'Caja cuadrada',
+      tone: 'balanced',
+    });
   });
 
   it('hides inactive categories', () => {

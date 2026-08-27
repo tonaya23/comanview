@@ -8,6 +8,29 @@ function money(value: PrintMoneySnapshot): string {
 
 export function renderDebugTicket(job: PrintJob): string {
   const payload = job.payload;
+  if ('cashSessionId' in payload) {
+    const lines = [
+      'COMANVIEW DEBUG TICKET',
+      `TYPE: ${payload.kind}`,
+      `SESSION: ${payload.cashSessionId}`,
+      `BUSINESS DATE: ${payload.businessDate}`,
+      `CAPTURED: ${payload.capturedAt}`,
+      '',
+      `OPENING FLOAT: ${money(payload.openingFloat)}`,
+      `CASH SALES: ${money(payload.cashSales)}`,
+      `CARD SALES: ${money(payload.cardSales)}`,
+      `OTHER SALES: ${money(payload.otherSales)}`,
+      `CASH TIPS: ${money(payload.cashTips)}`,
+      `CARD TIPS: ${money(payload.cardTips)}`,
+      `OTHER TIPS: ${money(payload.otherTips)}`,
+      `CASH IN: ${money(payload.cashIn)}`,
+      `CASH OUT: ${money(payload.cashOut)}`,
+      `EXPECTED CASH: ${money(payload.expectedCash)}`,
+    ];
+    if (payload.countedCash) lines.push(`COUNTED CASH: ${money(payload.countedCash)}`);
+    if (payload.difference) lines.push(`DIFFERENCE: ${money(payload.difference)}`);
+    return `${lines.join('\n')}\n`;
+  }
   const lines = [
     'COMANVIEW DEBUG TICKET',
     `TYPE: ${job.jobType}`,

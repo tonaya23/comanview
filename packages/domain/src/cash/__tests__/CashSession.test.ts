@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { Money } from '@comanview/money';
 import { EntityId } from '../../shared/EntityId.js';
 import { CashSession } from '../CashSession.js';
+import { CashMovement } from '../CashMovement.js';
 import { InvalidBusinessDateError, InvalidOpeningFloatError } from '../errors.js';
 
 describe('CashSession', () => {
@@ -35,5 +36,50 @@ describe('CashSession', () => {
     expect(() => CashSession.open({ ...baseInput, businessDate: '2026-02-30' })).toThrow(
       InvalidBusinessDateError,
     );
+  });
+
+  it('closes once with authoritative expected, counted and difference amounts', () => {
+    const session = CashSession.open(baseInput);
+    session.close({
+      countedCash: Money.fromMinorUnits(60500, 'MXN'),
+      expectedCash: Money.fromMinorUnits(60000, 'MXN'),
+      closedBy: EntityId.generate(),
+      commandId: 'close-session-1',
+      closedAt: new Date('2026-08-26T03:00:00.000Z'),
+    });
+    expect(session.status).toBe('CLOSED');
+    expect(session.difference?.amount).toBe(500);
+    expect(session.businessDate).toBe('2026-08-25');
+    expect(() =>
+      session.close({
+        countedCash: Money.zero('MXN'),
+        expectedCash: Money.zero('MXN'),
+        closedBy: EntityId.generate(),
+        commandId: 'close-session-2',
+      }),
+    ).toThrow('already CLOSED');
+  });
+
+  it('creates exact attributed cash movements and rejects invalid input', () => {
+    const movement = CashMovement.create({
+      cashSessionId: EntityId.generate(),
+      type: 'CASH_IN',
+      amount: Money.fromMinorUnits(10000, 'MXN'),
+      reason: '  Cambio adicional  ',
+      actorUserId: EntityId.generate(),
+      commandId: 'movement-1',
+    });
+    expect(movement.reason).toBe('Cambio adicional');
+    expect(movement.amount.amount).toBe(10000);
+    expect(() =>
+      CashMovement.create({
+        cashSessionId: EntityId.generate(),
+        type: 'CASH_OUT',
+        amount: Money.zero('MXN'),
+        reason: '',
+        actorUserId: EntityId.generate(),
+        commandId: 'movement-2',
+      }),
+    ).toThrow('greater than zero');
   });
 });

@@ -11,6 +11,7 @@ export function mapPrintJob(job: PrintJob): PrintJobResponse {
   return {
     printJobId: job.printJobId,
     orderId: job.orderId,
+    cashSessionId: job.cashSessionId ?? null,
     roundId: job.roundId,
     stationId: job.stationId,
     targetId: job.targetId,

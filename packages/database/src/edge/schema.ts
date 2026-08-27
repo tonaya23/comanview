@@ -321,9 +321,8 @@ export const printJobs = sqliteTable(
     id: text('id').primaryKey(),
     tenantId: text('tenant_id').notNull(),
     locationId: text('location_id').notNull(),
-    orderId: text('order_id')
-      .notNull()
-      .references(() => orders.id),
+    orderId: text('order_id').references(() => orders.id),
+    cashSessionId: text('cash_session_id'),
     roundId: text('round_id').references(() => rounds.id),
     stationId: text('station_id'),
     targetId: text('target_id').references(() => printTargets.id),
@@ -352,6 +351,7 @@ export const cashRegisters = sqliteTable('cash_registers', {
   name: text('name').notNull(),
   currency: text('currency').notNull(),
   active: integer('active', { mode: 'boolean' }).notNull().default(true),
+  blindCashCount: integer('blind_cash_count', { mode: 'boolean' }).notNull().default(true),
   createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
 });
 
@@ -369,7 +369,34 @@ export const cashSessions = sqliteTable('cash_sessions', {
   openedAt: integer('opened_at', { mode: 'timestamp_ms' }).notNull(),
   openedBy: text('opened_by').notNull(),
   closedAt: integer('closed_at', { mode: 'timestamp_ms' }),
+  closedBy: text('closed_by'),
+  closeCommandId: text('close_command_id'),
+  expectedCashAtCloseAmount: integer('expected_cash_at_close_amount'),
+  countedCashAmount: integer('counted_cash_amount'),
+  differenceAmount: integer('difference_amount'),
   openCommandId: text('open_command_id').notNull().unique(),
+});
+
+export const cashMovements = sqliteTable('cash_movements', {
+  id: text('id').primaryKey(),
+  cashSessionId: text('cash_session_id').notNull().references(() => cashSessions.id),
+  movementType: text('movement_type').notNull(),
+  amount: integer('amount').notNull(),
+  currency: text('currency').notNull(),
+  reason: text('reason').notNull(),
+  actorUserId: text('actor_user_id').notNull(),
+  occurredAt: integer('occurred_at', { mode: 'timestamp_ms' }).notNull(),
+  commandId: text('command_id').notNull().unique(),
+});
+
+export const cashReports = sqliteTable('cash_reports', {
+  id: text('id').primaryKey(),
+  cashSessionId: text('cash_session_id').notNull().references(() => cashSessions.id),
+  reportType: text('report_type').notNull(),
+  snapshotJson: text('snapshot_json').notNull(),
+  generatedAt: integer('generated_at', { mode: 'timestamp_ms' }).notNull(),
+  generatedBy: text('generated_by').notNull(),
+  commandId: text('command_id').notNull().unique(),
 });
 
 // ─── PAYMENTS ───────────────────────────────────────────────────────────────

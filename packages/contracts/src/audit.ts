@@ -1,8 +1,13 @@
 import { z } from 'zod';
 
-export const AuditActionSchema = z.enum(['PAYMENT_VOIDED']);
+export const AuditActionSchema = z.enum([
+  'PAYMENT_VOIDED',
+  'CASH_MOVEMENT_CREATED',
+  'CASH_X_REPORT_GENERATED',
+  'CASH_SESSION_CLOSED',
+]);
 export const AuditOutcomeSchema = z.enum(['SUCCESS']);
-export const AuditEntityTypeSchema = z.enum(['PAYMENT']);
+export const AuditEntityTypeSchema = z.enum(['PAYMENT', 'CASH_MOVEMENT', 'CASH_REPORT', 'CASH_SESSION']);
 
 export const AuditEntrySchema = z.object({
   auditId: z.string().uuid(),
@@ -42,6 +47,7 @@ export const AuditListQuerySchema = z.object({
 export const AuditListResponseSchema = z.object({ entries: z.array(AuditEntrySchema) });
 
 export type AuditAction = z.infer<typeof AuditActionSchema>;
+export type AuditEntityType = z.infer<typeof AuditEntityTypeSchema>;
 export type AuditEntryResponse = z.infer<typeof AuditEntrySchema>;
 export type AuditListQuery = z.infer<typeof AuditListQuerySchema>;
 export type AuditListResponse = z.infer<typeof AuditListResponseSchema>;

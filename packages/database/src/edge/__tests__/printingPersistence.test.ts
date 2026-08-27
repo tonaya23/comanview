@@ -30,6 +30,9 @@ function openDb() {
     '0002_order_item_special_instructions.sql',
     '0003_printing.sql',
     '0004_kds.sql',
+    '0005_local_auth.sql',
+    '0006_audit_log.sql',
+    '0007_cash_operations_closure.sql',
   ]) {
     sqlite.exec(readFileSync(join(process.cwd(), '../../migrations/edge', migration), 'utf8'));
   }
@@ -123,7 +126,10 @@ describe('persistent print queue', () => {
     const reopenedDb = drizzle(reopened, { schema });
     const jobs = new PrintJobRepository(reopenedDb).listRecent();
     expect(jobs).toHaveLength(1);
-    expect(jobs[0]!.payload.items[0]!.specialInstructions).toBe('bien cocida');
+    const payload = jobs[0]!.payload;
+    expect(payload.kind).toBe('STATION_TICKET');
+    if (payload.kind !== 'STATION_TICKET') throw new Error('Expected station ticket payload.');
+    expect(payload.items[0]!.specialInstructions).toBe('bien cocida');
     expect(new OrderRepository(reopenedDb).getOrderById(order.id)!.rounds).toHaveLength(1);
     reopened.close();
   });

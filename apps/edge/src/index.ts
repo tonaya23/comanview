@@ -94,7 +94,7 @@ export async function buildApp(dbPath: string = ':memory:', options: BuildAppOpt
     printService,
     kdsService,
   );
-  const cashService = new CashService(cashRepo, defaultOperationalContext);
+  const cashService = new CashService(cashRepo, printRepo, defaultOperationalContext);
   const paymentService = new PaymentService(
     orderRepo,
     cashRepo,

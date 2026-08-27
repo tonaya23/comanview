@@ -23,6 +23,9 @@ const localAuthMigrationPath = fileURLToPath(
 const auditLogMigrationPath = fileURLToPath(
   new URL('../../../../migrations/edge/0006_audit_log.sql', import.meta.url),
 );
+const cashOperationsMigrationPath = fileURLToPath(
+  new URL('../../../../migrations/edge/0007_cash_operations_closure.sql', import.meta.url),
+);
 const defaultDatabasePath = fileURLToPath(
   new URL('../../../../apps/edge/edge-dev.db', import.meta.url),
 );
@@ -52,6 +55,10 @@ export function prepareDevelopmentDatabase(targetPath = databasePath): void {
     if (!hasKdsTimestamps) sqlite.exec(readFileSync(kdsMigrationPath, 'utf8'));
     sqlite.exec(readFileSync(localAuthMigrationPath, 'utf8'));
     sqlite.exec(readFileSync(auditLogMigrationPath, 'utf8'));
+    const hasCashReports = sqlite
+      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'cash_reports'")
+      .get();
+    if (!hasCashReports) sqlite.exec(readFileSync(cashOperationsMigrationPath, 'utf8'));
 
     const seed = sqlite.transaction(() => {
       const insertCategory = sqlite.prepare(

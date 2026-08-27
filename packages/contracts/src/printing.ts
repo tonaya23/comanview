@@ -1,6 +1,12 @@
 import { z } from 'zod';
 
-export const PrintJobTypeSchema = z.enum(['STATION_TICKET', 'PRECHECK', 'CUSTOMER_RECEIPT']);
+export const PrintJobTypeSchema = z.enum([
+  'STATION_TICKET',
+  'PRECHECK',
+  'CUSTOMER_RECEIPT',
+  'X_REPORT',
+  'Z_REPORT',
+]);
 export const PrintJobStatusSchema = z.enum([
   'PENDING',
   'SENDING',
@@ -12,7 +18,8 @@ export const PrintJobStatusSchema = z.enum([
 ]);
 export const PrintJobSchema = z.object({
   printJobId: z.string().uuid(),
-  orderId: z.string().uuid(),
+  orderId: z.string().uuid().nullable(),
+  cashSessionId: z.string().uuid().nullable(),
   roundId: z.string().uuid().nullable(),
   stationId: z.string().uuid().nullable(),
   targetId: z.string().uuid().nullable(),

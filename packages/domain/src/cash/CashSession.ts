@@ -1,6 +1,11 @@
 import { Money } from '@comanview/money';
 import { EntityId } from '../shared/EntityId.js';
-import { InvalidBusinessDateError, InvalidOpeningFloatError } from './errors.js';
+import {
+  CashSessionAlreadyClosedError,
+  InvalidBusinessDateError,
+  InvalidCashCountError,
+  InvalidOpeningFloatError,
+} from './errors.js';
 
 export type CashSessionStatus = 'OPEN' | 'CLOSED';
 
@@ -15,6 +20,11 @@ export interface CashSessionProps {
   openedAt: Date;
   openedBy: EntityId;
   closedAt: Date | null;
+  closedBy: EntityId | null;
+  closeCommandId: string | null;
+  expectedCashAtClose: Money | null;
+  countedCash: Money | null;
+  difference: Money | null;
   openCommandId: string;
 }
 
@@ -54,6 +64,11 @@ export class CashSession {
       openedAt: new Date(),
       openedBy: input.openedBy,
       closedAt: null,
+      closedBy: null,
+      closeCommandId: null,
+      expectedCashAtClose: null,
+      countedCash: null,
+      difference: null,
       openCommandId: input.commandId,
     });
   }
@@ -92,7 +107,42 @@ export class CashSession {
   get closedAt(): Date | null {
     return this.props.closedAt;
   }
+  get closedBy(): EntityId | null {
+    return this.props.closedBy;
+  }
+  get closeCommandId(): string | null {
+    return this.props.closeCommandId;
+  }
+  get expectedCashAtClose(): Money | null {
+    return this.props.expectedCashAtClose;
+  }
+  get countedCash(): Money | null {
+    return this.props.countedCash;
+  }
+  get difference(): Money | null {
+    return this.props.difference;
+  }
   get openCommandId(): string {
     return this.props.openCommandId;
+  }
+
+  close(input: {
+    countedCash: Money;
+    expectedCash: Money;
+    closedBy: EntityId;
+    commandId: string;
+    closedAt?: Date;
+  }): void {
+    if (this.props.status !== 'OPEN') throw new CashSessionAlreadyClosedError();
+    if (input.countedCash.isNegative()) throw new InvalidCashCountError();
+    this.props.openingFloat.add(input.countedCash);
+    this.props.openingFloat.add(input.expectedCash);
+    this.props.status = 'CLOSED';
+    this.props.closedAt = input.closedAt ?? new Date();
+    this.props.closedBy = input.closedBy;
+    this.props.closeCommandId = input.commandId;
+    this.props.expectedCashAtClose = input.expectedCash;
+    this.props.countedCash = input.countedCash;
+    this.props.difference = input.countedCash.subtract(input.expectedCash);
   }
 }

@@ -4,7 +4,12 @@ import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import * as schema from '../schema.js';
 
 type DB = BetterSQLite3Database<typeof schema>;
-export type AuditAction = 'PAYMENT_VOIDED';
+export type AuditAction =
+  | 'PAYMENT_VOIDED'
+  | 'CASH_MOVEMENT_CREATED'
+  | 'CASH_X_REPORT_GENERATED'
+  | 'CASH_SESSION_CLOSED';
+export type AuditEntityType = 'PAYMENT' | 'CASH_MOVEMENT' | 'CASH_REPORT' | 'CASH_SESSION';
 
 export interface NewAuditEntry {
   auditId: string;
@@ -18,7 +23,7 @@ export interface NewAuditEntry {
   authorizedByUserId: string | null;
   authorizedByRole: string | null;
   action: AuditAction;
-  entityType: 'PAYMENT';
+  entityType: AuditEntityType;
   entityId: string;
   outcome: 'SUCCESS';
   reason: string;
@@ -152,7 +157,7 @@ export class AuditRepository {
       authorizedByUserId: row.authorizedByUserId,
       authorizedByRole: row.authorizedByRole,
       action: row.action as AuditAction,
-      entityType: row.entityType as 'PAYMENT',
+      entityType: row.entityType as AuditEntityType,
       entityId: row.entityId,
       outcome: row.outcome as 'SUCCESS',
       reason: row.reason,

@@ -6,6 +6,10 @@ import {
   ProductSchema,
   CashSessionSchema,
   CurrentCashSessionSchema,
+  CashMovementSchema,
+  CashReportSnapshotSchema,
+  CashClosingPreviewSchema,
+  CloseCashSessionResponseSchema,
   PaymentConfigSchema,
   PrintJobSchema,
   KdsStationSchema,
@@ -25,6 +29,14 @@ import {
   type CashSessionResponse,
   type CurrentCashSessionResponse,
   type OpenCashSessionRequest,
+  type CreateCashMovementRequest,
+  type CashMovementResponse,
+  type GenerateXReportRequest,
+  type CashReportSnapshotResponse,
+  type PreviewCashClosingRequest,
+  type CashClosingPreviewResponse,
+  type CloseCashSessionRequest,
+  type CloseCashSessionResponse,
   type PaymentConfigResponse,
   type CreatePaymentRequest,
   type VoidPaymentRequest,
@@ -112,6 +124,10 @@ export interface EdgeClient {
   sendRound(orderId: string, request: SendRoundRequest): Promise<OrderResponse>;
   getCurrentCashSession(): Promise<CurrentCashSessionResponse>;
   openCashSession(request: OpenCashSessionRequest): Promise<CashSessionResponse>;
+  createCashMovement(request: CreateCashMovementRequest): Promise<CashMovementResponse>;
+  generateXReport(request: GenerateXReportRequest): Promise<CashReportSnapshotResponse>;
+  previewCashClosing(request: PreviewCashClosingRequest): Promise<CashClosingPreviewResponse>;
+  closeCashSession(request: CloseCashSessionRequest): Promise<CloseCashSessionResponse>;
   getPaymentConfig(): Promise<PaymentConfigResponse>;
   createPayment(orderId: string, request: CreatePaymentRequest): Promise<OrderResponse>;
   voidPayment(
@@ -267,6 +283,26 @@ export function createEdgeClient(options: EdgeClientOptions = {}): EdgeClient {
     getCurrentCashSession: () => request('/cash-sessions/current', CurrentCashSessionSchema),
     openCashSession: (body) =>
       request('/cash-sessions', CashSessionSchema, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    createCashMovement: (body) =>
+      request('/cash-sessions/current/movements', CashMovementSchema, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    generateXReport: (body) =>
+      request('/cash-sessions/current/x-report', CashReportSnapshotSchema, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    previewCashClosing: (body) =>
+      request('/cash-sessions/current/close-preview', CashClosingPreviewSchema, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    closeCashSession: (body) =>
+      request('/cash-sessions/current/close', CloseCashSessionResponseSchema, {
         method: 'POST',
         body: JSON.stringify(body),
       }),

@@ -23,6 +23,7 @@ describe('Edge API Integration Tests', () => {
       '0004_kds.sql',
       '0005_local_auth.sql',
       '0006_audit_log.sql',
+      '0007_cash_operations_closure.sql',
     ]) {
       sqlite.exec(
         readFileSync(path.resolve(__dirname, `../../../../migrations/edge/${migration}`), 'utf-8'),
@@ -343,7 +344,8 @@ describe('Edge API Integration Tests', () => {
     const opened = await app.inject({ method: 'POST', url: '/cash-sessions', payload });
     expect(opened.statusCode).toBe(201);
     expect(opened.json().openingFloat).toEqual({ amount: 2000, currency: 'MXN' });
-    expect(opened.json().expectedCash).toEqual({ amount: 2000, currency: 'MXN' });
+    expect(opened.json().blindCashCount).toBe(true);
+    expect(opened.json().expectedCash).toBeNull();
 
     const retry = await app.inject({ method: 'POST', url: '/cash-sessions', payload });
     expect(retry.statusCode).toBe(201);
@@ -480,7 +482,14 @@ describe('Edge API Integration Tests', () => {
     orderVersion = replacementCard.json().version;
 
     const current = await app.inject({ method: 'GET', url: '/cash-sessions/current' });
-    expect(current.json().session.expectedCash).toEqual({ amount: 2116, currency: 'MXN' });
+    expect(current.json().session.expectedCash).toBeNull();
+    const xReport = await app.inject({
+      method: 'POST',
+      url: '/cash-sessions/current/x-report',
+      payload: { commandId: 'x-report-mixed-payment' },
+    });
+    expect(xReport.statusCode).toBe(201);
+    expect(xReport.json().expectedCash).toEqual({ amount: 2116, currency: 'MXN' });
   });
 
   it('15. Edge impide cierre pendiente y separa PAYMENT_COMPLETED de ORDER_CLOSED', async () => {

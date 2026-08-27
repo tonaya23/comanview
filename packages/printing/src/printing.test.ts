@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { PrintWorker } from './PrintWorker.js';
 import { PrinterAdapterError, type PrintJob, type PrintQueue, type PrintTarget } from './types.js';
 import { renderDebugTicket } from './renderer.js';
+import { renderEscPosTicket } from './escPosRenderer.js';
 
 const job = {
   printJobId: '01991a00-0000-7000-8000-000000000901',
@@ -61,10 +62,45 @@ const target = {
   configuration: {},
 } satisfies PrintTarget;
 
+const zReportJob = {
+  ...job,
+  printJobId: '01991a00-0000-7000-8000-000000000903',
+  orderId: null,
+  cashSessionId: '01991a00-0000-7000-8000-000000000904',
+  roundId: null,
+  stationId: null,
+  jobType: 'Z_REPORT',
+  dedupeKey: 'cash-report:z-command',
+  payload: {
+    kind: 'Z_REPORT',
+    cashSessionId: '01991a00-0000-7000-8000-000000000904',
+    businessDate: '2026-08-26',
+    capturedAt: '2026-08-27T03:00:00.000Z',
+    openingFloat: { amount: 100_000, currency: 'MXN' },
+    cashSales: { amount: 3_200, currency: 'MXN' },
+    cardSales: { amount: 3_800, currency: 'MXN' },
+    otherSales: { amount: 0, currency: 'MXN' },
+    cashTips: { amount: 800, currency: 'MXN' },
+    cardTips: { amount: 0, currency: 'MXN' },
+    otherTips: { amount: 0, currency: 'MXN' },
+    cashIn: { amount: 10_000, currency: 'MXN' },
+    cashOut: { amount: 5_000, currency: 'MXN' },
+    expectedCash: { amount: 109_000, currency: 'MXN' },
+    countedCash: { amount: 110_000, currency: 'MXN' },
+    difference: { amount: 1_000, currency: 'MXN' },
+  },
+} satisfies PrintJob;
+
 describe('printing', () => {
   it('renders modifier and special instructions from the historical payload', () => {
     expect(renderDebugTicket(job)).toContain('Queso');
     expect(renderDebugTicket(job)).toContain('NOTE: Sin cebolla');
+  });
+  it('renders a durable Z cash snapshot for debug and ESC/POS adapters', () => {
+    expect(renderDebugTicket(zReportJob)).toContain('DIFFERENCE: MXN 10.00');
+    expect(new TextDecoder().decode(renderEscPosTicket(zReportJob))).toContain(
+      'EXPECTED: MXN 1090.00',
+    );
   });
   it('marks a successful delivery', async () => {
     const queue = {

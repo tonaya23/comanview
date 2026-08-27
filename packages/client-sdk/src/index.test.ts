@@ -79,10 +79,15 @@ describe('createEdgeClient', () => {
           status: 'OPEN',
           openingFloat: { amount: 1000, currency: 'MXN' },
           expectedCash: { amount: 1000, currency: 'MXN' },
+          blindCashCount: false,
           businessDate: '2026-08-27',
           openedAt: '2026-08-27T12:00:00.000Z',
           openedBy: '01991a00-0000-7000-8000-000000000712',
           closedAt: null,
+          closedBy: null,
+          countedCash: null,
+          expectedCashAtClose: null,
+          difference: null,
         },
         201,
       );
@@ -366,6 +371,7 @@ describe('createEdgeClient', () => {
     const job = {
       printJobId: '01991a00-0000-7000-8000-000000000901',
       orderId: '01991a00-0000-7000-8000-000000000301',
+      cashSessionId: null,
       roundId: null,
       stationId: null,
       targetId: '01991a00-0000-7000-8000-000000000902',

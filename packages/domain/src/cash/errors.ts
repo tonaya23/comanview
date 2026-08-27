@@ -29,3 +29,21 @@ export class CashSessionNotOpenError extends DomainError {
     super('A POS Payment requires an OPEN CashSession.', 'CASH_SESSION_NOT_OPEN');
   }
 }
+
+export class CashSessionAlreadyClosedError extends DomainError {
+  constructor() {
+    super('The CashSession is already CLOSED.', 'CASH_SESSION_ALREADY_CLOSED');
+  }
+}
+
+export class InvalidCashMovementError extends DomainError {
+  constructor(message: string) {
+    super(message, 'INVALID_CASH_MOVEMENT');
+  }
+}
+
+export class InvalidCashCountError extends DomainError {
+  constructor() {
+    super('counted_cash must be a non-negative amount.', 'INVALID_CASH_COUNT');
+  }
+}

@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react
 import { createEdgeClient, EdgeClientError } from '@comanview/client-sdk';
 import type {
   CashSessionResponse,
+  CashReportSnapshotResponse,
+  CashClosingPreviewResponse,
   CategoryResponse,
   OrderResponse,
   PaymentConfigResponse,
@@ -19,6 +21,7 @@ import {
   formatMoney,
   getActiveModifierGroups,
   getConfiguredProductTotal,
+  getCashDifferencePresentation,
   getEffectiveModifierPrice,
   getErrorMessage,
   getLocalBusinessDate,
@@ -72,6 +75,15 @@ export function App() {
   const [notice, setNotice] = useState<string | null>(null);
   const [showOpenCash, setShowOpenCash] = useState(false);
   const [openingFloat, setOpeningFloat] = useState('0.00');
+  const [openCashError, setOpenCashError] = useState<string | null>(null);
+  const [showCashOperations, setShowCashOperations] = useState(false);
+  const [cashModalError, setCashModalError] = useState<string | null>(null);
+  const [cashMovementType, setCashMovementType] = useState<'CASH_IN' | 'CASH_OUT'>('CASH_IN');
+  const [cashMovementAmount, setCashMovementAmount] = useState('0.00');
+  const [cashMovementReason, setCashMovementReason] = useState('');
+  const [cashReport, setCashReport] = useState<CashReportSnapshotResponse | null>(null);
+  const [countedCash, setCountedCash] = useState('');
+  const [closingPreview, setClosingPreview] = useState<CashClosingPreviewResponse | null>(null);
   const [showPayment, setShowPayment] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('CASH');
   const [paymentAmount, setPaymentAmount] = useState('0.00');
@@ -105,6 +117,9 @@ export function App() {
     setPaymentConfig(null);
     setPrintJobs([]);
     setShowOpenCash(false);
+    setOpenCashError(null);
+    setShowCashOperations(false);
+    setCashModalError(null);
     setShowPayment(false);
     setVoidPaymentId(null);
     setVoidReason('');
@@ -262,12 +277,33 @@ export function App() {
     canConfirmPaymentTender(paymentMethod, cashTenderPreview.isSufficient) &&
     remainderIntentAllowed;
   const cashDenominations = getCashDenominationPresets(order?.currency ?? '');
+  const visibleCashSummary = cashReport ?? closingPreview;
+  const cashDifference = visibleCashSummary?.difference
+    ? getCashDifferencePresentation(
+        visibleCashSummary.difference.amount,
+        visibleCashSummary.currency,
+      )
+    : null;
   const isBusy = pendingAction !== null;
   const canOperateOrder = order?.status === 'OPEN' && connection === 'CONNECTED' && !isBusy;
 
   function clearFeedback() {
     setError(null);
     setNotice(null);
+  }
+
+  function setContextualCashError(problem: unknown, setLocalError: (message: string) => void) {
+    if (problem instanceof EdgeClientError && problem.code === 'EDGE_UNREACHABLE') {
+      setConnection('DISCONNECTED');
+      setError(getErrorMessage(problem));
+      return;
+    }
+    if (problem instanceof EdgeClientError && problem.status === 401) {
+      clearLocalSession();
+      setError(getErrorMessage(problem));
+      return;
+    }
+    setLocalError(getErrorMessage(problem));
   }
 
   async function mutate(
@@ -511,12 +547,13 @@ export function App() {
   async function openCash(event: FormEvent) {
     event.preventDefault();
     const amount = parseMoneyInputToMinorUnits(openingFloat);
-    if (amount === null) {
-      setError('Ingresa un fondo inicial válido, con máximo dos decimales.');
+    if (amount === null || amount < 0) {
+      setOpenCashError('Ingresa un fondo inicial válido, con máximo dos decimales.');
       return;
     }
     setPendingAction('open-cash');
     clearFeedback();
+    setOpenCashError(null);
     try {
       const session = await edge.openCashSession({
         commandId: crypto.randomUUID(),
@@ -525,9 +562,96 @@ export function App() {
       });
       setCashSession(session);
       setShowOpenCash(false);
+      setOpenCashError(null);
       setNotice('Caja abierta y persistida en Edge.');
     } catch (problem) {
-      setError(getErrorMessage(problem));
+      setContextualCashError(problem, setOpenCashError);
+    } finally {
+      setPendingAction(null);
+    }
+  }
+
+  async function createCashMovement(event: FormEvent) {
+    event.preventDefault();
+    const amount = parseMoneyInputToMinorUnits(cashMovementAmount);
+    if (!amount || !cashMovementReason.trim()) {
+      setCashModalError('Indica un importe mayor a cero y un motivo.');
+      return;
+    }
+    setPendingAction('cash-movement');
+    clearFeedback();
+    setCashModalError(null);
+    try {
+      await edge.createCashMovement({
+        commandId: crypto.randomUUID(),
+        type: cashMovementType,
+        amount,
+        reason: cashMovementReason,
+      });
+      setCashMovementAmount('0.00');
+      setCashMovementReason('');
+      setNotice(cashMovementType === 'CASH_IN' ? 'Entrada registrada.' : 'Salida registrada.');
+    } catch (problem) {
+      setContextualCashError(problem, setCashModalError);
+    } finally {
+      setPendingAction(null);
+    }
+  }
+
+  async function generateXReport() {
+    setPendingAction('x-report');
+    clearFeedback();
+    setCashModalError(null);
+    try {
+      const report = await edge.generateXReport({ commandId: crypto.randomUUID() });
+      setCashReport(report);
+      setClosingPreview(null);
+      setNotice('Corte X generado sin cerrar la caja.');
+    } catch (problem) {
+      setContextualCashError(problem, setCashModalError);
+    } finally {
+      setPendingAction(null);
+    }
+  }
+
+  async function previewCashClose(event: FormEvent) {
+    event.preventDefault();
+    const amount = parseMoneyInputToMinorUnits(countedCash);
+    if (amount === null) {
+      setCashModalError('Ingresa el efectivo contado con máximo dos decimales.');
+      return;
+    }
+    setPendingAction('close-preview');
+    clearFeedback();
+    setCashModalError(null);
+    try {
+      setClosingPreview(await edge.previewCashClosing({ countedCashAmount: amount }));
+      setCashReport(null);
+    } catch (problem) {
+      setContextualCashError(problem, setCashModalError);
+    } finally {
+      setPendingAction(null);
+    }
+  }
+
+  async function confirmCashClose() {
+    const amount = parseMoneyInputToMinorUnits(countedCash);
+    if (amount === null) return;
+    setPendingAction('close-cash');
+    clearFeedback();
+    setCashModalError(null);
+    try {
+      const result = await edge.closeCashSession({
+        commandId: crypto.randomUUID(),
+        countedCashAmount: amount,
+      });
+      setCashSession(null);
+      setClosingPreview(null);
+      setCashReport(result.report);
+      setCountedCash('');
+      setNotice('Corte Z confirmado. La CashSession quedó CLOSED.');
+    } catch (problem) {
+      setContextualCashError(problem, setCashModalError);
     } finally {
       setPendingAction(null);
     }
@@ -535,6 +659,15 @@ export function App() {
 
   function beginPayment() {
     if (!order) return;
+    if (!cashSession) {
+      if (hasPermission(PermissionCodes.CASH_SESSION_OPEN)) {
+        setOpenCashError(null);
+        setShowOpenCash(true);
+      } else {
+        setError('La caja está cerrada y tu perfil no puede abrirla.');
+      }
+      return;
+    }
     const balance = minorUnitsToInput(order.balanceDue.amount);
     setPaymentAmount(balance);
     setCashTenderInput(createCashTenderInput(order.balanceDue.amount));
@@ -792,11 +925,17 @@ export function App() {
             className={`cash-status ${cashSession ? 'cash-status--open' : ''}`}
             type="button"
             disabled={!hasPermission(PermissionCodes.CASH_SESSION_OPEN) && !cashSession}
-            onClick={() =>
-              !cashSession &&
-              hasPermission(PermissionCodes.CASH_SESSION_OPEN) &&
-              setShowOpenCash(true)
-            }
+            onClick={() => {
+              if (cashSession && hasPermission(PermissionCodes.CASH_SESSION_VIEW)) {
+                setCashReport(null);
+                setClosingPreview(null);
+                setCashModalError(null);
+                setShowCashOperations(true);
+              } else if (hasPermission(PermissionCodes.CASH_SESSION_OPEN)) {
+                setOpenCashError(null);
+                setShowOpenCash(true);
+              }
+            }}
           >
             <strong>
               {!hasPermission(PermissionCodes.CASH_SESSION_VIEW)
@@ -809,8 +948,8 @@ export function App() {
               {!hasPermission(PermissionCodes.CASH_SESSION_VIEW)
                 ? 'Sin permiso de caja'
                 : cashSession
-                  ? `${cashSession.businessDate} · Esperado ${formatMoney(cashSession.expectedCash.amount, cashSession.expectedCash.currency)}`
-                  : 'Toca para abrir'}
+                  ? `${cashSession.businessDate} · ${cashSession.expectedCash ? `Esperado ${formatMoney(cashSession.expectedCash.amount, cashSession.expectedCash.currency)}` : 'Arqueo ciego'}`
+                  : 'Puedes tomar y enviar pedidos · abre caja antes de cobrar'}
             </span>
           </button>
           <div className={`connection connection--${connection.toLowerCase()}`} role="status">
@@ -1231,7 +1370,6 @@ export function App() {
                         order.balanceDue.amount === 0 ||
                         order.items.length === 0 ||
                         !canOperateOrder ||
-                        !cashSession ||
                         !hasPermission(PermissionCodes.PAYMENT_CREATE)
                       }
                       onClick={beginPayment}
@@ -1495,7 +1633,13 @@ export function App() {
                 <span className="eyebrow">Inicio de turno</span>
                 <h2 id="cash-title">Abrir caja</h2>
               </div>
-              <button type="button" onClick={() => setShowOpenCash(false)}>
+              <button
+                type="button"
+                onClick={() => {
+                  setOpenCashError(null);
+                  setShowOpenCash(false);
+                }}
+              >
                 ×
               </button>
             </div>
@@ -1509,17 +1653,215 @@ export function App() {
                 <input
                   inputMode="decimal"
                   value={openingFloat}
-                  onChange={(event) => setOpeningFloat(event.target.value)}
+                  onChange={(event) => {
+                    setOpeningFloat(event.target.value);
+                    setOpenCashError(null);
+                  }}
                   autoFocus
                 />
               </label>
               <p className="field-help">
                 Se guarda en minor units exactos. El efectivo esperado parte de este fondo.
               </p>
+              <div
+                className={`modal-form-feedback${openCashError ? ' modal-form-feedback--error' : ''}`}
+                role="status"
+              >
+                {openCashError ?? ''}
+              </div>
               <button className="confirm-payment" disabled={isBusy} type="submit">
                 {pendingAction === 'open-cash' ? 'Abriendo…' : 'Abrir CashSession'}
               </button>
             </form>
+          </section>
+        </div>
+      )}
+
+      {showCashOperations && (
+        <div className="modal-backdrop">
+          <section
+            className="payment-modal cash-operations-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="cash-operations-title"
+          >
+            <div className="modal-heading">
+              <div>
+                <span className="eyebrow">Operación local</span>
+                <h2 id="cash-operations-title">Caja y cortes</h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setCashModalError(null);
+                  setShowCashOperations(false);
+                }}
+              >
+                ×
+              </button>
+            </div>
+
+            {cashSession ? (
+              <>
+                <div className="cash-session-brief">
+                  <span>Business date</span>
+                  <strong>{cashSession.businessDate}</strong>
+                  <small>
+                    CashSession OPEN · Arqueo {cashSession.blindCashCount ? 'ciego' : 'visible'}.
+                  </small>
+                </div>
+
+                <div
+                  className={`modal-form-feedback cash-modal-feedback${cashModalError ? ' modal-form-feedback--error' : ''}`}
+                  role="status"
+                >
+                  {cashModalError ?? ''}
+                </div>
+
+                {hasPermission(PermissionCodes.CASH_MOVEMENT_CREATE) && (
+                  <form className="cash-operation-section" onSubmit={(event) => void createCashMovement(event)}>
+                    <div className="cash-operation-heading">
+                      <h3>Movimiento de efectivo</h3>
+                      <div className="method-selector cash-movement-selector">
+                        <button
+                          type="button"
+                          className={cashMovementType === 'CASH_IN' ? 'selected' : ''}
+                          onClick={() => setCashMovementType('CASH_IN')}
+                        >
+                          Entrada
+                        </button>
+                        <button
+                          type="button"
+                          className={cashMovementType === 'CASH_OUT' ? 'selected' : ''}
+                          onClick={() => setCashMovementType('CASH_OUT')}
+                        >
+                          Salida
+                        </button>
+                      </div>
+                    </div>
+                    <div className="cash-movement-fields">
+                      <label>
+                        Importe
+                        <input
+                          inputMode="decimal"
+                          value={cashMovementAmount}
+                          onChange={(event) => {
+                            setCashMovementAmount(event.target.value);
+                            setCashModalError(null);
+                          }}
+                        />
+                      </label>
+                      <label>
+                        Motivo
+                        <input
+                          maxLength={240}
+                          value={cashMovementReason}
+                          onChange={(event) => {
+                            setCashMovementReason(event.target.value);
+                            setCashModalError(null);
+                          }}
+                        />
+                      </label>
+                    </div>
+                    <button className="secondary-order-button" type="submit" disabled={isBusy}>
+                      {pendingAction === 'cash-movement' ? 'Registrando…' : 'Confirmar movimiento'}
+                    </button>
+                  </form>
+                )}
+
+                <div className="cash-report-actions">
+                  {hasPermission(PermissionCodes.CASH_REPORT_X) && (
+                    <button
+                      type="button"
+                      className="secondary-order-button"
+                      disabled={isBusy}
+                      onClick={() => void generateXReport()}
+                    >
+                      {pendingAction === 'x-report' ? 'Generando…' : 'Generar Corte X'}
+                    </button>
+                  )}
+                </div>
+
+                {hasPermission(PermissionCodes.CASH_SESSION_CLOSE) && (
+                  <form className="cash-operation-section blind-count" onSubmit={(event) => void previewCashClose(event)}>
+                    <div className="cash-operation-heading">
+                      <div>
+                        <h3>Cerrar caja · Corte Z</h3>
+                        <small>
+                          {cashSession.blindCashCount
+                            ? 'Cuenta el efectivo antes de revelar el esperado.'
+                            : 'Declara el efectivo contado para calcular la diferencia.'}
+                        </small>
+                      </div>
+                    </div>
+                    <label>
+                      Efectivo físicamente contado
+                      <input
+                        inputMode="decimal"
+                        value={countedCash}
+                        onChange={(event) => {
+                          setCountedCash(event.target.value);
+                          setClosingPreview(null);
+                          setCashReport(null);
+                          setCashModalError(null);
+                        }}
+                      />
+                    </label>
+                    <button className="secondary-order-button" type="submit" disabled={isBusy}>
+                      {pendingAction === 'close-preview' ? 'Calculando…' : 'Confirmar conteo'}
+                    </button>
+                  </form>
+                )}
+              </>
+            ) : (
+              <div className="cash-session-brief cash-session-closed">
+                <strong>CashSession CLOSED</strong>
+                <span>El Corte Z quedó persistido. Puedes abrir una nueva caja con otro fondo.</span>
+              </div>
+            )}
+
+            {visibleCashSummary && (
+              <section className="cash-report-summary" aria-live="polite">
+                <div className="cash-operation-heading">
+                  <div>
+                    <span className="eyebrow">
+                      {cashReport?.reportType === 'Z' ? 'Corte Z' : cashReport ? 'Corte X' : 'Resultado del arqueo'}
+                    </span>
+                    <h3>Resumen financiero</h3>
+                  </div>
+                  {'printJobId' in visibleCashSummary && visibleCashSummary.printJobId && (
+                    <small>Impresión encolada</small>
+                  )}
+                </div>
+                <div className="cash-report-grid">
+                  <span>Fondo inicial<strong>{formatMoney(visibleCashSummary.openingFloat.amount, visibleCashSummary.currency)}</strong></span>
+                  <span>Ventas CASH<strong>{formatMoney(visibleCashSummary.salesByMethod.CASH.amount, visibleCashSummary.currency)}</strong></span>
+                  <span>Ventas CARD<strong>{formatMoney(visibleCashSummary.salesByMethod.CARD.amount, visibleCashSummary.currency)}</strong></span>
+                  <span>CASH_IN<strong>{formatMoney(visibleCashSummary.cashIn.amount, visibleCashSummary.currency)}</strong></span>
+                  <span>CASH_OUT<strong>{formatMoney(visibleCashSummary.cashOut.amount, visibleCashSummary.currency)}</strong></span>
+                  <span>Esperado<strong>{formatMoney(visibleCashSummary.expectedCash.amount, visibleCashSummary.currency)}</strong></span>
+                  {visibleCashSummary.countedCash && (
+                    <span>Contado<strong>{formatMoney(visibleCashSummary.countedCash.amount, visibleCashSummary.currency)}</strong></span>
+                  )}
+                  {cashDifference && (
+                    <span className={`cash-difference cash-difference--${cashDifference.tone}`}>
+                      {cashDifference.label}
+                      <strong>{cashDifference.value}</strong>
+                    </span>
+                  )}
+                </div>
+                {closingPreview && cashSession && (
+                  <button
+                    type="button"
+                    className="confirm-payment danger"
+                    disabled={isBusy}
+                    onClick={() => void confirmCashClose()}
+                  >
+                    {pendingAction === 'close-cash' ? 'Cerrando…' : 'Confirmar Corte Z y cerrar caja'}
+                  </button>
+                )}
+              </section>
+            )}
           </section>
         </div>
       )}

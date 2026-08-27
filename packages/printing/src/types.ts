@@ -1,4 +1,10 @@
-export const PRINT_JOB_TYPES = ['STATION_TICKET', 'PRECHECK', 'CUSTOMER_RECEIPT'] as const;
+export const PRINT_JOB_TYPES = [
+  'STATION_TICKET',
+  'PRECHECK',
+  'CUSTOMER_RECEIPT',
+  'X_REPORT',
+  'Z_REPORT',
+] as const;
 export type PrintJobType = (typeof PRINT_JOB_TYPES)[number];
 
 export const PRINT_JOB_STATUSES = [
@@ -85,13 +91,37 @@ export interface CustomerReceiptPayload extends BasePrintPayload {
   orderCreatedAt: string;
 }
 
-export type PrintJobPayload = StationTicketPayload | PrecheckPayload | CustomerReceiptPayload;
+export interface CashReportPrintPayload {
+  kind: 'X_REPORT' | 'Z_REPORT';
+  cashSessionId: string;
+  businessDate: string;
+  capturedAt: string;
+  openingFloat: PrintMoneySnapshot;
+  cashSales: PrintMoneySnapshot;
+  cardSales: PrintMoneySnapshot;
+  otherSales: PrintMoneySnapshot;
+  cashTips: PrintMoneySnapshot;
+  cardTips: PrintMoneySnapshot;
+  otherTips: PrintMoneySnapshot;
+  cashIn: PrintMoneySnapshot;
+  cashOut: PrintMoneySnapshot;
+  expectedCash: PrintMoneySnapshot;
+  countedCash: PrintMoneySnapshot | null;
+  difference: PrintMoneySnapshot | null;
+}
+
+export type PrintJobPayload =
+  | StationTicketPayload
+  | PrecheckPayload
+  | CustomerReceiptPayload
+  | CashReportPrintPayload;
 
 export interface PrintJob {
   printJobId: string;
   tenantId: string;
   locationId: string;
-  orderId: string;
+  orderId: string | null;
+  cashSessionId?: string | null;
   roundId: string | null;
   stationId: string | null;
   targetId: string | null;
