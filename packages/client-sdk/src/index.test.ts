@@ -212,4 +212,27 @@ describe('createEdgeClient', () => {
       }),
     );
   });
+
+  it('requests durable print jobs with an idempotency command', async () => {
+    const job = {
+      printJobId: '01991a00-0000-7000-8000-000000000901',
+      orderId: '01991a00-0000-7000-8000-000000000301',
+      roundId: null,
+      stationId: null,
+      targetId: '01991a00-0000-7000-8000-000000000902',
+      jobType: 'PRECHECK',
+      status: 'PENDING',
+      attempts: 0,
+      createdAt: '2026-08-26T12:00:00.000Z',
+      updatedAt: '2026-08-26T12:00:00.000Z',
+      lastError: null,
+    };
+    const fetchMock = vi.fn(async () => jsonResponse(job, 201));
+    const client = createEdgeClient({ fetch: fetchMock as EdgeFetch });
+    await client.requestPrecheck(job.orderId, { commandId: 'print-command' });
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/orders/${job.orderId}/precheck`,
+      expect.objectContaining({ method: 'POST', body: '{"commandId":"print-command"}' }),
+    );
+  });
 });

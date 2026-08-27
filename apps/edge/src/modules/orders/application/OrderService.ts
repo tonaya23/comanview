@@ -13,6 +13,7 @@ import { ObjectNotFoundError, ConcurrencyError } from '../../../app/errors.js';
 import type { EdgeOperationalContext } from '../../../app/operationalContext.js';
 import { AppError } from '../../../app/errorHandler.js';
 import { mapOrderToResponse } from './orderMapper.js';
+import type { PrintService } from '../../printing/application/PrintService.js';
 import {
   CreateOrderRequest,
   AddOrderItemRequest,
@@ -31,6 +32,7 @@ export class OrderService {
     private readonly orderRepo: OrderRepository,
     private readonly catalogRepo: CatalogRepository,
     private readonly context: EdgeOperationalContext,
+    private readonly printService: PrintService,
   ) {}
 
   async createOrder(request: CreateOrderRequest): Promise<OrderResponse> {
@@ -211,14 +213,27 @@ export class OrderService {
     const order = this.orderRepo.getOrderById(EntityId.fromString(orderId));
     if (!order) throw new ObjectNotFoundError(`Order ${orderId} not found`);
 
+    if (this.orderRepo.hasProcessedCommand(request.commandId)) {
+      const event = this.orderRepo.getProcessedCommandEvent(request.commandId);
+      if (event?.aggregateId === orderId && event.eventType === 'ROUND_SENT') {
+        return mapOrderToResponse(order);
+      }
+      throw new AppError(
+        'COMMAND_ID_CONFLICT',
+        409,
+        'commandId was already used for a different operation.',
+      );
+    }
+
     if (order.version !== request.expectedVersion) {
       throw new ConcurrencyError(
         `Expected version ${request.expectedVersion}, but got ${order.version}`,
       );
     }
 
-    order.sendDraftItems();
-    this.orderRepo.saveOrder(order, true);
+    const round = order.sendDraftItems(request.commandId);
+    const jobs = this.printService.createStationJobs(order, round);
+    this.orderRepo.saveOrder(order, true, request.commandId, jobs);
     return mapOrderToResponse(order);
   }
 

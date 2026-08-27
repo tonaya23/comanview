@@ -18,6 +18,7 @@ import {
 } from '@comanview/domain';
 import { ProductSnapshot, ModifierSnapshot } from '@comanview/domain';
 import { Money } from '@comanview/money';
+import { insertPrintJobs, type NewPrintJob } from './PrintJobRepository.js';
 
 type DB = BetterSQLite3Database<typeof schema>;
 
@@ -76,7 +77,12 @@ export class OrderRepository {
    * If emitEvents is true, domain events are appended to the event_log.
    * If commandId is provided, it records the command as processed for idempotency.
    */
-  saveOrder(order: Order, emitEvents: boolean = true, commandId?: string): void {
+  saveOrder(
+    order: Order,
+    emitEvents: boolean = true,
+    commandId?: string,
+    printJobs: ReadonlyArray<NewPrintJob> = [],
+  ): void {
     this.db.transaction((txDb) => {
       const db = txDb as unknown as DB;
 
@@ -298,6 +304,10 @@ export class OrderRepository {
             .run();
         }
       }
+
+      // Round state, Event Log, processed command and durable print jobs share
+      // this transaction so a committed send can never lose its enqueue step.
+      insertPrintJobs(db, printJobs);
     });
   }
 

@@ -10,6 +10,9 @@ const migrationPaths = [
 const specialInstructionsMigrationPath = fileURLToPath(
   new URL('../../../../migrations/edge/0002_order_item_special_instructions.sql', import.meta.url),
 );
+const printingMigrationPath = fileURLToPath(
+  new URL('../../../../migrations/edge/0003_printing.sql', import.meta.url),
+);
 const defaultDatabasePath = fileURLToPath(
   new URL('../../../../apps/edge/edge-dev.db', import.meta.url),
 );
@@ -29,6 +32,7 @@ export function prepareDevelopmentDatabase(targetPath = databasePath): void {
     if (!hasSpecialInstructions) {
       sqlite.exec(readFileSync(specialInstructionsMigrationPath, 'utf8'));
     }
+    sqlite.exec(readFileSync(printingMigrationPath, 'utf8'));
 
     const seed = sqlite.transaction(() => {
       const insertCategory = sqlite.prepare(
@@ -66,10 +70,24 @@ export function prepareDevelopmentDatabase(targetPath = databasePath): void {
         (product_id, modifier_option_id, price_delta_amount, price_delta_currency)
       VALUES (?, ?, ?, 'MXN')
     `);
+      const insertStation = sqlite.prepare(`
+        INSERT OR IGNORE INTO stations (id, tenant_id, location_id, name, active)
+        VALUES (?, ?, ?, ?, 1)
+      `);
+      const insertPrintTarget = sqlite.prepare(`
+        INSERT OR IGNORE INTO print_targets
+          (id, tenant_id, location_id, station_id, name, adapter_type, configuration_json, active)
+        VALUES (?, ?, ?, ?, ?, 'DEBUG', '{}', 1)
+      `);
+      const assignStation = sqlite.prepare('UPDATE products SET station_id = ? WHERE id = ?');
 
       const foodCategoryId = '01991a00-0000-7000-8000-000000000001';
       const drinksCategoryId = '01991a00-0000-7000-8000-000000000002';
       const taxProfileId = '01991a00-0000-7000-8000-000000000010';
+      const tenantId = '01991a00-0000-7000-8000-000000000301';
+      const locationId = '01991a00-0000-7000-8000-000000000302';
+      const kitchenStationId = '01991a00-0000-7000-8000-000000000501';
+      const barStationId = '01991a00-0000-7000-8000-000000000502';
 
       insertCategory.run(foodCategoryId, 'Alimentos');
       insertCategory.run(drinksCategoryId, 'Bebidas');
@@ -129,6 +147,40 @@ export function prepareDevelopmentDatabase(targetPath = databasePath): void {
       for (const [id, name, description, categoryId, amount, displayOrder] of products) {
         insertProduct.run(id, name, description, categoryId, taxProfileId, amount, displayOrder);
       }
+      insertStation.run(kitchenStationId, tenantId, locationId, 'COCINA');
+      insertStation.run(barStationId, tenantId, locationId, 'BARRA');
+      insertPrintTarget.run(
+        '01991a00-0000-7000-8000-000000000511',
+        tenantId,
+        locationId,
+        kitchenStationId,
+        'Cocina debug',
+      );
+      insertPrintTarget.run(
+        '01991a00-0000-7000-8000-000000000512',
+        tenantId,
+        locationId,
+        barStationId,
+        'Barra debug',
+      );
+      insertPrintTarget.run(
+        '01991a00-0000-7000-8000-000000000513',
+        tenantId,
+        locationId,
+        null,
+        'Caja debug',
+      );
+      for (const productId of [
+        '01991a00-0000-7000-8000-000000000101',
+        '01991a00-0000-7000-8000-000000000102',
+        '01991a00-0000-7000-8000-000000000103',
+      ])
+        assignStation.run(kitchenStationId, productId);
+      for (const productId of [
+        '01991a00-0000-7000-8000-000000000201',
+        '01991a00-0000-7000-8000-000000000202',
+      ])
+        assignStation.run(barStationId, productId);
 
       const hamburgerId = '01991a00-0000-7000-8000-000000000101';
       const donenessGroupId = '01991a00-0000-7000-8000-000000000401';

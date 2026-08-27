@@ -6,6 +6,7 @@ import type {
   OrderResponse,
   PaymentConfigResponse,
   PaymentMethod,
+  PrintJobResponse,
   ProductResponse,
   TipSelection,
 } from '@comanview/contracts';
@@ -58,6 +59,7 @@ export function App() {
   const [selectedModifierIds, setSelectedModifierIds] = useState<string[]>([]);
   const [modifierValidation, setModifierValidation] = useState<string | null>(null);
   const [configuredSpecialInstructions, setConfiguredSpecialInstructions] = useState('');
+  const [printJobs, setPrintJobs] = useState<PrintJobResponse[]>([]);
 
   const updateOrder = useCallback((next: OrderResponse) => {
     setOrder(next);
@@ -126,6 +128,20 @@ export function App() {
     const timer = window.setInterval(() => void check(), 5000);
     return () => window.clearInterval(timer);
   }, [refreshConnection, refreshOperationalState, restoreCurrentOrder]);
+
+  useEffect(() => {
+    if (connection !== 'CONNECTED') return;
+    const refresh = async () => {
+      try {
+        setPrintJobs(await edge.getRecentPrintJobs());
+      } catch {
+        // Printing is non-blocking; connectivity polling remains authoritative.
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 3000);
+    return () => window.clearInterval(timer);
+  }, [connection]);
 
   const visibleCategories = useMemo(() => getVisibleCategories(categories), [categories]);
   const visibleProducts = useMemo(
@@ -357,9 +373,31 @@ export function App() {
     if (!order) return;
     await mutate(
       'send-round',
-      () => edge.sendRound(order.id, { expectedVersion: order.version }),
-      `Ronda ${order.rounds.length + 1} enviada a Edge.`,
+      () =>
+        edge.sendRound(order.id, {
+          commandId: crypto.randomUUID(),
+          expectedVersion: order.version,
+        }),
+      `Ronda ${order.rounds.length + 1} enviada; comandas encoladas en Edge.`,
     );
+  }
+
+  async function requestPrint(kind: 'PRECHECK' | 'CUSTOMER_RECEIPT') {
+    if (!order) return;
+    setPendingAction(kind === 'PRECHECK' ? 'precheck' : 'receipt');
+    clearFeedback();
+    try {
+      const job =
+        kind === 'PRECHECK'
+          ? await edge.requestPrecheck(order.id, { commandId: crypto.randomUUID() })
+          : await edge.requestCustomerReceipt(order.id, { commandId: crypto.randomUUID() });
+      setPrintJobs(await edge.getRecentPrintJobs());
+      setNotice(`${kind === 'PRECHECK' ? 'Precuenta' : 'Recibo'} encolado (${job.status}).`);
+    } catch (problem) {
+      setError(getErrorMessage(problem));
+    } finally {
+      setPendingAction(null);
+    }
   }
 
   async function openCash(event: FormEvent) {
@@ -851,6 +889,14 @@ export function App() {
                     </button>
                     <button
                       type="button"
+                      className="secondary-order-button"
+                      disabled={order.items.length === 0 || !canOperateOrder}
+                      onClick={() => void requestPrint('PRECHECK')}
+                    >
+                      {pendingAction === 'precheck' ? 'Encolando…' : 'Precuenta'}
+                    </button>
+                    <button
+                      type="button"
                       className="payment-button"
                       disabled={
                         order.balanceDue.amount === 0 ||
@@ -882,7 +928,17 @@ export function App() {
                   </div>
                 )}
                 {order.status === 'CLOSED' && (
-                  <div className="closed-callout">✓ Venta cerrada y balanceada</div>
+                  <>
+                    <div className="closed-callout">✓ Venta cerrada y balanceada</div>
+                    <button
+                      type="button"
+                      className="secondary-order-button receipt-button"
+                      disabled={isBusy || connection !== 'CONNECTED'}
+                      onClick={() => void requestPrint('CUSTOMER_RECEIPT')}
+                    >
+                      {pendingAction === 'receipt' ? 'Encolando…' : 'Generar recibo'}
+                    </button>
+                  </>
                 )}
                 {!cashSession && order.status === 'OPEN' && (
                   <button
@@ -898,6 +954,28 @@ export function App() {
           )}
         </aside>
       </main>
+
+      {printJobs.some((job) => job.status === 'FAILED' || job.status === 'UNKNOWN') && (
+        <div className="print-alert" role="status">
+          Hay impresiones pendientes de atención. La venta continúa operativa.
+        </div>
+      )}
+      {import.meta.env.DEV && printJobs.length > 0 && (
+        <details className="print-debug">
+          <summary>Cola de impresión · {printJobs.length} recientes</summary>
+          {printJobs.slice(0, 8).map((job) => (
+            <div key={job.printJobId}>
+              <span>
+                {job.jobType}
+                {job.stationId ? ` · ${job.stationId.slice(-4)}` : ''}
+              </span>
+              <strong>
+                {job.status} · intento {job.attempts}
+              </strong>
+            </div>
+          ))}
+        </details>
+      )}
 
       {configuredProduct && (
         <div className="modal-backdrop">

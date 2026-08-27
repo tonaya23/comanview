@@ -112,6 +112,9 @@ export function formatMoney(amount: number, currency: string): string {
 }
 
 const errorMessages: Record<string, string> = {
+  PRECHECK_REQUIRES_OPEN_ORDER:
+    'La precuenta solo está disponible mientras la venta sigue abierta.',
+  RECEIPT_REQUIRES_CLOSED_ORDER: 'Cierra la venta antes de generar el recibo.',
   EDGE_UNREACHABLE: 'Se perdió la conexión local con Edge. La operación no está confirmada.',
   PRODUCT_UNAVAILABLE:
     'Este producto ya no está disponible. Actualiza el catálogo e intenta de nuevo.',

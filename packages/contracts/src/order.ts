@@ -83,6 +83,7 @@ export const AddOrderItemRequestSchema = z.object({
 export type AddOrderItemRequest = z.infer<typeof AddOrderItemRequestSchema>;
 
 export const SendRoundRequestSchema = z.object({
+  commandId: z.string().min(1),
   expectedVersion: z.number().int(),
 });
 export type SendRoundRequest = z.infer<typeof SendRoundRequestSchema>;

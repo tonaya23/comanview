@@ -40,6 +40,25 @@ describe('development catalog seed', () => {
           { name: 'Extras', display_order: 20 },
           { name: 'Preparación', display_order: 30 },
         ]);
+
+        const routing = sqlite
+          .prepare(
+            `
+          SELECT p.name AS product_name, s.name AS station_name
+          FROM products p LEFT JOIN stations s ON s.id = p.station_id
+          WHERE p.name IN ('Hamburguesa clásica', 'Limonada', 'Agua mineral')
+          ORDER BY p.name
+        `,
+          )
+          .all();
+        expect(routing).toEqual([
+          { product_name: 'Agua mineral', station_name: null },
+          { product_name: 'Hamburguesa clásica', station_name: 'COCINA' },
+          { product_name: 'Limonada', station_name: 'BARRA' },
+        ]);
+        expect(sqlite.prepare('SELECT COUNT(*) AS count FROM print_targets').get()).toEqual({
+          count: 3,
+        });
       } finally {
         sqlite.close();
       }

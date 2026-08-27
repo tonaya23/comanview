@@ -19,6 +19,7 @@ describe('Edge API Integration Tests', () => {
       '0000_initial.sql',
       '0001_payments_cash.sql',
       '0002_order_item_special_instructions.sql',
+      '0003_printing.sql',
     ]) {
       sqlite.exec(
         readFileSync(path.resolve(__dirname, `../../../../migrations/edge/${migration}`), 'utf-8'),
@@ -232,6 +233,7 @@ describe('Edge API Integration Tests', () => {
       method: 'POST',
       url: `/orders/${orderId}/rounds`,
       payload: {
+        commandId: 'c8888888-8888-4888-8888-888888888888',
         expectedVersion: orderVersion,
       },
     });
@@ -548,7 +550,10 @@ describe('Edge API Integration Tests', () => {
     const sentDraft = await app.inject({
       method: 'POST',
       url: `/orders/${draftOrder.json().id}/rounds`,
-      payload: { expectedVersion: persistedDraft.json().version },
+      payload: {
+        commandId: 'c8888888-8888-4888-8888-888888888889',
+        expectedVersion: persistedDraft.json().version,
+      },
     });
     const closeAfterSend = await app.inject({
       method: 'POST',
@@ -971,7 +976,10 @@ describe('Edge API Integration Tests', () => {
     const sent = await app.inject({
       method: 'POST',
       url: `/orders/${created.json().id}/rounds`,
-      payload: { expectedVersion: persisted.json().version },
+      payload: {
+        commandId: 'c8888888-8888-4888-8888-888888888890',
+        expectedVersion: persisted.json().version,
+      },
     });
     expect(sent.statusCode).toBe(200);
     expect(sent.json().items[0].status).toBe('SENT');

@@ -7,6 +7,7 @@ import {
   CashSessionSchema,
   CurrentCashSessionSchema,
   PaymentConfigSchema,
+  PrintJobSchema,
   type AddOrderItemRequest,
   type CategoryResponse,
   type CreateOrderRequest,
@@ -24,6 +25,8 @@ import {
   type CloseOrderRequest,
   type UpdateOrderItemSpecialInstructionsRequest,
   type UpdateDraftOrderItemConfigurationRequest,
+  type PrintJobResponse,
+  type RequestPrintJob,
 } from '@comanview/contracts';
 
 interface RuntimeSchema<T> {
@@ -96,6 +99,9 @@ export interface EdgeClient {
     request: VoidPaymentRequest,
   ): Promise<OrderResponse>;
   closeOrder(orderId: string, request: CloseOrderRequest): Promise<OrderResponse>;
+  requestPrecheck(orderId: string, request: RequestPrintJob): Promise<PrintJobResponse>;
+  requestCustomerReceipt(orderId: string, request: RequestPrintJob): Promise<PrintJobResponse>;
+  getRecentPrintJobs(): Promise<PrintJobResponse[]>;
 }
 
 export function createEdgeClient(options: EdgeClientOptions = {}): EdgeClient {
@@ -226,5 +232,16 @@ export function createEdgeClient(options: EdgeClientOptions = {}): EdgeClient {
         method: 'POST',
         body: JSON.stringify(body),
       }),
+    requestPrecheck: (orderId, body) =>
+      request(`/orders/${orderId}/precheck`, PrintJobSchema, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    requestCustomerReceipt: (orderId, body) =>
+      request(`/orders/${orderId}/receipt`, PrintJobSchema, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    getRecentPrintJobs: () => request('/printing/jobs', PrintJobSchema.array()),
   };
 }

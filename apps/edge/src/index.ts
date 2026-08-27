@@ -18,7 +18,13 @@ import { fileURLToPath } from 'node:url';
 import { serializerCompiler, validatorCompiler, ZodTypeProvider } from 'fastify-type-provider-zod';
 import { initDatabase, closeDatabase } from './infrastructure/database.js';
 import { errorHandler } from './app/errorHandler.js';
-import { CashRepository, CatalogRepository, OrderRepository } from '@comanview/database';
+import {
+  CashRepository,
+  CatalogRepository,
+  OrderRepository,
+  PrintJobRepository,
+} from '@comanview/database';
+import { DebugPrinterAdapter, PrintWorker, type PrinterAdapter } from '@comanview/printing';
 import { CatalogService } from './modules/catalog/application/CatalogService.js';
 import { OrderService } from './modules/orders/application/OrderService.js';
 import { catalogRoutes } from './modules/catalog/http/routes.js';
@@ -29,8 +35,16 @@ import { PaymentService } from './modules/payments/application/PaymentService.js
 import { paymentRoutes } from './modules/payments/http/routes.js';
 import { defaultOperationalContext } from './app/operationalContext.js';
 import { HealthResponseSchema } from '@comanview/contracts';
+import { PrintService } from './modules/printing/application/PrintService.js';
+import { printRoutes } from './modules/printing/http/routes.js';
 
-export async function buildApp(dbPath: string = ':memory:') {
+export interface BuildAppOptions {
+  printerAdapter?: PrinterAdapter;
+  startPrintWorker?: boolean;
+  debugPrintDirectory?: string;
+}
+
+export async function buildApp(dbPath: string = ':memory:', options: BuildAppOptions = {}) {
   const app = fastify({
     logger: true,
     logController: new LogController({
@@ -49,19 +63,41 @@ export async function buildApp(dbPath: string = ':memory:') {
   const catalogRepo = new CatalogRepository(db);
   const orderRepo = new OrderRepository(db);
   const cashRepo = new CashRepository(db);
+  const printRepo = new PrintJobRepository(db);
 
   // Setup Services
   const catalogService = new CatalogService(catalogRepo);
-  const orderService = new OrderService(orderRepo, catalogRepo, defaultOperationalContext);
+  const printService = new PrintService(printRepo, orderRepo);
+  const orderService = new OrderService(
+    orderRepo,
+    catalogRepo,
+    defaultOperationalContext,
+    printService,
+  );
   const cashService = new CashService(cashRepo, defaultOperationalContext);
   const paymentService = new PaymentService(orderRepo, cashRepo, defaultOperationalContext);
   cashService.ensureDefaultRegister();
+  const failingTargets = new Set(
+    (process.env['COMANVIEW_DEBUG_PRINTER_FAIL_TARGETS'] ?? '').split(',').filter(Boolean),
+  );
+  const printerAdapter =
+    options.printerAdapter ??
+    new DebugPrinterAdapter({
+      outputDirectory:
+        options.debugPrintDirectory ??
+        process.env['COMANVIEW_DEBUG_PRINT_DIR'] ??
+        resolve('.comanview/print-debug'),
+      failingTargetIds: failingTargets,
+    });
+  const printWorker = new PrintWorker(printRepo, printerAdapter);
+  if (options.startPrintWorker !== false) printWorker.start();
 
   // Setup Routes
   app.register(catalogRoutes(catalogService), { prefix: '/catalog' });
   app.register(orderRoutes(orderService), { prefix: '/orders' });
   app.register(cashRoutes(cashService), { prefix: '/cash-sessions' });
   app.register(paymentRoutes(paymentService));
+  app.register(printRoutes(printService));
 
   // Health route
   app.get(
@@ -99,6 +135,7 @@ export async function buildApp(dbPath: string = ':memory:') {
   );
 
   app.addHook('onClose', async () => {
+    printWorker.stop();
     closeDatabase();
   });
 
@@ -109,7 +146,7 @@ export async function buildApp(dbPath: string = ':memory:') {
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
   const start = async () => {
     // Development default path for testing Edge
-    const app = await buildApp('./edge-dev.db');
+    const app = await buildApp(process.env['COMANVIEW_EDGE_DB_PATH'] ?? './edge-dev.db');
     try {
       await app.listen({ port: 3000, host: '0.0.0.0' });
     } catch (err) {

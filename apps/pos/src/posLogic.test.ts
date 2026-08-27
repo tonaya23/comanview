@@ -90,6 +90,12 @@ describe('POS presentation behavior', () => {
     );
   });
 
+  it('explains receipt lifecycle errors in operational language', () => {
+    expect(
+      getErrorMessage(new EdgeClientError('technical', 'RECEIPT_REQUIRES_CLOSED_ORDER', 409)),
+    ).toBe('Cierra la venta antes de generar el recibo.');
+  });
+
   it('parses money input with exact minor units and rejects excess decimals', () => {
     expect(parseMoneyInputToMinorUnits('10.50')).toBe(1050);
     expect(parseMoneyInputToMinorUnits('10,5')).toBe(1050);

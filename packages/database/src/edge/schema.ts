@@ -108,6 +108,14 @@ export const modifierPriceOverrides = sqliteTable(
   }),
 );
 
+export const stations = sqliteTable('stations', {
+  id: text('id').primaryKey(),
+  tenantId: text('tenant_id').notNull(),
+  locationId: text('location_id').notNull(),
+  name: text('name').notNull(),
+  active: integer('active', { mode: 'boolean' }).notNull().default(true),
+});
+
 // ─── ORDERS ─────────────────────────────────────────────────────────────────
 
 export const orders = sqliteTable('orders', {
@@ -174,6 +182,47 @@ export const orderItemModifiers = sqliteTable('order_item_modifiers', {
   priceDeltaAmount: integer('price_delta_amount').notNull(),
   priceDeltaCurrency: text('price_delta_currency').notNull(),
 });
+
+// ─── PRINTING ────────────────────────────────────────────────────────────────
+
+export const printTargets = sqliteTable('print_targets', {
+  id: text('id').primaryKey(),
+  tenantId: text('tenant_id').notNull(),
+  locationId: text('location_id').notNull(),
+  stationId: text('station_id').references(() => stations.id),
+  name: text('name').notNull(),
+  adapterType: text('adapter_type').notNull(),
+  configurationJson: text('configuration_json').notNull().default('{}'),
+  active: integer('active', { mode: 'boolean' }).notNull().default(true),
+});
+
+export const printJobs = sqliteTable(
+  'print_jobs',
+  {
+    id: text('id').primaryKey(),
+    tenantId: text('tenant_id').notNull(),
+    locationId: text('location_id').notNull(),
+    orderId: text('order_id')
+      .notNull()
+      .references(() => orders.id),
+    roundId: text('round_id').references(() => rounds.id),
+    stationId: text('station_id'),
+    targetId: text('target_id').references(() => printTargets.id),
+    jobType: text('job_type').notNull(),
+    payload: text('payload').notNull(),
+    status: text('status').notNull(),
+    attempts: integer('attempts').notNull().default(0),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+    nextAttemptAt: integer('next_attempt_at', { mode: 'timestamp_ms' }),
+    lastError: text('last_error'),
+    parentJobId: text('parent_job_id'),
+    dedupeKey: text('dedupe_key').notNull(),
+  },
+  (table) => ({
+    dedupe: uniqueIndex('unq_print_job_dedupe').on(table.dedupeKey),
+  }),
+);
 
 // ─── CASH ───────────────────────────────────────────────────────────────────
 
