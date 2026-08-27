@@ -13,6 +13,11 @@ export interface AuthenticatedActor {
 
 export interface AuthorizedOperation {
   actor: AuthenticatedActor;
+  authorizedBy: {
+    userId: string;
+    displayName: string;
+    roles: string[];
+  } | null;
   permission: Permission;
   requestedAt: Date;
 }

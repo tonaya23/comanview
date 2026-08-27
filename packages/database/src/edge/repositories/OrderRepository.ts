@@ -19,6 +19,7 @@ import {
 import { ProductSnapshot, ModifierSnapshot } from '@comanview/domain';
 import { Money } from '@comanview/money';
 import { insertPrintJobs, type NewPrintJob } from './PrintJobRepository.js';
+import { insertAuditEntry, type NewAuditEntry } from './AuditRepository.js';
 
 type DB = BetterSQLite3Database<typeof schema>;
 
@@ -82,6 +83,7 @@ export class OrderRepository {
     emitEvents: boolean = true,
     commandId?: string,
     printJobs: ReadonlyArray<NewPrintJob> = [],
+    auditEntries: ReadonlyArray<NewAuditEntry> = [],
   ): void {
     this.db.transaction((txDb) => {
       const db = txDb as unknown as DB;
@@ -308,6 +310,7 @@ export class OrderRepository {
       // Round state, Event Log, processed command and durable print jobs share
       // this transaction so a committed send can never lose its enqueue step.
       insertPrintJobs(db, printJobs);
+      for (const auditEntry of auditEntries) insertAuditEntry(db, auditEntry);
     });
   }
 

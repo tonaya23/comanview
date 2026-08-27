@@ -103,6 +103,38 @@ export const loginAttempts = sqliteTable('login_attempts', {
   updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
 });
 
+export const auditLog = sqliteTable(
+  'audit_log',
+  {
+    auditId: text('audit_id').primaryKey(),
+    occurredAt: integer('occurred_at', { mode: 'timestamp_ms' }).notNull(),
+    tenantId: text('tenant_id').notNull(),
+    locationId: text('location_id').notNull(),
+    deviceId: text('device_id').notNull(),
+    sessionId: text('session_id').notNull(),
+    actorUserId: text('actor_user_id').notNull(),
+    actorRole: text('actor_role'),
+    authorizedByUserId: text('authorized_by_user_id'),
+    authorizedByRole: text('authorized_by_role'),
+    action: text('action').notNull(),
+    entityType: text('entity_type').notNull(),
+    entityId: text('entity_id').notNull(),
+    outcome: text('outcome').notNull(),
+    reason: text('reason').notNull(),
+    commandId: text('command_id'),
+    beforeJson: text('before_json'),
+    afterJson: text('after_json'),
+    amountAffected: integer('amount_affected'),
+    currency: text('currency'),
+    eventId: text('event_id'),
+    previousHash: text('previous_hash'),
+    entryHash: text('entry_hash').notNull().unique(),
+  },
+  (table) => ({
+    commandAction: uniqueIndex('unq_audit_command_action').on(table.commandId, table.action),
+  }),
+);
+
 // ─── CATALOG ────────────────────────────────────────────────────────────────
 
 export const categories = sqliteTable('categories', {

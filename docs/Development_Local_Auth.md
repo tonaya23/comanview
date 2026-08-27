@@ -9,6 +9,7 @@ The preparation command also refuses to run when `NODE_ENV=production`.
 | ----------------- | ------- | ----------------------- |
 | Dueño desarrollo  | OWNER   | `1111`                  |
 | Cajero desarrollo | CASHIER | `2222`                  |
+| Gerente desarrollo | MANAGER | `5555`                 |
 | Mesero desarrollo | WAITER  | `3333`                  |
 | Cocina desarrollo | KITCHEN | `4444`                  |
 
@@ -18,6 +19,7 @@ The defaults can be replaced before preparing the development database with:
 
 - `COMANVIEW_DEV_OWNER_PIN`
 - `COMANVIEW_DEV_CASHIER_PIN`
+- `COMANVIEW_DEV_MANAGER_PIN`
 - `COMANVIEW_DEV_WAITER_PIN`
 - `COMANVIEW_DEV_KITCHEN_PIN`
 - `COMANVIEW_DEV_DISABLED_PIN`

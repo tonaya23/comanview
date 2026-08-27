@@ -79,5 +79,5 @@ export function operationFrom(
   request: FastifyRequest,
   permission: Permission,
 ): AuthorizedOperation {
-  return { actor: actorFrom(request), permission, requestedAt: new Date() };
+  return { actor: actorFrom(request), authorizedBy: null, permission, requestedAt: new Date() };
 }

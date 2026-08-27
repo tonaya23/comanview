@@ -19,6 +19,7 @@ export const PERMISSIONS = {
   PRINT_JOBS_VIEW: 'PRINT_JOBS_VIEW',
   KDS_VIEW: 'KDS_VIEW',
   KDS_UPDATE_PREPARATION: 'KDS_UPDATE_PREPARATION',
+  AUDIT_VIEW: 'AUDIT_VIEW',
 } as const;
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];

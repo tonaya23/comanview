@@ -149,6 +149,12 @@ const errorMessages: Record<string, string> = {
   AUTHENTICATION_REQUIRED: 'La sesión local ya no está disponible. Inicia sesión nuevamente.',
   AUTH_SESSION_INVALID: 'La sesión local expiró o fue revocada. Inicia sesión nuevamente.',
   PERMISSION_DENIED: 'Tu usuario no tiene permiso para realizar esta operación.',
+  OVERRIDE_REQUIRED: 'Esta operación requiere autorización de Manager u Owner.',
+  OVERRIDE_PIN_INVALID: 'El PIN de autorización no es válido.',
+  OVERRIDE_USER_INACTIVE: 'El usuario autorizador no está activo.',
+  OVERRIDE_PERMISSION_DENIED: 'El usuario indicado no puede autorizar esta operación.',
+  REASON_REQUIRED: 'Indica un motivo para realizar esta operación.',
+  AUDIT_PERSISTENCE_FAILED: 'No se pudo guardar la auditoría; la operación no fue aplicada.',
 };
 
 export function canEditDraftItem(status: 'DRAFT' | 'SENT'): boolean {

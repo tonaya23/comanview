@@ -26,6 +26,7 @@ import {
   PrintJobRepository,
   KdsRepository,
   AuthRepository,
+  AuditRepository,
 } from '@comanview/database';
 import { DebugPrinterAdapter, PrintWorker, type PrinterAdapter } from '@comanview/printing';
 import { CatalogService } from './modules/catalog/application/CatalogService.js';
@@ -46,6 +47,8 @@ import { kdsRoutes } from './modules/kds/http/routes.js';
 import { AuthService } from './modules/auth/application/AuthService.js';
 import { AuthGuard, type AuthMode } from './modules/auth/http/AuthGuard.js';
 import { authRoutes } from './modules/auth/http/routes.js';
+import { AuditService } from './modules/audit/application/AuditService.js';
+import { auditRoutes } from './modules/audit/http/routes.js';
 
 export interface BuildAppOptions {
   printerAdapter?: PrinterAdapter;
@@ -77,6 +80,7 @@ export async function buildApp(dbPath: string = ':memory:', options: BuildAppOpt
   const printRepo = new PrintJobRepository(db);
   const kdsRepo = new KdsRepository(db);
   const authRepo = new AuthRepository(db);
+  const auditRepo = new AuditRepository(db);
 
   // Setup Services
   const catalogService = new CatalogService(catalogRepo);
@@ -91,13 +95,19 @@ export async function buildApp(dbPath: string = ':memory:', options: BuildAppOpt
     kdsService,
   );
   const cashService = new CashService(cashRepo, defaultOperationalContext);
-  const paymentService = new PaymentService(orderRepo, cashRepo, defaultOperationalContext);
+  const paymentService = new PaymentService(
+    orderRepo,
+    cashRepo,
+    auditRepo,
+    defaultOperationalContext,
+  );
   const authService = new AuthService(
     authRepo,
     defaultOperationalContext.tenantId,
     defaultOperationalContext.locationId,
   );
   const authGuard = new AuthGuard(authService, options.authMode ?? 'enforced');
+  const auditService = new AuditService(auditRepo);
   cashService.ensureDefaultRegister();
   const failingTargets = new Set(
     (process.env['COMANVIEW_DEBUG_PRINTER_FAIL_TARGETS'] ?? '').split(',').filter(Boolean),
@@ -119,7 +129,8 @@ export async function buildApp(dbPath: string = ':memory:', options: BuildAppOpt
   app.register(catalogRoutes(catalogService, authGuard), { prefix: '/catalog' });
   app.register(orderRoutes(orderService, authGuard), { prefix: '/orders' });
   app.register(cashRoutes(cashService, authGuard), { prefix: '/cash-sessions' });
-  app.register(paymentRoutes(paymentService, authGuard));
+  app.register(paymentRoutes(paymentService, authGuard, authService));
+  app.register(auditRoutes(auditService, authGuard));
   app.register(printRoutes(printService, authGuard));
   app.register(kdsRoutes(kdsService, realtimeHub, authGuard));
 

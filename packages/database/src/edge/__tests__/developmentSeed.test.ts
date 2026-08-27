@@ -75,14 +75,27 @@ describe('development catalog seed', () => {
           count: 3,
         });
         expect(sqlite.prepare('SELECT COUNT(*) AS count FROM roles').get()).toEqual({ count: 5 });
-        expect(sqlite.prepare('SELECT COUNT(*) AS count FROM users').get()).toEqual({ count: 5 });
+        expect(sqlite.prepare('SELECT COUNT(*) AS count FROM users').get()).toEqual({ count: 6 });
         expect(sqlite.prepare('SELECT COUNT(*) AS count FROM devices').get()).toEqual({ count: 2 });
+        expect(
+          sqlite
+            .prepare(
+              `SELECT r.name
+               FROM role_permissions rp
+               JOIN roles r ON r.id = rp.role_id
+               WHERE rp.permission_code = 'AUDIT_VIEW'
+               ORDER BY r.name`,
+            )
+            .all(),
+        ).toEqual([{ name: 'MANAGER' }, { name: 'OWNER' }]);
         const credentials = sqlite.prepare('SELECT pin_hash AS pinHash FROM users').all() as Array<{
           pinHash: string;
         }>;
         expect(credentials.every(({ pinHash }) => pinHash.startsWith('scrypt-v1$'))).toBe(true);
         expect(
-          credentials.some(({ pinHash }) => ['1111', '2222', '3333', '4444'].includes(pinHash)),
+          credentials.some(({ pinHash }) =>
+            ['1111', '2222', '3333', '4444', '5555'].includes(pinHash),
+          ),
         ).toBe(false);
       } finally {
         sqlite.close();

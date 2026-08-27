@@ -1,4 +1,10 @@
-import { CashRepository, OrderRepository } from '@comanview/database';
+import {
+  AuditPersistenceError,
+  AuditRepository,
+  CashRepository,
+  OrderRepository,
+  type NewAuditEntry,
+} from '@comanview/database';
 import { calculateTip, EntityId } from '@comanview/domain';
 import { Money } from '@comanview/money';
 import type {
@@ -17,6 +23,7 @@ export class PaymentService {
   constructor(
     private readonly orderRepo: OrderRepository,
     private readonly cashRepo: CashRepository,
+    private readonly auditRepo: AuditRepository,
     private readonly context: EdgeOperationalContext,
   ) {}
 
@@ -128,17 +135,23 @@ export class PaymentService {
     request: VoidPaymentRequest,
     operation: AuthorizedOperation,
   ): OrderResponse {
-    void operation;
+    const reason = request.reason?.trim();
+    if (!reason) throw new AppError('REASON_REQUIRED', 400, 'A reason is required.');
     const order = this.orderRepo.getOrderById(EntityId.fromString(orderId));
     if (!order) throw new ObjectNotFoundError(`Order ${orderId} not found`);
 
     if (this.orderRepo.hasProcessedCommand(request.commandId)) {
       const event = this.orderRepo.getProcessedCommandEvent(request.commandId);
       const payment = order.payments.find((candidate) => candidate.id.toString() === paymentId);
+      const audit = this.auditRepo.getByCommand(request.commandId, 'PAYMENT_VOIDED');
       if (
         event?.aggregateId === orderId &&
         event.eventType === 'PAYMENT_VOIDED' &&
-        payment?.status === 'VOIDED'
+        payment?.status === 'VOIDED' &&
+        audit?.entityId === paymentId &&
+        audit.reason === reason &&
+        audit.actorUserId === operation.actor.userId &&
+        audit.authorizedByUserId === (operation.authorizedBy?.userId ?? null)
       ) {
         return mapOrderToResponse(order);
       }
@@ -150,8 +163,51 @@ export class PaymentService {
       );
     }
 
+    const payment = order.payments.find((candidate) => candidate.id.toString() === paymentId);
+    if (!payment) throw new ObjectNotFoundError(`Payment ${paymentId} not found`);
+    const before = { status: payment.status };
     order.voidPayment(EntityId.fromString(paymentId), request.commandId);
-    this.orderRepo.saveOrder(order, true, request.commandId);
+    const event = order.events.find(
+      (candidate) =>
+        candidate.eventType === 'PAYMENT_VOIDED' &&
+        'commandId' in candidate &&
+        candidate.commandId === request.commandId,
+    );
+    const audit: NewAuditEntry = {
+      auditId: EntityId.generate().toString(),
+      occurredAt: operation.requestedAt,
+      tenantId: operation.actor.tenantId,
+      locationId: operation.actor.locationId,
+      deviceId: operation.actor.deviceId,
+      sessionId: operation.actor.sessionId,
+      actorUserId: operation.actor.userId,
+      actorRole: operation.actor.roles[0] ?? null,
+      authorizedByUserId: operation.authorizedBy?.userId ?? null,
+      authorizedByRole: operation.authorizedBy?.roles[0] ?? null,
+      action: 'PAYMENT_VOIDED',
+      entityType: 'PAYMENT',
+      entityId: paymentId,
+      outcome: 'SUCCESS',
+      reason,
+      commandId: request.commandId,
+      before,
+      after: { status: 'VOIDED' },
+      amountAffected: payment.amountApplied.amount,
+      currency: payment.amountApplied.currency,
+      eventId: event?.eventId.toString() ?? null,
+    };
+    try {
+      this.orderRepo.saveOrder(order, true, request.commandId, [], [audit]);
+    } catch (error) {
+      if (error instanceof AuditPersistenceError) {
+        throw new AppError(
+          'AUDIT_PERSISTENCE_FAILED',
+          500,
+          'The required audit record could not be persisted.',
+        );
+      }
+      throw error;
+    }
     return mapOrderToResponse(order);
   }
 

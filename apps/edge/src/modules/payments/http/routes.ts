@@ -11,10 +11,13 @@ import { PaymentService } from '../application/PaymentService.js';
 import { PERMISSIONS } from '@comanview/auth';
 import type { AuthGuard } from '../../auth/http/AuthGuard.js';
 import { operationFrom } from '../../auth/http/AuthGuard.js';
+import { actorFrom } from '../../auth/http/AuthGuard.js';
+import type { AuthService } from '../../auth/application/AuthService.js';
 
 export function paymentRoutes(
   paymentService: PaymentService,
   auth: AuthGuard,
+  authService: AuthService,
 ): FastifyPluginAsyncZod {
   return async (fastify) => {
     fastify.get(
@@ -50,7 +53,7 @@ export function paymentRoutes(
     fastify.post(
       '/orders/:id/payments/:paymentId/void',
       {
-        preHandler: auth.requirePermission(PERMISSIONS.PAYMENT_VOID),
+        preHandler: auth.authenticated,
         schema: {
           body: VoidPaymentRequestSchema,
           response: { 200: OrderSchema },
@@ -58,12 +61,18 @@ export function paymentRoutes(
       },
       async (request, reply) => {
         const { id, paymentId } = request.params as { id: string; paymentId: string };
+        const body = request.body as VoidPaymentRequest;
+        const operation = await authService.authorizeSingleOperation(
+          actorFrom(request),
+          PERMISSIONS.PAYMENT_VOID,
+          body.overridePin,
+        );
         reply.send(
           paymentService.voidPayment(
             id,
             paymentId,
-            request.body as VoidPaymentRequest,
-            operationFrom(request, PERMISSIONS.PAYMENT_VOID),
+            body,
+            operation,
           ),
         );
       },

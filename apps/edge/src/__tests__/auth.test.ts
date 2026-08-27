@@ -155,12 +155,6 @@ describe('offline local Auth and RBAC', () => {
       }),
       app.inject({
         method: 'POST',
-        url: `/orders/${order.json().id}/payments/${order.json().id}/void`,
-        headers: authorized(waiterToken),
-        payload: { commandId: 'auth-denied-void', expectedVersion: order.json().version },
-      }),
-      app.inject({
-        method: 'POST',
         url: `/orders/${order.json().id}/close`,
         headers: authorized(waiterToken),
         payload: { commandId: 'auth-denied-close', expectedVersion: order.json().version },
@@ -182,6 +176,18 @@ describe('offline local Auth and RBAC', () => {
       expect(response.statusCode).toBe(403);
       expect(response.json().error).toBe('PERMISSION_DENIED');
     }
+    const overrideRequired = await app.inject({
+      method: 'POST',
+      url: `/orders/${order.json().id}/payments/${order.json().id}/void`,
+      headers: authorized(waiterToken),
+      payload: {
+        commandId: 'auth-denied-void',
+        expectedVersion: order.json().version,
+        reason: 'Prueba de autorización',
+      },
+    });
+    expect(overrideRequired.statusCode).toBe(403);
+    expect(overrideRequired.json().error).toBe('OVERRIDE_REQUIRED');
   });
 
   it('allows authorized cashier and kitchen operations while Edge remains fully local', async () => {
@@ -293,7 +299,11 @@ describe('offline local Auth and RBAC', () => {
       method: 'POST',
       url: `/orders/${voidOrder.json().id}/payments/${partialPayment.json().payments[0].id}/void`,
       headers: authorized(ownerToken),
-      payload: { commandId: 'auth-payment-void', expectedVersion: partialPayment.json().version },
+      payload: {
+        commandId: 'auth-payment-void',
+        expectedVersion: partialPayment.json().version,
+        reason: 'Pago registrado por error',
+      },
     });
     expect(voided.statusCode).toBe(200);
     expect(voided.json().payments[0].status).toBe('VOIDED');

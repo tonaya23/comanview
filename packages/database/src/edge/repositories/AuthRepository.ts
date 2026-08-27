@@ -59,6 +59,11 @@ export interface NewAuthSession {
   expiresAt: Date;
 }
 
+export interface LocalUserAuthorization extends LocalUserCredential {
+  roles: string[];
+  permissions: Permission[];
+}
+
 export class AuthRepository {
   constructor(private readonly db: DB) {}
 
@@ -68,6 +73,24 @@ export class AuthRepository {
       .from(schema.users)
       .where(and(eq(schema.users.tenantId, tenantId), eq(schema.users.locationId, locationId)))
       .all() as LocalUserCredential[];
+  }
+
+  getUserAuthorization(user: LocalUserCredential): LocalUserAuthorization {
+    const roles = this.db
+      .select({ role: schema.roles.name })
+      .from(schema.userRoles)
+      .innerJoin(schema.roles, eq(schema.userRoles.roleId, schema.roles.id))
+      .where(eq(schema.userRoles.userId, user.id))
+      .all()
+      .map(({ role }) => role);
+    const permissions = this.db
+      .select({ permission: schema.rolePermissions.permissionCode })
+      .from(schema.userRoles)
+      .innerJoin(schema.rolePermissions, eq(schema.userRoles.roleId, schema.rolePermissions.roleId))
+      .where(eq(schema.userRoles.userId, user.id))
+      .all()
+      .map(({ permission }) => permission as Permission);
+    return { ...user, roles, permissions: [...new Set(permissions)] };
   }
 
   getDevice(id: string, tenantId: string, locationId: string): LocalDevice | null {

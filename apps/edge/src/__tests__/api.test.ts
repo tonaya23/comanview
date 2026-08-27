@@ -21,6 +21,8 @@ describe('Edge API Integration Tests', () => {
       '0002_order_item_special_instructions.sql',
       '0003_printing.sql',
       '0004_kds.sql',
+      '0005_local_auth.sql',
+      '0006_audit_log.sql',
     ]) {
       sqlite.exec(
         readFileSync(path.resolve(__dirname, `../../../../migrations/edge/${migration}`), 'utf-8'),
@@ -448,7 +450,11 @@ describe('Edge API Integration Tests', () => {
     const voided = await app.inject({
       method: 'POST',
       url: `/orders/${orderId}/payments/${body.payments[1].id}/void`,
-      payload: { commandId: 'void-card-administrative', expectedVersion: orderVersion },
+      payload: {
+        commandId: 'void-card-administrative',
+        expectedVersion: orderVersion,
+        reason: 'Datáfono rechazó la operación',
+      },
     });
     expect(voided.statusCode).toBe(200);
     expect(voided.json().payments[1].status).toBe('VOIDED');

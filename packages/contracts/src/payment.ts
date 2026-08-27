@@ -50,6 +50,8 @@ export type CreatePaymentRequest = z.infer<typeof CreatePaymentRequestSchema>;
 export const VoidPaymentRequestSchema = z.object({
   commandId: z.string().min(1),
   expectedVersion: z.number().int().positive(),
+  reason: z.string().max(240).optional(),
+  overridePin: z.string().regex(/^\d{4,12}$/).optional(),
 });
 export type VoidPaymentRequest = z.infer<typeof VoidPaymentRequestSchema>;
 

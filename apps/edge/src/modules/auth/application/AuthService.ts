@@ -9,6 +9,7 @@ import { AuthRepository, type AuthenticatedSessionRecord } from '@comanview/data
 import { EntityId } from '@comanview/domain';
 import { AppError } from '../../../app/errorHandler.js';
 import type { AuthenticatedActor } from '../../../app/authContext.js';
+import type { AuthorizedOperation } from '../../../app/authContext.js';
 
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCK_DURATION_MS = 60_000;
@@ -133,6 +134,59 @@ export class AuthService {
 
   logout(actor: AuthenticatedActor, now = new Date()): void {
     this.repository.revokeSession(actor.sessionId, now);
+  }
+
+  async authorizeSingleOperation(
+    actor: AuthenticatedActor,
+    permission: Permission,
+    overridePin: string | undefined,
+    now = new Date(),
+  ): Promise<AuthorizedOperation> {
+    if (actor.permissions.includes(permission)) {
+      return { actor, authorizedBy: null, permission, requestedAt: now };
+    }
+    if (!overridePin) {
+      throw new AppError(
+        'OVERRIDE_REQUIRED',
+        403,
+        'Additional authorization is required for this operation.',
+      );
+    }
+
+    const candidates = this.repository.listUsersForLogin(this.tenantId, this.locationId);
+    const matches = await Promise.all(
+      candidates.map(async (user) => ({
+        user,
+        matches: await verifyOperationalPin(overridePin, user.pinHash),
+      })),
+    );
+    const matchedUsers = matches.filter(({ matches: pinMatches }) => pinMatches);
+    const matched = matchedUsers.length === 1 ? matchedUsers[0]?.user : null;
+    if (!matched) {
+      throw new AppError('OVERRIDE_PIN_INVALID', 403, 'Override authorization was rejected.');
+    }
+    if (matched.status !== 'ACTIVE') {
+      throw new AppError('OVERRIDE_USER_INACTIVE', 403, 'Override authorization was rejected.');
+    }
+
+    const authorizer = this.repository.getUserAuthorization(matched);
+    if (!authorizer.permissions.includes(permission)) {
+      throw new AppError(
+        'OVERRIDE_PERMISSION_DENIED',
+        403,
+        'Override authorization was rejected.',
+      );
+    }
+    return {
+      actor,
+      authorizedBy: {
+        userId: authorizer.id,
+        displayName: authorizer.displayName,
+        roles: authorizer.roles,
+      },
+      permission,
+      requestedAt: now,
+    };
   }
 
   private toResponse(session: AuthenticatedSessionRecord): CurrentSessionResponse {

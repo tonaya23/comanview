@@ -1097,6 +1097,61 @@ button:focus-visible {
   line-height: 1.45;
 }
 
+.void-payment-button {
+  min-height: 38px;
+  padding: 0 12px;
+  border: 1px solid #c96f65;
+  border-radius: 9px;
+  color: #8b2f26;
+  background: #fff7f5;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.override-summary {
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  color: #65433e;
+  background: #fff5f2;
+  line-height: 1.45;
+}
+
+.override-modal label small {
+  color: #73837e;
+  font-size: 0.7rem;
+}
+
+.override-feedback {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  margin-bottom: 10px;
+  padding: 8px 11px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  color: transparent;
+  font-size: 0.78rem;
+  font-weight: 750;
+  line-height: 1.25;
+}
+
+.override-feedback--error {
+  border-color: #edb2aa;
+  color: #842c24;
+  background: #fff2ef;
+}
+
+.override-actions {
+  display: grid;
+  grid-template-columns: 1fr 1.4fr;
+  gap: 10px;
+}
+
+.confirm-payment.danger {
+  background: #a23b31;
+}
+
 .special-instructions-field {
   display: flex;
   flex-direction: column;
@@ -1338,19 +1393,32 @@ button:focus-visible {
   align-items: center;
   gap: 10px;
   padding: 8px 10px;
-  border: 1px solid #d9e2df;
+  border: 1px solid #cbd9d4;
   border-radius: 12px;
-  background: #fff;
+  color: #173f38;
+  background: #f8fbfa;
 }
 
 .operator-identity div {
   display: grid;
+  min-width: 0;
+}
+
+.operator-identity strong {
+  overflow: hidden;
+  color: #173f38;
+  font-size: 0.82rem;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .operator-identity span {
-  color: #64756f;
+  margin-top: 2px;
+  color: #587069;
   font-size: 0.68rem;
   font-weight: 800;
+  letter-spacing: 0.03em;
 }
 
 .operator-identity button {
@@ -1359,8 +1427,15 @@ button:focus-visible {
   border: 1px solid #b9cbc5;
   border-radius: 9px;
   color: #2b5d52;
-  background: #f4f8f6;
+  background: #edf5f2;
   font-weight: 800;
+  cursor: pointer;
+}
+
+.operator-identity button:hover,
+.operator-identity button:focus-visible {
+  border-color: #74978d;
+  background: #e2efeb;
 }
 
 .card-note {

@@ -13,6 +13,7 @@ import {
   LoginResponseSchema,
   CurrentSessionResponseSchema,
   LogoutResponseSchema,
+  AuditListResponseSchema,
   type AddOrderItemRequest,
   type CategoryResponse,
   type CreateOrderRequest,
@@ -40,6 +41,8 @@ import {
   type LoginResponse,
   type CurrentSessionResponse,
   type LogoutResponse,
+  type AuditListQuery,
+  type AuditListResponse,
 } from '@comanview/contracts';
 
 interface RuntimeSchema<T> {
@@ -85,6 +88,7 @@ export interface EdgeClient {
   login(request: LoginRequest): Promise<LoginResponse>;
   getCurrentSession(): Promise<CurrentSessionResponse>;
   logout(): Promise<LogoutResponse>;
+  getAuditEntries(query?: Partial<AuditListQuery>): Promise<AuditListResponse>;
   getCategories(): Promise<CategoryResponse[]>;
   getProducts(): Promise<ProductResponse[]>;
   createOrder(request: CreateOrderRequest): Promise<OrderResponse>;
@@ -223,6 +227,13 @@ export function createEdgeClient(options: EdgeClientOptions = {}): EdgeClient {
       ),
     getCurrentSession: () => request('/auth/session', CurrentSessionResponseSchema),
     logout: () => request('/auth/logout', LogoutResponseSchema, { method: 'POST' }),
+    getAuditEntries: (query = {}) => {
+      const parameters = Object.entries(query)
+        .filter(([, value]) => value !== undefined)
+        .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`)
+        .join('&');
+      return request(`/audit${parameters ? `?${parameters}` : ''}`, AuditListResponseSchema);
+    },
     getCategories: () => request('/catalog/categories', CategorySchema.array()),
     getProducts: () => request('/catalog/products', ProductSchema.array()),
     createOrder: (body) =>

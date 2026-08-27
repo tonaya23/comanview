@@ -87,6 +87,10 @@ export function App() {
   const [modifierValidation, setModifierValidation] = useState<string | null>(null);
   const [configuredSpecialInstructions, setConfiguredSpecialInstructions] = useState('');
   const [printJobs, setPrintJobs] = useState<PrintJobResponse[]>([]);
+  const [voidPaymentId, setVoidPaymentId] = useState<string | null>(null);
+  const [voidReason, setVoidReason] = useState('');
+  const [overridePin, setOverridePin] = useState('');
+  const [overrideError, setOverrideError] = useState<string | null>(null);
 
   const hasPermission = useCallback(
     (permission: PermissionCode) => authUser?.permissions.includes(permission) ?? false,
@@ -102,6 +106,10 @@ export function App() {
     setPrintJobs([]);
     setShowOpenCash(false);
     setShowPayment(false);
+    setVoidPaymentId(null);
+    setVoidReason('');
+    setOverridePin('');
+    setOverrideError(null);
   }, []);
 
   useEffect(() => {
@@ -262,7 +270,12 @@ export function App() {
     setNotice(null);
   }
 
-  async function mutate(name: string, action: () => Promise<OrderResponse>, message: string) {
+  async function mutate(
+    name: string,
+    action: () => Promise<OrderResponse>,
+    message: string,
+    handleError?: (problem: unknown) => boolean,
+  ) {
     setPendingAction(name);
     clearFeedback();
     try {
@@ -313,7 +326,7 @@ export function App() {
           /* the authoritative mutation error remains the useful feedback */
         }
       }
-      setError(getErrorMessage(problem));
+      if (!handleError?.(problem)) setError(getErrorMessage(problem));
       return null;
     } finally {
       setPendingAction(null);
@@ -591,6 +604,52 @@ export function App() {
       )
     )
       setShowPayment(false);
+  }
+
+  function cancelPaymentVoid() {
+    setVoidPaymentId(null);
+    setVoidReason('');
+    setOverridePin('');
+    setOverrideError(null);
+  }
+
+  async function submitPaymentVoid(event: FormEvent) {
+    event.preventDefault();
+    if (!order || !voidPaymentId) return;
+    const authorizationPin = overridePin;
+    setOverridePin('');
+    setOverrideError(null);
+    const next = await mutate(
+      `void-${voidPaymentId}`,
+      () =>
+        edge.voidPayment(order.id, voidPaymentId, {
+          commandId: crypto.randomUUID(),
+          expectedVersion: order.version,
+          reason: voidReason,
+          ...(hasPermission(PermissionCodes.PAYMENT_VOID)
+            ? {}
+            : { overridePin: authorizationPin }),
+        }),
+      'Pago anulado con autorización y Audit Log durable.',
+      (problem) => {
+        if (
+          problem instanceof EdgeClientError &&
+          [
+            'OVERRIDE_REQUIRED',
+            'OVERRIDE_PIN_INVALID',
+            'OVERRIDE_USER_INACTIVE',
+            'OVERRIDE_PERMISSION_DENIED',
+            'REASON_REQUIRED',
+          ].includes(problem.code)
+        ) {
+          setOverrideError(getErrorMessage(problem));
+          setOverridePin('');
+          return true;
+        }
+        return false;
+      },
+    );
+    if (next) cancelPaymentVoid();
   }
 
   async function retryConnection() {
@@ -1093,6 +1152,23 @@ export function App() {
                             payment.amountApplied.currency,
                           )}
                         </strong>
+                        {order.status === 'OPEN' && payment.status === 'COMPLETED' && (
+                          <button
+                            type="button"
+                            className="void-payment-button"
+                            disabled={isBusy}
+                            onClick={() => {
+                              setVoidPaymentId(payment.id);
+                              setVoidReason('');
+                              setOverridePin('');
+                              setOverrideError(null);
+                            }}
+                          >
+                            {hasPermission(PermissionCodes.PAYMENT_VOID)
+                              ? 'Anular'
+                              : 'Autorizar anulación'}
+                          </button>
+                        )}
                       </div>
                     ))}
                   </section>
@@ -1443,6 +1519,84 @@ export function App() {
               <button className="confirm-payment" disabled={isBusy} type="submit">
                 {pendingAction === 'open-cash' ? 'Abriendo…' : 'Abrir CashSession'}
               </button>
+            </form>
+          </section>
+        </div>
+      )}
+
+      {voidPaymentId && order && (
+        <div className="modal-backdrop">
+          <section
+            className="payment-modal override-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="override-title"
+          >
+            <div className="modal-heading">
+              <div>
+                <span className="eyebrow">Operación sensible</span>
+                <h2 id="override-title">Anular Payment</h2>
+              </div>
+              <button type="button" aria-label="Cancelar anulación" onClick={cancelPaymentVoid}>
+                ×
+              </button>
+            </div>
+            <p className="override-summary">
+              Esta acción conserva el Payment histórico como VOIDED y registra quién operó y quién
+              autorizó.
+            </p>
+            <form onSubmit={(event) => void submitPaymentVoid(event)}>
+              <label>
+                Motivo obligatorio
+                <textarea
+                  maxLength={240}
+                  value={voidReason}
+                  onChange={(event) => setVoidReason(event.target.value)}
+                  autoFocus={hasPermission(PermissionCodes.PAYMENT_VOID)}
+                />
+                <small>{voidReason.trim().length}/240</small>
+              </label>
+              {!hasPermission(PermissionCodes.PAYMENT_VOID) && (
+                <label>
+                  PIN de Manager u Owner
+                  <input
+                    type="password"
+                    inputMode="numeric"
+                    autoComplete="off"
+                    minLength={4}
+                    maxLength={12}
+                    value={overridePin}
+                    onChange={(event) =>
+                      setOverridePin(event.target.value.replace(/\D/g, '').slice(0, 12))
+                    }
+                    autoFocus
+                  />
+                  <small>Autoriza solo esta anulación; tu sesión no cambia.</small>
+                </label>
+              )}
+              <div
+                className={`override-feedback${overrideError ? ' override-feedback--error' : ''}`}
+                role="status"
+                aria-live="polite"
+              >
+                {overrideError ?? '\u00a0'}
+              </div>
+              <div className="override-actions">
+                <button type="button" className="secondary-order-button" onClick={cancelPaymentVoid}>
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="confirm-payment danger"
+                  disabled={
+                    isBusy ||
+                    voidReason.trim().length === 0 ||
+                    (!hasPermission(PermissionCodes.PAYMENT_VOID) && overridePin.length < 4)
+                  }
+                >
+                  {pendingAction === `void-${voidPaymentId}` ? 'Autorizando…' : 'Autorizar y anular'}
+                </button>
+              </div>
             </form>
           </section>
         </div>

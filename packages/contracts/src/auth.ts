@@ -19,6 +19,7 @@ export const PermissionSchema = z.enum([
   'PRINT_JOBS_VIEW',
   'KDS_VIEW',
   'KDS_UPDATE_PREPARATION',
+  'AUDIT_VIEW',
 ]);
 export const PermissionCodes = PermissionSchema.enum;
 

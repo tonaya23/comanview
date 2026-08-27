@@ -20,6 +20,9 @@ const kdsMigrationPath = fileURLToPath(
 const localAuthMigrationPath = fileURLToPath(
   new URL('../../../../migrations/edge/0005_local_auth.sql', import.meta.url),
 );
+const auditLogMigrationPath = fileURLToPath(
+  new URL('../../../../migrations/edge/0006_audit_log.sql', import.meta.url),
+);
 const defaultDatabasePath = fileURLToPath(
   new URL('../../../../apps/edge/edge-dev.db', import.meta.url),
 );
@@ -48,6 +51,7 @@ export function prepareDevelopmentDatabase(targetPath = databasePath): void {
       .get();
     if (!hasKdsTimestamps) sqlite.exec(readFileSync(kdsMigrationPath, 'utf8'));
     sqlite.exec(readFileSync(localAuthMigrationPath, 'utf8'));
+    sqlite.exec(readFileSync(auditLogMigrationPath, 'utf8'));
 
     const seed = sqlite.transaction(() => {
       const insertCategory = sqlite.prepare(
@@ -300,6 +304,13 @@ export function prepareDevelopmentDatabase(targetPath = databasePath): void {
           'DISABLED',
           process.env['COMANVIEW_DEV_DISABLED_PIN'] ?? '9999',
           roleIds.CASHIER,
+        ],
+        [
+          '01991a00-0000-7000-8000-000000000716',
+          'Gerente desarrollo',
+          'ACTIVE',
+          process.env['COMANVIEW_DEV_MANAGER_PIN'] ?? '5555',
+          roleIds.MANAGER,
         ],
       ] as const;
       for (const [id, displayName, status, pin, roleId] of developmentUsers) {
