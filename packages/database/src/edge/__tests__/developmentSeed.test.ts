@@ -52,7 +52,7 @@ describe('development catalog seed', () => {
           )
           .all();
         expect(routing).toEqual([
-          { product_name: 'Agua mineral', station_name: null },
+          { product_name: 'Agua mineral', station_name: 'BARRA' },
           { product_name: 'Hamburguesa clásica', station_name: 'COCINA' },
           { product_name: 'Limonada', station_name: 'BARRA' },
         ]);

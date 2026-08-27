@@ -61,7 +61,9 @@ export function App() {
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('CASH');
   const [paymentAmount, setPaymentAmount] = useState('0.00');
   const [cashTenderInput, setCashTenderInput] = useState(() => createCashTenderInput(0));
-  const [tipMode, setTipMode] = useState<'NONE' | 'PERCENTAGE' | 'FIXED_AMOUNT'>('NONE');
+  const [tipMode, setTipMode] = useState<'NONE' | 'PERCENTAGE' | 'FIXED_AMOUNT' | 'REMAINDER'>(
+    'NONE',
+  );
   const [tipBasisPoints, setTipBasisPoints] = useState(1000);
   const [fixedTip, setFixedTip] = useState('0.00');
   const [configuredProduct, setConfiguredProduct] = useState<ProductResponse | null>(null);
@@ -162,14 +164,31 @@ export function App() {
   const sentItems = order?.items.filter((item) => item.status === 'SENT') ?? [];
   const amountMinor = parseMoneyInputToMinorUnits(paymentAmount) ?? 0;
   const fixedTipMinor = parseMoneyInputToMinorUnits(fixedTip) ?? 0;
+  const tenderedMinor = parseMoneyInputToMinorUnits(cashTenderInput.value);
+  const isRemainderTip = tipMode === 'REMAINDER';
+  const remainderSettlesBalance = Boolean(order && amountMinor === order.balanceDue.amount);
+  const remainderTipPreview =
+    isRemainderTip && tenderedMinor !== null && tenderedMinor >= amountMinor
+      ? tenderedMinor - amountMinor
+      : 0;
   const tipPreview =
     tipMode === 'PERCENTAGE'
       ? percentageAmountHalfUp(amountMinor, tipBasisPoints)
       : tipMode === 'FIXED_AMOUNT'
         ? fixedTipMinor
-        : 0;
+        : remainderTipPreview;
   const cashRequiredMinor = amountMinor + tipPreview;
-  const cashTenderPreview = getCashTenderPreview(cashTenderInput.value, cashRequiredMinor);
+  const exactCashRequiredMinor = isRemainderTip ? amountMinor : cashRequiredMinor;
+  const cashTenderPreview = getCashTenderPreview(
+    cashTenderInput.value,
+    cashRequiredMinor,
+    isRemainderTip,
+  );
+  const remainderIntentAllowed =
+    !isRemainderTip || (paymentMethod === 'CASH' && remainderSettlesBalance);
+  const canConfirmTender =
+    canConfirmPaymentTender(paymentMethod, cashTenderPreview.isSufficient) &&
+    remainderIntentAllowed;
   const cashDenominations = getCashDenominationPresets(order?.currency ?? '');
   const isBusy = pendingAction !== null;
   const canOperateOrder = order?.status === 'OPEN' && connection === 'CONNECTED' && !isBusy;
@@ -454,13 +473,18 @@ export function App() {
       setError('El monto debe ser mayor a cero y no superar el saldo pendiente.');
       return;
     }
-    if (!canConfirmPaymentTender(paymentMethod, cashTenderPreview.isSufficient)) {
+    if (tipMode === 'REMAINDER' && !remainderIntentAllowed) {
+      setError('Resto solo está disponible en efectivo al liquidar el saldo completo.');
+      return;
+    }
+    if (!canConfirmTender) {
       setError('El efectivo recibido debe cubrir el pago y la propina.');
       return;
     }
     let tip: TipSelection = { type: 'NONE' };
     if (tipMode === 'PERCENTAGE') tip = { type: 'PERCENTAGE', basisPoints: tipBasisPoints };
     if (tipMode === 'FIXED_AMOUNT') tip = { type: 'FIXED_AMOUNT', amount: fixedTipMinor };
+    if (tipMode === 'REMAINDER') tip = { type: 'REMAINDER' };
     const next = await mutate(
       'payment',
       () =>
@@ -1228,7 +1252,10 @@ export function App() {
                 <button
                   type="button"
                   className={paymentMethod === 'CARD' ? 'active' : ''}
-                  onClick={() => setPaymentMethod('CARD')}
+                  onClick={() => {
+                    setPaymentMethod('CARD');
+                    if (tipMode === 'REMAINDER') setTipMode('NONE');
+                  }}
                 >
                   Tarjeta
                 </button>
@@ -1271,6 +1298,16 @@ export function App() {
                   >
                     Monto
                   </button>
+                  {paymentMethod === 'CASH' && (
+                    <button
+                      type="button"
+                      className={tipMode === 'REMAINDER' ? 'active' : ''}
+                      disabled={!remainderSettlesBalance}
+                      onClick={() => setTipMode('REMAINDER')}
+                    >
+                      Resto
+                    </button>
+                  )}
                 </fieldset>
               )}
               {tipMode === 'FIXED_AMOUNT' && (
@@ -1285,8 +1322,13 @@ export function App() {
               )}
               {paymentConfig?.tipsEnabled && (
                 <div className="calculation-row">
-                  <span>Propina</span>
+                  <span>{isRemainderTip ? 'Resto como propina' : 'Propina'}</span>
                   <strong>{formatMoney(tipPreview, order.currency)}</strong>
+                </div>
+              )}
+              {isRemainderTip && !remainderSettlesBalance && (
+                <div className="cash-shortfall" role="alert">
+                  Resto solo puede usarse al liquidar el saldo completo.
                 </div>
               )}
               {paymentMethod === 'CASH' ? (
@@ -1305,7 +1347,7 @@ export function App() {
                     <button
                       type="button"
                       className="cash-quick-action exact"
-                      onClick={() => setCashTenderInput(setExactCashTender(cashRequiredMinor))}
+                      onClick={() => setCashTenderInput(setExactCashTender(exactCashRequiredMinor))}
                     >
                       Exacto
                     </button>
@@ -1356,9 +1398,7 @@ export function App() {
               )}
               <button
                 className="confirm-payment"
-                disabled={
-                  isBusy || !canConfirmPaymentTender(paymentMethod, cashTenderPreview.isSufficient)
-                }
+                disabled={isBusy || !canConfirmTender}
                 type="submit"
               >
                 {pendingAction === 'payment'

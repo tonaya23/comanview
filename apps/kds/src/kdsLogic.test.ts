@@ -11,9 +11,24 @@ import {
 describe('KDS presentation behavior', () => {
   it('formats elapsed time and applies visual-only thresholds', () => {
     const sentAt = '2026-08-26T12:00:00.000Z';
-    expect(formatElapsed(sentAt, Date.parse('2026-08-26T12:06:09.000Z'))).toBe('06:09');
-    expect(timerTone(sentAt, Date.parse('2026-08-26T12:06:00.000Z'))).toBe('WARNING');
-    expect(timerTone(sentAt, Date.parse('2026-08-26T12:11:00.000Z'))).toBe('LATE');
+    expect(formatElapsed(sentAt, 'PREPARING', null, Date.parse('2026-08-26T12:06:09.000Z'))).toBe(
+      '06:09',
+    );
+    expect(timerTone(sentAt, 'PREPARING', null, Date.parse('2026-08-26T12:06:00.000Z'))).toBe(
+      'WARNING',
+    );
+    expect(timerTone(sentAt, 'PREPARING', null, Date.parse('2026-08-26T12:11:00.000Z'))).toBe(
+      'LATE',
+    );
+  });
+
+  it('freezes READY elapsed and severity at readyAt', () => {
+    const sentAt = '2026-08-26T12:00:00.000Z';
+    const readyAt = '2026-08-26T12:04:08.000Z';
+    const muchLater = Date.parse('2026-08-26T13:00:00.000Z');
+
+    expect(formatElapsed(sentAt, 'READY', readyAt, muchLater)).toBe('04:08');
+    expect(timerTone(sentAt, 'READY', readyAt, muchLater)).toBe('NORMAL');
   });
 
   it('refreshes only when realtime affects the selected station', () => {

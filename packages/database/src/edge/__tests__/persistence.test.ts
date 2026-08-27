@@ -713,7 +713,7 @@ describe('Edge Persistence Integration Tests', () => {
     ).toThrow(/OPEN CashSession/);
   });
 
-  it('21. persists Payment fields exactly and derives expected cash from amount_applied', () => {
+  it('21. persists Payment fields exactly and includes CASH tips in expected cash', () => {
     const db = createTestDb();
     const { cashRepo, session } = openCashSession(db, 5000);
     const orderRepo = new OrderRepository(db);
@@ -723,7 +723,7 @@ describe('Edge Persistence Integration Tests', () => {
       cashSessionId: session.id,
       method: 'CASH',
       amountApplied: Money.fromMinorUnits(10000, 'MXN'),
-      tipAmount: Money.zero('MXN'),
+      tipAmount: Money.fromMinorUnits(1000, 'MXN'),
       cashTendered: Money.fromMinorUnits(12000, 'MXN'),
       commandId: 'persist-payment-1',
     });
@@ -732,9 +732,10 @@ describe('Edge Persistence Integration Tests', () => {
     const recovered = orderRepo.getOrderById(order.id)!;
     expect(recovered.payments).toHaveLength(1);
     expect(recovered.payments[0]?.cashTendered?.amount).toBe(12000);
-    expect(recovered.payments[0]?.changeGiven.amount).toBe(2000);
+    expect(recovered.payments[0]?.tipAmount.amount).toBe(1000);
+    expect(recovered.payments[0]?.changeGiven.amount).toBe(1000);
     expect(recovered.getPaidAmount().amount).toBe(10000);
-    expect(cashRepo.calculateExpectedCash(session).amount).toBe(15000);
+    expect(cashRepo.calculateExpectedCash(session).amount).toBe(16000);
   });
 
   it('22. rolls back Order, Payment, command, and Event Log on controlled Payment failure', () => {

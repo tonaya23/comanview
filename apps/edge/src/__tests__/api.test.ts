@@ -474,7 +474,7 @@ describe('Edge API Integration Tests', () => {
     orderVersion = replacementCard.json().version;
 
     const current = await app.inject({ method: 'GET', url: '/cash-sessions/current' });
-    expect(current.json().session.expectedCash).toEqual({ amount: 2105, currency: 'MXN' });
+    expect(current.json().session.expectedCash).toEqual({ amount: 2116, currency: 'MXN' });
   });
 
   it('15. Edge impide cierre pendiente y separa PAYMENT_COMPLETED de ORDER_CLOSED', async () => {

@@ -3,7 +3,7 @@ import { Money } from '@comanview/money';
 import { EntityId } from '../../shared/EntityId.js';
 import { Payment } from '../Payment.js';
 import { calculateTip } from '../tip.js';
-import { InvalidCashTenderedError, TipsDisabledError } from '../errors.js';
+import { InvalidCashTenderedError, InvalidTipError, TipsDisabledError } from '../errors.js';
 
 const orderId = EntityId.generate();
 const cashSessionId = EntityId.generate();
@@ -98,5 +98,60 @@ describe('tip calculation', () => {
     expect(() =>
       calculateTip(Money.fromMinorUnits(1000, 'MXN'), { type: 'FIXED_AMOUNT', amount: 125 }, false),
     ).toThrow(TipsDisabledError);
+  });
+
+  it('calculates CASH remainder tips from tendered money while preserving sale amount', () => {
+    const amountApplied = Money.fromMinorUnits(3200, 'MXN');
+    const tip = calculateTip(amountApplied, { type: 'REMAINDER' }, true, {
+      method: 'CASH',
+      cashTendered: Money.fromMinorUnits(4000, 'MXN'),
+      authoritativeBalanceDue: amountApplied,
+    });
+    const payment = Payment.complete({
+      orderId,
+      cashSessionId,
+      method: 'CASH',
+      amountApplied,
+      tipAmount: tip,
+      cashTendered: Money.fromMinorUnits(4000, 'MXN'),
+      commandId: 'pay-remainder',
+    });
+
+    expect(payment.amountApplied.amount).toBe(3200);
+    expect(payment.tipAmount.amount).toBe(800);
+    expect(payment.changeGiven.amount).toBe(0);
+    expect(payment.chargedTotal.amount).toBe(4000);
+  });
+
+  it('allows zero remainder and rejects insufficient, CARD, and partial remainder intent', () => {
+    const amountApplied = Money.fromMinorUnits(3200, 'MXN');
+    expect(
+      calculateTip(amountApplied, { type: 'REMAINDER' }, true, {
+        method: 'CASH',
+        cashTendered: Money.fromMinorUnits(3200, 'MXN'),
+        authoritativeBalanceDue: amountApplied,
+      }).amount,
+    ).toBe(0);
+    expect(() =>
+      calculateTip(amountApplied, { type: 'REMAINDER' }, true, {
+        method: 'CASH',
+        cashTendered: Money.fromMinorUnits(3199, 'MXN'),
+        authoritativeBalanceDue: amountApplied,
+      }),
+    ).toThrow(InvalidCashTenderedError);
+    expect(() =>
+      calculateTip(amountApplied, { type: 'REMAINDER' }, true, {
+        method: 'CARD',
+        cashTendered: null,
+        authoritativeBalanceDue: amountApplied,
+      }),
+    ).toThrow(InvalidTipError);
+    expect(() =>
+      calculateTip(Money.fromMinorUnits(1000, 'MXN'), { type: 'REMAINDER' }, true, {
+        method: 'CASH',
+        cashTendered: Money.fromMinorUnits(1200, 'MXN'),
+        authoritativeBalanceDue: amountApplied,
+      }),
+    ).toThrow(InvalidTipError);
   });
 });

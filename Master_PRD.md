@@ -1754,9 +1754,22 @@ tips_enabled
 Métodos:
 PERCENTAGE
 FIXED_AMOUNT
+REMAINDER
 ```
 
 La propina MUST mantenerse separada del consumo.
+
+`REMAINDER` representa la intención de conservar como propina el excedente de efectivo que
+normalmente sería cambio. En V1 solo aplica a `CASH`, exige que `amount_applied` liquide el
+`balance_due` autoritativo completo y MUST ser calculado por Edge:
+
+```text
+tip_amount = cash_tendered - amount_applied
+change_given = 0
+```
+
+Si `cash_tendered = amount_applied`, `tip_amount = 0`. Si `cash_tendered < amount_applied`, el
+Payment MUST ser rechazado. `REMAINDER` MUST NOT aplicarse a CARD ni a Payments parciales.
 
 ```text
 amount_applied = sale

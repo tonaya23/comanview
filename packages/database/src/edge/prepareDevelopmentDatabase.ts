@@ -186,6 +186,7 @@ export function prepareDevelopmentDatabase(targetPath = databasePath): void {
       for (const productId of [
         '01991a00-0000-7000-8000-000000000201',
         '01991a00-0000-7000-8000-000000000202',
+        '01991a00-0000-7000-8000-000000000203',
       ])
         assignStation.run(barStationId, productId);
 

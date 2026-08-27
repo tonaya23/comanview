@@ -1174,6 +1174,13 @@ button:focus-visible {
   background: #1b6659;
 }
 
+.tip-options button:disabled {
+  cursor: not-allowed;
+  color: #778680;
+  background: #eef2f0;
+  opacity: 0.65;
+}
+
 .tip-options {
   grid-template-columns: repeat(3, 1fr);
   margin: 0;

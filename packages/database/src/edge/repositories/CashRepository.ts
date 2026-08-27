@@ -139,7 +139,11 @@ export class CashRepository {
 
   calculateExpectedCash(session: CashSession): Money {
     const completedCashPayments = this.db
-      .select({ amount: schema.payments.amountAppliedAmount, currency: schema.payments.currency })
+      .select({
+        amountApplied: schema.payments.amountAppliedAmount,
+        tipAmount: schema.payments.tipAmount,
+        currency: schema.payments.currency,
+      })
       .from(schema.payments)
       .where(
         and(
@@ -151,7 +155,10 @@ export class CashRepository {
       .all();
 
     return completedCashPayments.reduce<Money>(
-      (total, payment) => total.add(Money.fromMinorUnits(payment.amount, payment.currency)),
+      (total, payment) =>
+        total.add(
+          Money.fromMinorUnits(payment.amountApplied + payment.tipAmount, payment.currency),
+        ),
       session.openingFloat,
     );
   }

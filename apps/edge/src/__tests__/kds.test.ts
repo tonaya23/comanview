@@ -104,8 +104,10 @@ describe('KDS vertical slice', () => {
       specialInstructions: 'solo una rodaja de tomate',
     });
     expect(kitchen[0].items[0].modifiers[0].name).toBe(doneness.name);
-    expect(bar[0].items[0].productName).toBe('Limonada');
-    expect([...kitchen, ...bar].flatMap((ticket: any) => ticket.items)).toHaveLength(2);
+    expect(bar[0].items.map((item: any) => item.productName)).toEqual(
+      expect.arrayContaining(['Limonada', 'Agua mineral']),
+    );
+    expect([...kitchen, ...bar].flatMap((ticket: any) => ticket.items)).toHaveLength(3);
 
     const retry = await app.inject({
       method: 'POST',

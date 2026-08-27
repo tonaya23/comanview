@@ -36,11 +36,17 @@ export class PaymentService {
       const previousPayment = previousOrder.payments.find(
         (payment) => payment.commandId === request.commandId,
       )!;
-      const requestedTip = calculateTip(
-        Money.fromMinorUnits(request.amountApplied, previousOrder.currency),
-        request.tip,
-        this.context.tipsEnabled,
-      );
+      const requestedAmount = Money.fromMinorUnits(request.amountApplied, previousOrder.currency);
+      const requestedCashTendered =
+        request.cashTendered === undefined || request.cashTendered === null
+          ? null
+          : Money.fromMinorUnits(request.cashTendered, previousOrder.currency);
+      const requestedTip = calculateTip(requestedAmount, request.tip, this.context.tipsEnabled, {
+        method: request.method,
+        cashTendered: requestedCashTendered,
+        // A persisted REMAINDER Payment proves that this amount settled the balance at creation.
+        authoritativeBalanceDue: previousPayment.amountApplied,
+      });
       if (
         previousPayment.method !== request.method ||
         previousPayment.amountApplied.amount !== request.amountApplied ||
@@ -87,16 +93,21 @@ export class PaymentService {
     }
 
     const amountApplied = Money.fromMinorUnits(request.amountApplied, order.currency);
-    const tipAmount = calculateTip(amountApplied, request.tip, this.context.tipsEnabled);
+    const cashTendered =
+      request.cashTendered === undefined || request.cashTendered === null
+        ? null
+        : Money.fromMinorUnits(request.cashTendered, order.currency);
+    const tipAmount = calculateTip(amountApplied, request.tip, this.context.tipsEnabled, {
+      method: request.method,
+      cashTendered,
+      authoritativeBalanceDue: order.getBalanceDue(),
+    });
     order.completePayment({
       cashSessionId: session.id,
       method: request.method,
       amountApplied,
       tipAmount,
-      cashTendered:
-        request.cashTendered === undefined || request.cashTendered === null
-          ? null
-          : Money.fromMinorUnits(request.cashTendered, order.currency),
+      cashTendered,
       externalReference: request.externalReference ?? null,
       commandId: request.commandId,
     });

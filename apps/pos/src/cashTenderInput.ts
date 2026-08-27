@@ -71,16 +71,24 @@ export function setManualCashTender(value: string): CashTenderInputState {
   return { value, quickHistory: [], quickInputStarted: false };
 }
 
-export function getCashTenderPreview(value: string, requiredMinorUnits: number) {
+export function getCashTenderPreview(
+  value: string,
+  requiredMinorUnits: number,
+  keepChangeAsTip = false,
+) {
   const tenderedMinorUnits = parseMoneyInputToMinorUnits(value);
   const isSufficient = tenderedMinorUnits !== null && tenderedMinorUnits >= requiredMinorUnits;
   return {
     tenderedMinorUnits,
     isSufficient,
     shortfallMinorUnits:
-      tenderedMinorUnits === null ? requiredMinorUnits : Math.max(0, requiredMinorUnits - tenderedMinorUnits),
+      tenderedMinorUnits === null
+        ? requiredMinorUnits
+        : Math.max(0, requiredMinorUnits - tenderedMinorUnits),
     changeMinorUnits:
-      tenderedMinorUnits === null ? 0 : Math.max(0, tenderedMinorUnits - requiredMinorUnits),
+      keepChangeAsTip || tenderedMinorUnits === null
+        ? 0
+        : Math.max(0, tenderedMinorUnits - requiredMinorUnits),
   };
 }
 

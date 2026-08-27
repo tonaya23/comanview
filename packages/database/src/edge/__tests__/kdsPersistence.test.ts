@@ -98,7 +98,9 @@ describe('KDS persistence projection', () => {
       specialInstructions: 'solo una rodaja de tomate',
     });
     expect(kitchen[0]!.items[0]!.modifiers[0]!.name).toBe('Queso extra');
-    expect([...kitchen, ...bar].flatMap((ticket) => ticket.items)).toHaveLength(2);
+    const routedItems = [...kitchen, ...bar].flatMap((ticket) => ticket.items);
+    expect(routedItems).toHaveLength(2);
+    expect(routedItems.some((item) => item.productName === 'Sin estación')).toBe(false);
     expect(() =>
       kds.transitionTicket(round.id.toString(), kitchenId.toString(), 'READY', 'skip'),
     ).toThrow(KdsInvalidTransitionError);

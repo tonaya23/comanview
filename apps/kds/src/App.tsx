@@ -201,14 +201,22 @@ export function App() {
               {byStatus[column.status].map((ticket) => (
                 <article
                   key={ticket.ticketId}
-                  className={`ticket timer-${timerTone(ticket.sentAt, now).toLowerCase()}`}
+                  className={`ticket timer-${timerTone(
+                    ticket.sentAt,
+                    ticket.status,
+                    ticket.readyAt,
+                    now,
+                  ).toLowerCase()}`}
                 >
                   <div className="ticket-heading">
                     <div>
                       <strong>Orden {ticket.orderNumber}</strong>
                       <span>Ronda {ticket.roundNumber}</span>
                     </div>
-                    <time>{formatElapsed(ticket.sentAt, now)}</time>
+                    <time>
+                      {ticket.status === 'READY' ? 'Listo en ' : ''}
+                      {formatElapsed(ticket.sentAt, ticket.status, ticket.readyAt, now)}
+                    </time>
                   </div>
                   <div className="items">
                     {ticket.items.map((item) => (

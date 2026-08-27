@@ -32,6 +32,7 @@ export const TipSelectionSchema = z.discriminatedUnion('type', [
     type: z.literal('PERCENTAGE'),
     basisPoints: z.number().int().min(0).max(10_000),
   }),
+  z.object({ type: z.literal('REMAINDER') }),
 ]);
 export type TipSelection = z.infer<typeof TipSelectionSchema>;
 

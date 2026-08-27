@@ -61,7 +61,12 @@ describe('cash tender quick input', () => {
       500, 1_000, 2_000, 5_000, 10_000, 20_000, 50_000,
     ]);
     expect(getCashDenominationPresets('USD').map(({ majorUnits }) => majorUnits)).toEqual([
-      '1', '5', '10', '20', '50', '100',
+      '1',
+      '5',
+      '10',
+      '20',
+      '50',
+      '100',
     ]);
     expect(getCashDenominationPresets('CAD').map(({ majorUnits }) => majorUnits)).toContain('2');
     expect(getCashDenominationPresets('EUR').map(({ majorUnits }) => majorUnits)).toContain('50');
@@ -76,5 +81,12 @@ describe('cash tender quick input', () => {
     expect(canConfirmPaymentTender('CASH', insufficient.isSufficient)).toBe(false);
     expect(canConfirmPaymentTender('CASH', sufficient.isSufficient)).toBe(true);
     expect(canConfirmPaymentTender('CARD', false)).toBe(true);
+  });
+
+  it('previews zero change when the cash remainder is kept as tip', () => {
+    expect(getCashTenderPreview('40.00', 3_200, true)).toMatchObject({
+      isSufficient: true,
+      changeMinorUnits: 0,
+    });
   });
 });

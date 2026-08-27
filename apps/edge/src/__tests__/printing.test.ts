@@ -63,7 +63,7 @@ describe('Printing vertical slice', () => {
       },
     });
     version = withDrink.json().version;
-    const withUnroutedItem = await app.inject({
+    const withWater = await app.inject({
       method: 'POST',
       url: `/orders/${orderId}/items`,
       payload: {
@@ -72,7 +72,7 @@ describe('Printing vertical slice', () => {
         productId: water.id,
       },
     });
-    version = withUnroutedItem.json().version;
+    version = withWater.json().version;
 
     const commandId = '01991a00-1000-7000-8000-000000000003';
     const sent = await app.inject({
