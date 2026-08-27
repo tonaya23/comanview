@@ -30,6 +30,8 @@ export interface KdsTicketView {
   orderId: string;
   orderNumber: string;
   orderType: 'COUNTER' | 'TABLE' | 'TAKEOUT';
+  orderVersion: number;
+  locationId: string;
   roundId: string;
   roundNumber: number;
   stationId: string;
@@ -91,6 +93,8 @@ export class KdsRepository {
         orderId: schema.orders.id,
         orderNumber: schema.orders.orderNumber,
         orderType: schema.orders.orderType,
+        orderVersion: schema.orders.version,
+        locationId: schema.orders.locationId,
         roundId: schema.rounds.id,
         roundNumber: schema.rounds.roundNumber,
         sentAt: schema.rounds.sentAt,
@@ -138,6 +142,8 @@ export class KdsRepository {
           orderId: row.orderId,
           orderNumber: row.orderNumber,
           orderType: row.orderType as KdsTicketView['orderType'],
+          orderVersion: row.orderVersion,
+          locationId: row.locationId,
           roundId: row.roundId,
           roundNumber: row.roundNumber,
           stationId,

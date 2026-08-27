@@ -5,7 +5,7 @@ import {
   OrderRepository,
   type NewAuditEntry,
 } from '@comanview/database';
-import { calculateTip, EntityId } from '@comanview/domain';
+import { calculateTip, EntityId, type Order } from '@comanview/domain';
 import { Money } from '@comanview/money';
 import type {
   CreatePaymentRequest,
@@ -18,6 +18,7 @@ import type { AuthorizedOperation } from '../../../app/authContext.js';
 import { ConcurrencyError, ObjectNotFoundError } from '../../../app/errors.js';
 import type { EdgeOperationalContext } from '../../../app/operationalContext.js';
 import { mapOrderToResponse } from '../../orders/application/orderMapper.js';
+import type { RealtimeHub } from '../../../infrastructure/realtime/RealtimeHub.js';
 
 export class PaymentService {
   constructor(
@@ -25,6 +26,7 @@ export class PaymentService {
     private readonly cashRepo: CashRepository,
     private readonly auditRepo: AuditRepository,
     private readonly context: EdgeOperationalContext,
+    private readonly realtime: RealtimeHub,
   ) {}
 
   getConfig(): PaymentConfigResponse {
@@ -126,6 +128,7 @@ export class PaymentService {
     });
 
     this.orderRepo.saveOrder(order, true, request.commandId);
+    this.notifyOrder(order, 'PAYMENT_COMPLETED');
     return mapOrderToResponse(order);
   }
 
@@ -208,7 +211,29 @@ export class PaymentService {
       }
       throw error;
     }
+    this.notifyOrder(order, 'PAYMENT_VOIDED');
     return mapOrderToResponse(order);
+  }
+
+  private notifyOrder(order: Order, reason: 'PAYMENT_COMPLETED' | 'PAYMENT_VOIDED'): void {
+    this.realtime.publish({
+      type: 'ORDER_UPDATED',
+      locationId: order.locationId.toString(),
+      orderId: order.id.toString(),
+      version: order.version,
+      reason,
+      occurredAt: new Date().toISOString(),
+    });
+    if (order.orderType === 'TABLE') {
+      this.realtime.publish({
+        type: 'TABLES_CHANGED',
+        locationId: order.locationId.toString(),
+        tableIds: order.tableIds.map((tableId) => tableId.toString()),
+        orderId: order.id.toString(),
+        reason: 'ORDER_UPDATED',
+        occurredAt: new Date().toISOString(),
+      });
+    }
   }
 
   private commandConflict(): AppError {

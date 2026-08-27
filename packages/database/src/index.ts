@@ -14,3 +14,4 @@ export * from './edge/repositories/KdsRepository.js';
 export * from './edge/prepareDevelopmentDatabase.js';
 export * from './edge/repositories/AuthRepository.js';
 export * from './edge/repositories/AuditRepository.js';
+export * from './edge/repositories/TableRepository.js';

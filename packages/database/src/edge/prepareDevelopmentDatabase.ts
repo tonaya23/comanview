@@ -26,6 +26,12 @@ const auditLogMigrationPath = fileURLToPath(
 const cashOperationsMigrationPath = fileURLToPath(
   new URL('../../../../migrations/edge/0007_cash_operations_closure.sql', import.meta.url),
 );
+const tablesWaiterMigrationPath = fileURLToPath(
+  new URL('../../../../migrations/edge/0008_tables_waiter.sql', import.meta.url),
+);
+const operationalRealtimeMigrationPath = fileURLToPath(
+  new URL('../../../../migrations/edge/0009_operational_realtime.sql', import.meta.url),
+);
 const defaultDatabasePath = fileURLToPath(
   new URL('../../../../apps/edge/edge-dev.db', import.meta.url),
 );
@@ -59,6 +65,14 @@ export function prepareDevelopmentDatabase(targetPath = databasePath): void {
       .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'cash_reports'")
       .get();
     if (!hasCashReports) sqlite.exec(readFileSync(cashOperationsMigrationPath, 'utf8'));
+    const hasRestaurantTables = sqlite
+      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'restaurant_tables'")
+      .get();
+    if (!hasRestaurantTables) sqlite.exec(readFileSync(tablesWaiterMigrationPath, 'utf8'));
+    const hasPaymentRequestedAt = sqlite
+      .prepare("SELECT 1 FROM pragma_table_info('orders') WHERE name = 'payment_requested_at'")
+      .get();
+    if (!hasPaymentRequestedAt) sqlite.exec(readFileSync(operationalRealtimeMigrationPath, 'utf8'));
 
     const seed = sqlite.transaction(() => {
       const insertCategory = sqlite.prepare(
@@ -125,6 +139,11 @@ export function prepareDevelopmentDatabase(targetPath = databasePath): void {
         INSERT OR IGNORE INTO devices
           (id, tenant_id, location_id, name, device_type, status, session_timeout_minutes, created_at)
         VALUES (?, ?, ?, ?, ?, 'ACTIVE', ?, ?)
+      `);
+      const insertRestaurantTable = sqlite.prepare(`
+        INSERT OR IGNORE INTO restaurant_tables
+          (id, tenant_id, location_id, name, zone, capacity, display_order, active)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 1)
       `);
 
       const foodCategoryId = '01991a00-0000-7000-8000-000000000001';
@@ -342,6 +361,35 @@ export function prepareDevelopmentDatabase(targetPath = databasePath): void {
         720,
         now,
       );
+      insertDevice.run(
+        '01991a00-0000-7000-8000-000000000723',
+        tenantId,
+        locationId,
+        'Waiter de desarrollo',
+        'WAITER',
+        720,
+        now,
+      );
+
+      const developmentTables = [
+        ['01991a00-0000-7000-8000-000000000801', 'Mesa 1', 'SALÓN', 4, 10],
+        ['01991a00-0000-7000-8000-000000000802', 'Mesa 2', 'SALÓN', 4, 20],
+        ['01991a00-0000-7000-8000-000000000803', 'Mesa 3', 'SALÓN', 4, 30],
+        ['01991a00-0000-7000-8000-000000000804', 'Mesa 4', 'SALÓN', 6, 40],
+        ['01991a00-0000-7000-8000-000000000805', 'Mesa 5', 'TERRAZA', 4, 50],
+        ['01991a00-0000-7000-8000-000000000806', 'Mesa 6', 'TERRAZA', 4, 60],
+      ] as const;
+      for (const table of developmentTables) {
+        insertRestaurantTable.run(
+          table[0],
+          tenantId,
+          locationId,
+          table[1],
+          table[2],
+          table[3],
+          table[4],
+        );
+      }
       insertDevice.run(
         '01991a00-0000-7000-8000-000000000722',
         tenantId,

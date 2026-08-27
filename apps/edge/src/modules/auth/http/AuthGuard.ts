@@ -63,8 +63,38 @@ export class AuthGuard {
     }
   }
 
+  authenticateRealtimeAny(token: string, permissions: readonly Permission[]): boolean {
+    if (this.mode === 'test-bypass') return true;
+    try {
+      const granted = this.service.authenticate(token).permissions;
+      return permissions.some((permission) => granted.includes(permission));
+    } catch {
+      return false;
+    }
+  }
+
+  authenticateRealtimeActorAny(
+    token: string,
+    permissions: readonly Permission[],
+  ): AuthenticatedActor | null {
+    if (this.mode === 'test-bypass') return TEST_ACTOR;
+    try {
+      const actor = this.service.authenticate(token);
+      return permissions.some((permission) => actor.permissions.includes(permission))
+        ? actor
+        : null;
+    } catch {
+      return null;
+    }
+  }
+
   isRealtimeSessionValid(token: string, permission: Permission): boolean {
     return this.mode === 'test-bypass' || this.service.isTokenAuthorized(token, permission);
+  }
+
+  isRealtimeSessionValidForAny(token: string, permissions: readonly Permission[]): boolean {
+    if (this.mode === 'test-bypass') return true;
+    return permissions.some((permission) => this.service.isTokenAuthorized(token, permission));
   }
 }
 

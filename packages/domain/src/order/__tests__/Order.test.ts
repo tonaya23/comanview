@@ -14,6 +14,7 @@ import {
   OrderItemSpecialInstructionsFrozenError,
   OrderItemProductMismatchError,
   SpecialInstructionsTooLongError,
+  EmptyTableCancellationError,
 } from '../errors.js';
 
 // ─── Test helpers ────────────────────────────────────────────────────────────
@@ -56,6 +57,7 @@ function makeBaseOrder(
     orderChannel: 'POS',
     orderNumber: 'A-001',
     currency,
+    ...(type === 'TABLE' ? { tableIds: [EntityId.generate()] } : {}),
   });
 }
 
@@ -142,6 +144,19 @@ describe('Order Aggregate — Phase 1D', () => {
           orderNumber: 'A-001',
           currency: 'MXN',
           tableIds: [EntityId.generate()],
+        }),
+      ).toThrow(TableAssignmentError);
+    });
+
+    it('requires at least one physical table for a TABLE Order', () => {
+      expect(() =>
+        Order.create({
+          tenantId: EntityId.generate(),
+          locationId: EntityId.generate(),
+          orderType: 'TABLE',
+          orderChannel: 'WAITER',
+          orderNumber: 'T-02',
+          currency: 'MXN',
         }),
       ).toThrow(TableAssignmentError);
     });
@@ -527,6 +542,32 @@ describe('Order Aggregate — Phase 1D', () => {
       expect(ev).toBeDefined();
     });
 
+    it('allows the limited empty-table cancellation only for an untouched TABLE Order', () => {
+      const order = makeBaseOrder('TABLE');
+
+      order.cancelEmptyTable('cancel-empty');
+
+      expect(order.status).toBe('CANCELLED');
+      expect(order.events.some((event) => event.eventType === 'ORDER_CANCELLED')).toBe(true);
+    });
+
+    it('rejects empty-table cancellation after an item or Round exists', () => {
+      const draftOrder = makeBaseOrder('TABLE');
+      draftOrder.addItem(makeSnapshot());
+      expect(() => draftOrder.cancelEmptyTable('draft')).toThrow(EmptyTableCancellationError);
+
+      const sentOrder = makeBaseOrder('TABLE');
+      sentOrder.addItem(makeSnapshot());
+      sentOrder.sendDraftItems('send');
+      expect(() => sentOrder.cancelEmptyTable('sent')).toThrow(EmptyTableCancellationError);
+    });
+
+    it('rejects the limited cancellation for a non-TABLE Order', () => {
+      expect(() => makeBaseOrder('COUNTER').cancelEmptyTable('counter')).toThrow(
+        EmptyTableCancellationError,
+      );
+    });
+
     it('throws when cancelling a CLOSED order (INV-03)', () => {
       const order = makeBaseOrder();
       order.addItem(makeSnapshot());
@@ -596,6 +637,13 @@ describe('Order Aggregate — Phase 1D', () => {
       expect(() => order.updateTables([EntityId.generate()])).toThrow(TableAssignmentError);
     });
 
+    it('rejects removing every physical table or assigning a duplicate', () => {
+      const order = makeBaseOrder('TABLE');
+      const table = EntityId.generate();
+      expect(() => order.updateTables([])).toThrow(TableAssignmentError);
+      expect(() => order.updateTables([table, table])).toThrow(TableAssignmentError);
+    });
+
     it('transferring tables replaces previous assignment', () => {
       const order = makeBaseOrder('TABLE');
       const t1 = EntityId.generate();
@@ -605,6 +653,26 @@ describe('Order Aggregate — Phase 1D', () => {
 
       expect(order.tableIds).toHaveLength(1);
       expect(order.tableIds[0]!.equals(t2)).toBe(true);
+    });
+  });
+
+  describe('payment request', () => {
+    it('records an operational request without changing the primary OPEN status', () => {
+      const order = makeBaseOrder('TABLE');
+      const before = order.version;
+      order.requestPayment('request-payment');
+
+      expect(order.status).toBe('OPEN');
+      expect(order.paymentRequestedAt).toBeInstanceOf(Date);
+      expect(order.version).toBe(before + 1);
+      expect(order.events.at(-1)).toMatchObject({
+        eventType: 'PAYMENT_REQUESTED',
+        commandId: 'request-payment',
+      });
+    });
+
+    it('does not couple payment request to non-TABLE Orders', () => {
+      expect(() => makeBaseOrder('COUNTER').requestPayment()).toThrow(TableAssignmentError);
     });
   });
 

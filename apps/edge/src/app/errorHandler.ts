@@ -22,6 +22,7 @@ import {
   InvalidPaymentAmountError,
   InvalidTipError,
   OrderPaidAmountExceedsTotalError,
+  EmptyTableCancellationError,
   PaymentCurrencyMismatchError,
   PaymentNotCompletedError,
   PaymentNotFoundError,
@@ -118,6 +119,9 @@ export function errorHandler(error: Error, request: FastifyRequest, reply: Fasti
     } else if (error instanceof OrderHasDraftItemsError) {
       statusCode = 409;
       code = 'ORDER_HAS_DRAFT_ITEMS';
+    } else if (error instanceof EmptyTableCancellationError) {
+      statusCode = 409;
+      code = error.code;
     } else if (error instanceof OrderCurrencyMismatchError) {
       statusCode = 409;
       code = 'ORDER_CURRENCY_MISMATCH';
@@ -141,7 +145,7 @@ export function errorHandler(error: Error, request: FastifyRequest, reply: Fasti
       code = 'MODIFIER_INACTIVE';
     } else if (error instanceof TableAssignmentError) {
       statusCode = 409;
-      code = 'DOMAIN_CONFLICT';
+      code = error.code;
     } else if (error instanceof PaymentNotFoundError) {
       statusCode = 404;
       code = 'PAYMENT_NOT_FOUND';

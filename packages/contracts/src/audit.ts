@@ -5,9 +5,16 @@ export const AuditActionSchema = z.enum([
   'CASH_MOVEMENT_CREATED',
   'CASH_X_REPORT_GENERATED',
   'CASH_SESSION_CLOSED',
+  'ORDER_EMPTY_CANCELLED',
 ]);
 export const AuditOutcomeSchema = z.enum(['SUCCESS']);
-export const AuditEntityTypeSchema = z.enum(['PAYMENT', 'CASH_MOVEMENT', 'CASH_REPORT', 'CASH_SESSION']);
+export const AuditEntityTypeSchema = z.enum([
+  'PAYMENT',
+  'CASH_MOVEMENT',
+  'CASH_REPORT',
+  'CASH_SESSION',
+  'ORDER',
+]);
 
 export const AuditEntrySchema = z.object({
   auditId: z.string().uuid(),

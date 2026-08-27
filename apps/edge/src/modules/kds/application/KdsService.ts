@@ -6,14 +6,15 @@ import type {
   KdsTicketResponse,
   KdsTransitionRequest,
 } from '@comanview/contracts';
-import { KdsRepository, type KdsTicketView } from '@comanview/database';
+import { KdsRepository, TableRepository, type KdsTicketView } from '@comanview/database';
 import { AppError } from '../../../app/errorHandler.js';
 import type { RealtimeHub } from '../../../infrastructure/realtime/RealtimeHub.js';
 import type { AuthorizedOperation } from '../../../app/authContext.js';
 
 function mapTicket(ticket: KdsTicketView): KdsTicketResponse {
+  const { locationId: _locationId, orderVersion: _orderVersion, ...response } = ticket;
   return {
-    ...ticket,
+    ...response,
     sentAt: ticket.sentAt.toISOString(),
     preparingAt: ticket.preparingAt?.toISOString() ?? null,
     readyAt: ticket.readyAt?.toISOString() ?? null,
@@ -23,6 +24,7 @@ function mapTicket(ticket: KdsTicketView): KdsTicketResponse {
 export class KdsService {
   constructor(
     private readonly repository: KdsRepository,
+    private readonly tableRepository: TableRepository,
     private readonly realtime: RealtimeHub,
   ) {}
 
@@ -65,10 +67,31 @@ export class KdsService {
     if (changed) {
       this.realtime.publish({
         type: 'KDS_TICKETS_CHANGED',
+        locationId: ticket.locationId,
+        orderId: ticket.orderId,
         stationIds: [stationId],
         reason: target,
         occurredAt: new Date().toISOString(),
       });
+      this.realtime.publish({
+        type: 'ORDER_UPDATED',
+        locationId: ticket.locationId,
+        orderId: ticket.orderId,
+        version: ticket.orderVersion,
+        reason: 'PREPARATION_UPDATED',
+        occurredAt: new Date().toISOString(),
+      });
+      const tableIds = this.tableRepository.getActiveTableIds(ticket.orderId);
+      if (tableIds.length > 0) {
+        this.realtime.publish({
+          type: 'TABLES_CHANGED',
+          locationId: ticket.locationId,
+          tableIds,
+          orderId: ticket.orderId,
+          reason: 'PREPARATION_UPDATED',
+          occurredAt: new Date().toISOString(),
+        });
+      }
     }
     return mapTicket(ticket);
   }
@@ -84,6 +107,8 @@ export class KdsService {
     if (stationIds.length === 0) return;
     this.realtime.publish({
       type: 'KDS_TICKETS_CHANGED',
+      locationId: order.locationId.toString(),
+      orderId: order.id.toString(),
       stationIds,
       reason: 'ROUND_SENT',
       occurredAt: new Date().toISOString(),

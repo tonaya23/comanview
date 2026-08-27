@@ -8,8 +8,10 @@ export type AuditAction =
   | 'PAYMENT_VOIDED'
   | 'CASH_MOVEMENT_CREATED'
   | 'CASH_X_REPORT_GENERATED'
-  | 'CASH_SESSION_CLOSED';
-export type AuditEntityType = 'PAYMENT' | 'CASH_MOVEMENT' | 'CASH_REPORT' | 'CASH_SESSION';
+  | 'CASH_SESSION_CLOSED'
+  | 'ORDER_EMPTY_CANCELLED';
+export type AuditEntityType =
+  'PAYMENT' | 'CASH_MOVEMENT' | 'CASH_REPORT' | 'CASH_SESSION' | 'ORDER';
 
 export interface NewAuditEntry {
   auditId: string;
@@ -128,8 +130,7 @@ export class AuditRepository {
   list(filters: AuditFilters): AuditRecord[] {
     const conditions = [eq(schema.auditLog.locationId, filters.locationId)];
     if (filters.action) conditions.push(eq(schema.auditLog.action, filters.action));
-    if (filters.actorUserId)
-      conditions.push(eq(schema.auditLog.actorUserId, filters.actorUserId));
+    if (filters.actorUserId) conditions.push(eq(schema.auditLog.actorUserId, filters.actorUserId));
     if (filters.resourceId) conditions.push(eq(schema.auditLog.entityId, filters.resourceId));
     if (filters.from) conditions.push(gte(schema.auditLog.occurredAt, filters.from));
     if (filters.to) conditions.push(lte(schema.auditLog.occurredAt, filters.to));

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { createEdgeClient, EdgeClientError } from '@comanview/client-sdk';
 import type {
   CashSessionResponse,
@@ -13,8 +13,9 @@ import type {
   TipSelection,
   AuthUserResponse,
   PermissionCode,
+  RestaurantTableResponse,
 } from '@comanview/contracts';
-import { PermissionCodes } from '@comanview/contracts';
+import { OperationalRealtimeMessageSchema, PermissionCodes } from '@comanview/contracts';
 import {
   ALL_CATEGORIES,
   canEditDraftItem,
@@ -25,6 +26,8 @@ import {
   getEffectiveModifierPrice,
   getErrorMessage,
   getLocalBusinessDate,
+  getOpenTableAccounts,
+  getTableStatusLabel,
   getModifierGroupValidationMessage,
   getSnapshotTotal,
   getUnsatisfiedModifierGroups,
@@ -65,7 +68,11 @@ export function App() {
   const [connection, setConnection] = useState<ConnectionState>('CHECKING');
   const [categories, setCategories] = useState<CategoryResponse[]>([]);
   const [products, setProducts] = useState<ProductResponse[]>([]);
+  const [tables, setTables] = useState<RestaurantTableResponse[]>([]);
+  const [showOpenTables, setShowOpenTables] = useState(false);
+  const [openTablesError, setOpenTablesError] = useState<string | null>(null);
   const [selectedCategoryId, setSelectedCategoryId] = useState(ALL_CATEGORIES);
+  const [productSearch, setProductSearch] = useState('');
   const [order, setOrder] = useState<OrderResponse | null>(null);
   const [cashSession, setCashSession] = useState<CashSessionResponse | null>(null);
   const [paymentConfig, setPaymentConfig] = useState<PaymentConfigResponse | null>(null);
@@ -103,6 +110,8 @@ export function App() {
   const [voidReason, setVoidReason] = useState('');
   const [overridePin, setOverridePin] = useState('');
   const [overrideError, setOverrideError] = useState<string | null>(null);
+  const orderRef = useRef(order);
+  orderRef.current = order;
 
   const hasPermission = useCallback(
     (permission: PermissionCode) => authUser?.permissions.includes(permission) ?? false,
@@ -165,12 +174,15 @@ export function App() {
   const refreshOperationalState = useCallback(async () => {
     if (!authUser) return;
     try {
-      const [nextCategories, nextProducts, currentCash, config] = await Promise.all([
+      const [nextCategories, nextProducts, nextTables, currentCash, config] = await Promise.all([
         authUser.permissions.includes(PermissionCodes.CATALOG_VIEW)
           ? edge.getCategories()
           : Promise.resolve([]),
         authUser.permissions.includes(PermissionCodes.CATALOG_VIEW)
           ? edge.getProducts()
+          : Promise.resolve([]),
+        authUser.permissions.includes(PermissionCodes.ORDER_VIEW)
+          ? edge.getTables()
           : Promise.resolve([]),
         authUser.permissions.includes(PermissionCodes.CASH_SESSION_VIEW)
           ? edge.getCurrentCashSession()
@@ -181,6 +193,7 @@ export function App() {
       ]);
       setCategories(nextCategories);
       setProducts(nextProducts);
+      setTables(nextTables);
       setCashSession(currentCash.session);
       setPaymentConfig(config);
       setConnection('CONNECTED');
@@ -207,6 +220,31 @@ export function App() {
     }
   }, [authUser]);
 
+  const refreshRealtimeTables = useCallback(async () => {
+    if (!authUser?.permissions.includes(PermissionCodes.ORDER_VIEW)) return;
+    try {
+      setTables(await edge.getTables());
+    } catch (problem) {
+      if (problem instanceof EdgeClientError && problem.status === 401) clearLocalSession();
+    }
+  }, [authUser, clearLocalSession]);
+
+  const refreshRealtimeOrder = useCallback(
+    async (orderId: string) => {
+      if (orderRef.current?.id !== orderId) return;
+      try {
+        const next = await edge.getOrder(orderId);
+        setOrder((current) => {
+          if (!current || current.id !== next.id || next.version < current.version) return current;
+          return next;
+        });
+      } catch (problem) {
+        if (problem instanceof EdgeClientError && problem.status === 401) clearLocalSession();
+      }
+    },
+    [clearLocalSession],
+  );
+
   useEffect(() => {
     let wasConnected = false;
     const check = async () => {
@@ -223,6 +261,51 @@ export function App() {
     const timer = window.setInterval(() => void check(), 5000);
     return () => window.clearInterval(timer);
   }, [authUser, refreshConnection, refreshOperationalState, restoreCurrentOrder]);
+
+  useEffect(() => {
+    if (!authUser?.permissions.includes(PermissionCodes.ORDER_VIEW)) return;
+    let socket: WebSocket | null = null;
+    let retry: number | undefined;
+    let stopped = false;
+    const connect = () => {
+      if (stopped) return;
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      socket = new WebSocket(`${protocol}//${window.location.host}/api/realtime`);
+      socket.onopen = () => {
+        const token = window.localStorage.getItem(sessionTokenStorageKey);
+        if (!token) return socket?.close();
+        socket?.send(JSON.stringify({ type: 'AUTHENTICATE', token }));
+      };
+      socket.onmessage = (event) => {
+        try {
+          const raw = JSON.parse(String(event.data));
+          if (raw?.type === 'AUTHENTICATED') {
+            void refreshRealtimeTables();
+            if (orderRef.current) void refreshRealtimeOrder(orderRef.current.id);
+            return;
+          }
+          const message = OperationalRealtimeMessageSchema.safeParse(raw);
+          if (!message.success) return;
+          if (message.data.type === 'TABLES_CHANGED') void refreshRealtimeTables();
+          if (message.data.type === 'ORDER_UPDATED' && message.data.orderId === orderRef.current?.id) {
+            void refreshRealtimeOrder(message.data.orderId);
+          }
+        } catch {
+          /* REST polling and reconnect refetch remain the recovery path. */
+        }
+      };
+      socket.onerror = () => socket?.close();
+      socket.onclose = () => {
+        if (!stopped) retry = window.setTimeout(connect, 1_500);
+      };
+    };
+    connect();
+    return () => {
+      stopped = true;
+      if (retry) window.clearTimeout(retry);
+      socket?.close();
+    };
+  }, [authUser, refreshRealtimeOrder, refreshRealtimeTables]);
 
   useEffect(() => {
     if (
@@ -244,9 +327,10 @@ export function App() {
 
   const visibleCategories = useMemo(() => getVisibleCategories(categories), [categories]);
   const visibleProducts = useMemo(
-    () => getVisibleProducts(products, selectedCategoryId),
-    [products, selectedCategoryId],
+    () => getVisibleProducts(products, selectedCategoryId, productSearch),
+    [products, selectedCategoryId, productSearch],
   );
+  const openTableAccounts = useMemo(() => getOpenTableAccounts(tables), [tables]);
   const draftItems = order?.items.filter((item) => item.status === 'DRAFT') ?? [];
   const sentItems = order?.items.filter((item) => item.status === 'SENT') ?? [];
   const amountMinor = parseMoneyInputToMinorUnits(paymentAmount) ?? 0;
@@ -382,6 +466,22 @@ export function App() {
       () => edge.createOrder({ orderType: 'COUNTER', channel: 'POS', currency }),
       'Nueva venta creada en Edge.',
     );
+  }
+
+  async function openTableOrder(orderId: string, tableNames: string[]) {
+    clearFeedback();
+    setOpenTablesError(null);
+    setPendingAction(`open-table-${orderId}`);
+    try {
+      updateOrder(await edge.getOrder(orderId));
+      setShowOpenTables(false);
+      setNotice(`${tableNames.join(' + ')} abierta para cobro.`);
+    } catch (problem) {
+      setOpenTablesError(getErrorMessage(problem));
+      await refreshOperationalState();
+    } finally {
+      setPendingAction(null);
+    }
   }
   async function addProduct(
     product: ProductResponse,
@@ -735,8 +835,10 @@ export function App() {
           }),
         'Venta cobrada y cerrada en Edge.',
       )
-    )
+    ) {
       setShowPayment(false);
+      await refreshOperationalState();
+    }
   }
 
   function cancelPaymentVoid() {
@@ -1046,6 +1148,15 @@ export function App() {
             </div>
             <span className="product-count">{visibleProducts.length} productos</span>
           </div>
+          <label className="product-search">
+            <span aria-hidden="true">⌕</span>
+            <input
+              type="search"
+              value={productSearch}
+              placeholder="Buscar producto..."
+              onChange={(event) => setProductSearch(event.target.value)}
+            />
+          </label>
           {loadingCatalog ? (
             <div className="empty-state">
               <span className="spinner" />
@@ -1103,7 +1214,12 @@ export function App() {
                 {order
                   ? order.status === 'CLOSED'
                     ? 'Venta cerrada'
-                    : 'Mostrador'
+                    : order.orderType === 'TABLE'
+                      ? tables
+                          .filter((table) => order.tableIds.includes(table.id))
+                          .map((table) => table.name)
+                          .join(' + ') || 'Mesa'
+                      : 'Mostrador'
                   : 'Sin venta abierta'}
               </h2>
               {order && (
@@ -1112,16 +1228,34 @@ export function App() {
                 </span>
               )}
             </div>
-            <button
-              type="button"
-              className="new-order-button"
-              disabled={
-                isBusy || connection !== 'CONNECTED' || !hasPermission(PermissionCodes.ORDER_CREATE)
-              }
-              onClick={() => void createOrder()}
-            >
-              {pendingAction === 'create-order' ? 'Creando…' : order ? 'Nueva' : 'Crear venta'}
-            </button>
+            <div className="order-header-actions">
+              <button
+                type="button"
+                className="open-tables-button"
+                disabled={
+                  isBusy || connection !== 'CONNECTED' || !hasPermission(PermissionCodes.ORDER_VIEW)
+                }
+                onClick={() => {
+                  setOpenTablesError(null);
+                  setShowOpenTables(true);
+                  void refreshOperationalState();
+                }}
+              >
+                Mesas abiertas · <span>{openTableAccounts.length}</span>
+              </button>
+              <button
+                type="button"
+                className="new-order-button"
+                disabled={
+                  isBusy ||
+                  connection !== 'CONNECTED' ||
+                  !hasPermission(PermissionCodes.ORDER_CREATE)
+                }
+                onClick={() => void createOrder()}
+              >
+                {pendingAction === 'create-order' ? 'Creando…' : order ? 'Nueva' : 'Crear venta'}
+              </button>
+            </div>
           </div>
           {!order ? (
             <div className="order-empty">
@@ -1432,6 +1566,60 @@ export function App() {
           )}
         </aside>
       </main>
+
+      {showOpenTables && (
+        <div className="modal-backdrop">
+          <section
+            className="payment-modal open-tables-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="open-tables-title"
+          >
+            <div className="modal-heading">
+              <div>
+                <span className="eyebrow">Servicio en mesa</span>
+                <h2 id="open-tables-title">Mesas abiertas</h2>
+              </div>
+              <button type="button" onClick={() => setShowOpenTables(false)}>
+                ×
+              </button>
+            </div>
+            <p className="open-tables-help">Selecciona una cuenta para recuperarla y cobrarla.</p>
+            <div className="open-table-account-list">
+              {openTableAccounts.map((account) => (
+                <button
+                  key={account.orderId}
+                  type="button"
+                  disabled={isBusy}
+                  onClick={() => void openTableOrder(account.orderId, account.tableNames)}
+                >
+                  <span>
+                    <strong>{account.tableNames.join(' + ')}</strong>
+                    <small>Order #{account.orderNumber}</small>
+                    {account.balanceDue && (
+                      <small>Saldo {formatMoney(account.balanceDue.amount, account.balanceDue.currency)}</small>
+                    )}
+                    {(account.readyItemCount > 0 || account.preparingItemCount > 0) && (
+                      <small>
+                        {account.preparingItemCount} preparando · {account.readyItemCount} listo
+                      </small>
+                    )}
+                  </span>
+                  <b className={`table-operational-status ${account.status.toLowerCase()}`}>
+                    {getTableStatusLabel(account.status)}
+                  </b>
+                </button>
+              ))}
+              {openTableAccounts.length === 0 && (
+                <div className="open-tables-empty">No hay mesas ocupadas en este momento.</div>
+              )}
+            </div>
+            <div className="modal-error-slot" role="alert">
+              {openTablesError ?? '\u00a0'}
+            </div>
+          </section>
+        </div>
+      )}
 
       {printJobs.some((job) => job.status === 'FAILED' || job.status === 'UNKNOWN') && (
         <div className="print-alert" role="status">

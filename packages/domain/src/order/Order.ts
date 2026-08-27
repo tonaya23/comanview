@@ -24,6 +24,7 @@ import {
   OrderItemSpecialInstructionsFrozenError,
   OrderItemProductMismatchError,
   SpecialInstructionsTooLongError,
+  EmptyTableCancellationError,
 } from './errors.js';
 import {
   AnyOrderEvent,
@@ -38,6 +39,7 @@ import {
   TablesUpdatedEvent,
   PaymentCompletedEvent,
   PaymentVoidedEvent,
+  PaymentRequestedEvent,
 } from './events.js';
 
 export interface CreateOrderProps {
@@ -73,6 +75,7 @@ export interface OrderProps {
   orderNumber: string;
   currency: string;
   status: OrderStatus;
+  paymentRequestedAt: Date | null;
   /**
    * Logical version counter. Incremented on every successful mutation.
    *
@@ -99,7 +102,9 @@ export interface OrderProps {
  * Interface used exclusively for reconstituting an Order from persistence
  * without emitting domain events or changing the version.
  */
-export interface RehydrateOrderProps extends Omit<OrderProps, 'items' | 'rounds' | 'payments'> {
+export interface RehydrateOrderProps
+  extends Omit<OrderProps, 'items' | 'rounds' | 'payments' | 'paymentRequestedAt'> {
+  paymentRequestedAt?: Date | null;
   items: Array<import('./OrderItem.js').OrderItemProps>;
   rounds: Array<import('./Round.js').RoundProps>;
   payments: PaymentProps[];
@@ -138,6 +143,15 @@ export class Order {
         `Only TABLE orders can have table assignments. Got type: ${input.orderType}`,
       );
     }
+    if (input.orderType === 'TABLE' && (input.tableIds ?? []).length === 0) {
+      throw new TableAssignmentError('A TABLE order requires at least one physical table.');
+    }
+    if (
+      new Set((input.tableIds ?? []).map((tableId) => tableId.toString())).size !==
+      (input.tableIds ?? []).length
+    ) {
+      throw new TableAssignmentError('A table can only be assigned once to the same Order.');
+    }
 
     const id = EntityId.generate();
     const now = new Date();
@@ -164,6 +178,7 @@ export class Order {
       orderNumber: input.orderNumber,
       currency: input.currency.toUpperCase(),
       status: 'OPEN',
+      paymentRequestedAt: null,
       version: 1,
       tableIds: input.tableIds ?? [],
       items: [],
@@ -181,6 +196,7 @@ export class Order {
   static rehydrate(props: RehydrateOrderProps): Order {
     return new Order({
       ...props,
+      paymentRequestedAt: props.paymentRequestedAt ?? null,
       items: props.items.map((i) => new OrderItem(i)),
       rounds: props.rounds.map((r) => new Round(r)),
       payments: props.payments.map((payment) => Payment.rehydrate(payment)),
@@ -212,6 +228,9 @@ export class Order {
   }
   get status(): OrderStatus {
     return this.props.status;
+  }
+  get paymentRequestedAt(): Date | null {
+    return this.props.paymentRequestedAt;
   }
   get version(): number {
     return this.props.version;
@@ -607,6 +626,45 @@ export class Order {
     this.emit(event);
   }
 
+  /** Cancel a TABLE Order only before it has any commercial or operational history. */
+  cancelEmptyTable(commandId: string): void {
+    this.assertIsOpen();
+    if (this.props.orderType !== 'TABLE') {
+      throw new EmptyTableCancellationError('Only a TABLE Order can use empty-table cancellation.');
+    }
+    if (
+      this.props.items.length > 0 ||
+      this.props.rounds.length > 0 ||
+      this.props.payments.length > 0
+    ) {
+      throw new EmptyTableCancellationError(
+        'The TABLE Order must have zero items, rounds and payments before it can be cancelled.',
+      );
+    }
+    this.cancel(commandId);
+  }
+
+  /** Record the explicit operational intent to bring a TABLE Order to payment. */
+  requestPayment(commandId?: string, now = new Date()): void {
+    this.assertIsOpen();
+    if (this.props.orderType !== 'TABLE') {
+      throw new TableAssignmentError('Only a TABLE Order can request table payment.');
+    }
+    if (this.props.paymentRequestedAt) return;
+
+    this.props.paymentRequestedAt = now;
+    this.bumpVersion();
+    const event: PaymentRequestedEvent = {
+      eventId: EntityId.generate(),
+      eventType: 'PAYMENT_REQUESTED',
+      orderId: this.id,
+      occurredAt: now,
+      commandId: commandId ?? null,
+      paymentRequestedAt: now,
+    };
+    this.emit(event);
+  }
+
   /**
    * Update or transfer the table assignments for this Order.
    * Only TABLE orders may have table assignments.
@@ -617,6 +675,14 @@ export class Order {
 
     if (this.props.orderType !== 'TABLE') {
       throw new TableAssignmentError(`Cannot assign tables to a ${this.props.orderType} order.`);
+    }
+
+    if (tableIds.length === 0) {
+      throw new TableAssignmentError('A TABLE order requires at least one physical table.');
+    }
+
+    if (new Set(tableIds.map((tableId) => tableId.toString())).size !== tableIds.length) {
+      throw new TableAssignmentError('A table can only be assigned once to the same Order.');
     }
 
     this.props.tableIds = [...tableIds];

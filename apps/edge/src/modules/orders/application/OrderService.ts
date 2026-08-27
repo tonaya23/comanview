@@ -1,4 +1,10 @@
-import { OrderRepository, CatalogRepository } from '@comanview/database';
+import {
+  OrderRepository,
+  CatalogRepository,
+  TableRepository,
+  AuditPersistenceError,
+  type NewAuditEntry,
+} from '@comanview/database';
 import {
   InvalidModifierSelectionError,
   Order,
@@ -15,6 +21,7 @@ import { AppError } from '../../../app/errorHandler.js';
 import { mapOrderToResponse } from './orderMapper.js';
 import type { PrintService } from '../../printing/application/PrintService.js';
 import type { KdsService } from '../../kds/application/KdsService.js';
+import type { RealtimeHub } from '../../../infrastructure/realtime/RealtimeHub.js';
 import type { AuthorizedOperation } from '../../../app/authContext.js';
 import {
   CreateOrderRequest,
@@ -23,10 +30,14 @@ import {
   CloseOrderRequest,
   OrderResponse,
   CancelOrderRequest,
+  CancelEmptyTableOrderRequest,
   RemoveOrderItemRequest,
   UpdateOrderTablesRequest,
   UpdateOrderItemSpecialInstructionsRequest,
   UpdateDraftOrderItemConfigurationRequest,
+  RequestOrderPaymentRequest,
+  type OrderRealtimeMessage,
+  type TablesRealtimeMessage,
 } from '@comanview/contracts';
 
 export class OrderService {
@@ -36,6 +47,8 @@ export class OrderService {
     private readonly context: EdgeOperationalContext,
     private readonly printService: PrintService,
     private readonly kdsService: KdsService,
+    private readonly tableRepo: TableRepository,
+    private readonly realtime: RealtimeHub,
   ) {}
 
   async createOrder(
@@ -43,9 +56,19 @@ export class OrderService {
     operation: AuthorizedOperation,
   ): Promise<OrderResponse> {
     void operation;
+    if (request.commandId && this.orderRepo.hasProcessedCommand(request.commandId)) {
+      const event = this.orderRepo.getProcessedCommandEvent(request.commandId);
+      if (event?.eventType === 'ORDER_CREATED') {
+        const existing = this.orderRepo.getOrderById(EntityId.fromString(event.aggregateId));
+        if (existing) return mapOrderToResponse(existing);
+      }
+      throw new AppError('COMMAND_ID_CONFLICT', 409, 'commandId was already used.');
+    }
     const tenantId = EntityId.fromString(this.context.tenantId);
     const locationId = EntityId.fromString(this.context.locationId);
-    const tableIds = request.tableIds ? request.tableIds.map((t) => EntityId.fromString(t)) : [];
+    const requestedTableIds = request.tableIds ?? [];
+    this.assertTablesAssignable(requestedTableIds);
+    const tableIds = requestedTableIds.map((t) => EntityId.fromString(t));
 
     const order = Order.create({
       orderType: request.orderType as OrderType,
@@ -55,9 +78,11 @@ export class OrderService {
       locationId,
       tableIds,
       currency: request.currency,
+      ...(request.commandId ? { commandId: request.commandId } : {}),
     });
 
-    this.orderRepo.saveOrder(order, true);
+    this.saveWithTableConflictMapping(order, request.commandId);
+    this.notifyOrder(order, 'ORDER_CREATED', 'ORDER_OPENED');
     return mapOrderToResponse(order);
   }
 
@@ -94,6 +119,7 @@ export class OrderService {
     order.addItem(snapshot, request.commandId, request.specialInstructions);
 
     this.orderRepo.saveOrder(order, true, request.commandId);
+    this.notifyOrder(order, 'ITEM_ADDED');
 
     return mapOrderToResponse(order);
   }
@@ -154,6 +180,7 @@ export class OrderService {
       request.commandId,
     );
     this.orderRepo.saveOrder(order, true, request.commandId);
+    this.notifyOrder(order, 'ITEM_CONFIGURATION_UPDATED');
     return mapOrderToResponse(order);
   }
 
@@ -203,6 +230,7 @@ export class OrderService {
       request.commandId,
     );
     this.orderRepo.saveOrder(order, true, request.commandId);
+    this.notifyOrder(order, 'ITEM_SPECIAL_INSTRUCTIONS_UPDATED');
     return mapOrderToResponse(order);
   }
 
@@ -224,6 +252,7 @@ export class OrderService {
 
     order.removeItem(EntityId.fromString(itemId));
     this.orderRepo.saveOrder(order, true);
+    this.notifyOrder(order, 'ITEM_REMOVED');
     return mapOrderToResponse(order);
   }
 
@@ -258,6 +287,7 @@ export class OrderService {
     const jobs = this.printService.createStationJobs(order, round);
     this.orderRepo.saveOrder(order, true, request.commandId, jobs);
     this.kdsService.notifyRoundSent(order, round);
+    this.notifyOrder(order, 'ROUND_SENT');
     return mapOrderToResponse(order);
   }
 
@@ -289,7 +319,9 @@ export class OrderService {
     }
 
     order.close(request.commandId);
-    this.orderRepo.saveOrder(order, true, request.commandId);
+    const releasedTableIds = order.tableIds.map((tableId) => tableId.toString());
+    this.saveWithTableConflictMapping(order, request.commandId);
+    this.notifyOrder(order, 'ORDER_CLOSED', 'ORDER_RELEASED', releasedTableIds);
     return mapOrderToResponse(order);
   }
 
@@ -309,7 +341,77 @@ export class OrderService {
     }
 
     order.cancel();
-    this.orderRepo.saveOrder(order, true);
+    const releasedTableIds = order.tableIds.map((tableId) => tableId.toString());
+    this.saveWithTableConflictMapping(order);
+    this.notifyOrder(order, 'ORDER_CANCELLED', 'ORDER_RELEASED', releasedTableIds);
+    return mapOrderToResponse(order);
+  }
+
+  async cancelEmptyTableOrder(
+    orderId: string,
+    request: CancelEmptyTableOrderRequest,
+    operation: AuthorizedOperation,
+  ): Promise<OrderResponse> {
+    const order = this.orderRepo.getOrderById(EntityId.fromString(orderId));
+    if (!order) throw new ObjectNotFoundError(`Order ${orderId} not found`);
+
+    if (this.orderRepo.hasProcessedCommand(request.commandId)) {
+      const event = this.orderRepo.getProcessedCommandEvent(request.commandId);
+      if (event?.aggregateId === orderId && event.eventType === 'ORDER_CANCELLED') {
+        return mapOrderToResponse(order);
+      }
+      throw new AppError('COMMAND_ID_CONFLICT', 409, 'commandId was already used.');
+    }
+
+    if (order.version !== request.expectedVersion) {
+      throw new ConcurrencyError(
+        `Expected version ${request.expectedVersion}, but got ${order.version}`,
+      );
+    }
+
+    const releasedTableIds = order.tableIds.map((tableId) => tableId.toString());
+    const before = { status: order.status, tableIds: releasedTableIds };
+    order.cancelEmptyTable(request.commandId);
+    const event = order.events.find(
+      (candidate) =>
+        candidate.eventType === 'ORDER_CANCELLED' && candidate.commandId === request.commandId,
+    );
+    const audit: NewAuditEntry = {
+      auditId: EntityId.generate().toString(),
+      occurredAt: operation.requestedAt,
+      tenantId: operation.actor.tenantId,
+      locationId: operation.actor.locationId,
+      deviceId: operation.actor.deviceId,
+      sessionId: operation.actor.sessionId,
+      actorUserId: operation.actor.userId,
+      actorRole: operation.actor.roles[0] ?? null,
+      authorizedByUserId: operation.authorizedBy?.userId ?? null,
+      authorizedByRole: operation.authorizedBy?.roles[0] ?? null,
+      action: 'ORDER_EMPTY_CANCELLED',
+      entityType: 'ORDER',
+      entityId: orderId,
+      outcome: 'SUCCESS',
+      reason: 'EMPTY_TABLE_RELEASED',
+      commandId: request.commandId,
+      before,
+      after: { status: 'CANCELLED', tableIds: releasedTableIds },
+      amountAffected: null,
+      currency: order.currency,
+      eventId: event?.eventId.toString() ?? null,
+    };
+    try {
+      this.orderRepo.saveOrder(order, true, request.commandId, [], [audit]);
+    } catch (error) {
+      if (error instanceof AuditPersistenceError) {
+        throw new AppError(
+          'AUDIT_PERSISTENCE_FAILED',
+          500,
+          'The required audit record could not be persisted.',
+        );
+      }
+      throw error;
+    }
+    this.notifyOrder(order, 'ORDER_CANCELLED', 'ORDER_RELEASED', releasedTableIds);
     return mapOrderToResponse(order);
   }
 
@@ -322,17 +424,142 @@ export class OrderService {
     const order = this.orderRepo.getOrderById(EntityId.fromString(orderId));
     if (!order) throw new ObjectNotFoundError(`Order ${orderId} not found`);
 
+    if (this.orderRepo.hasProcessedCommand(request.commandId)) {
+      const event = this.orderRepo.getProcessedCommandEvent(request.commandId);
+      if (event?.aggregateId === orderId && event.eventType === 'TABLES_UPDATED') {
+        const payload = JSON.parse(event.payload) as { tableIds?: string[] };
+        if (
+          JSON.stringify([...(payload.tableIds ?? [])].sort()) ===
+          JSON.stringify([...request.tableIds].sort())
+        )
+          return mapOrderToResponse(order);
+      }
+      throw new AppError('COMMAND_ID_CONFLICT', 409, 'commandId was already used.');
+    }
+
     if (order.version !== request.expectedVersion) {
       throw new ConcurrencyError(
         `Expected version ${request.expectedVersion}, but got ${order.version}`,
       );
     }
 
+    this.assertTablesAssignable(request.tableIds, orderId);
+    const previousTableIds = order.tableIds.map((tableId) => tableId.toString());
     const tableIds = request.tableIds.map((t) => EntityId.fromString(t));
-    order.updateTables(tableIds);
+    order.updateTables(tableIds, request.commandId);
 
-    this.orderRepo.saveOrder(order, true);
+    this.saveWithTableConflictMapping(order, request.commandId);
+    this.notifyOrder(
+      order,
+      'TABLES_UPDATED',
+      'TABLES_UPDATED',
+      [...new Set([...previousTableIds, ...request.tableIds])],
+    );
     return mapOrderToResponse(order);
+  }
+
+  async requestPayment(
+    orderId: string,
+    request: RequestOrderPaymentRequest,
+    operation: AuthorizedOperation,
+  ): Promise<OrderResponse> {
+    void operation;
+    const order = this.orderRepo.getOrderById(EntityId.fromString(orderId));
+    if (!order) throw new ObjectNotFoundError(`Order ${orderId} not found`);
+
+    if (this.orderRepo.hasProcessedCommand(request.commandId)) {
+      const event = this.orderRepo.getProcessedCommandEvent(request.commandId);
+      if (event?.aggregateId === orderId && event.eventType === 'PAYMENT_REQUESTED') {
+        return mapOrderToResponse(order);
+      }
+      throw new AppError('COMMAND_ID_CONFLICT', 409, 'commandId was already used.');
+    }
+    if (order.version !== request.expectedVersion) {
+      throw new ConcurrencyError(
+        `Expected version ${request.expectedVersion}, but got ${order.version}`,
+      );
+    }
+    if (order.paymentRequestedAt) return mapOrderToResponse(order);
+
+    order.requestPayment(request.commandId);
+    this.orderRepo.saveOrder(order, true, request.commandId);
+    this.notifyOrder(order, 'PAYMENT_REQUESTED', 'PAYMENT_REQUESTED');
+    return mapOrderToResponse(order);
+  }
+
+  private assertTablesAssignable(tableIds: readonly string[], excludingOrderId?: string): void {
+    if (tableIds.length === 0) return;
+    const uniqueIds = [...new Set(tableIds)];
+    const tables = this.tableRepo.getByIds(uniqueIds);
+    for (const tableId of uniqueIds) {
+      const table = tables.find((candidate) => candidate.id.toString() === tableId);
+      if (!table || table.locationId.toString() !== this.context.locationId) {
+        throw new AppError('TABLE_NOT_FOUND', 404, `Table ${tableId} was not found.`);
+      }
+      if (!table.active) {
+        throw new AppError('TABLE_INACTIVE', 409, `Table ${tableId} is inactive.`);
+      }
+      const occupant = this.tableRepo.findOccupant(tableId, excludingOrderId);
+      if (occupant) {
+        throw new AppError('TABLE_OCCUPIED', 409, `Table ${tableId} is already occupied.`, {
+          tableId,
+          activeOrderId: occupant,
+        });
+      }
+    }
+  }
+
+  private saveWithTableConflictMapping(order: Order, commandId?: string): void {
+    try {
+      this.orderRepo.saveOrder(order, true, commandId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (
+        message.includes('unq_active_table_assignment') ||
+        message.includes('order_table_assignments.table_id')
+      ) {
+        throw new AppError(
+          'TABLE_OCCUPIED',
+          409,
+          'One of the selected tables is already occupied.',
+        );
+      }
+      throw error;
+    }
+  }
+
+  private notifyTables(
+    orderId: string,
+    tableIds: string[],
+    reason: TablesRealtimeMessage['reason'],
+  ): void {
+    this.realtime.publish({
+      type: 'TABLES_CHANGED',
+      locationId: this.context.locationId,
+      tableIds,
+      orderId,
+      reason,
+      occurredAt: new Date().toISOString(),
+    });
+  }
+
+  private notifyOrder(
+    order: Order,
+    reason: OrderRealtimeMessage['reason'],
+    tableReason: TablesRealtimeMessage['reason'] = 'ORDER_UPDATED',
+    affectedTableIds = order.tableIds.map((tableId) => tableId.toString()),
+  ): void {
+    this.realtime.publish({
+      type: 'ORDER_UPDATED',
+      locationId: order.locationId.toString(),
+      orderId: order.id.toString(),
+      version: order.version,
+      reason,
+      occurredAt: new Date().toISOString(),
+    });
+    if (order.orderType === 'TABLE' && affectedTableIds.length > 0) {
+      this.notifyTables(order.id.toString(), affectedTableIds, tableReason);
+    }
   }
 
   private createAuthoritativeSnapshot(product: Product, selectedModifierIds: string[]) {

@@ -41,6 +41,8 @@ const MIGRATION_PATHS = [
   '0005_local_auth.sql',
   '0006_audit_log.sql',
   '0007_cash_operations_closure.sql',
+  '0008_tables_waiter.sql',
+  '0009_operational_realtime.sql',
 ].map((migration) => join(__dirname, `../../../../../migrations/edge/${migration}`));
 
 function applyMigrations(sqlite: { exec(source: string): unknown }): void {

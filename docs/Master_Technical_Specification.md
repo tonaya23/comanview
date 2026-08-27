@@ -1248,6 +1248,12 @@ ALERT
 
 sin convertirlos necesariamente en estados de Order.
 
+En V1 el estado operacional de mesa se derivará con precedencia explícita:
+`PAYMENT_REQUESTED > READY > OPEN > FREE`. `READY` significa que existe al menos un
+`OrderItem` `SENT` con `prep_status = READY`; no modifica el lifecycle financiero ni impide cerrar
+una Order. `PAYMENT_REQUESTED` se activa mediante la intención explícita `Solicitar cuenta` y se
+persiste como `payment_requested_at` en la Order abierta.
+
 ## 4.6 Comandería
 
 Tablet:
@@ -1333,6 +1339,10 @@ KDS + PRINTER
 ## 4.11 Precuenta
 
 Generar precuenta MUST NOT cerrar la Order.
+
+Imprimir una precuenta y solicitar cuenta son conceptos separados: imprimir `PRECHECK` por sí solo
+MUST NOT activar `PAYMENT_REQUESTED`. La UI MAY ofrecer ambas acciones juntas, pero Edge deberá
+registrar explícitamente la intención de solicitar cuenta.
 
 ## 4.12 Split Bill
 

@@ -424,4 +424,63 @@ describe('createEdgeClient', () => {
       expect.objectContaining({ method: 'POST', body: '{"commandId":"start-kds"}' }),
     );
   });
+
+  it('lists tables and sends an explicit idempotent table move command', async () => {
+    const table = {
+      id: '01991a00-0000-7000-8000-000000000801',
+      locationId: '01991a00-0000-7000-8000-000000000302',
+      name: 'Mesa 1',
+      zone: 'SALÓN',
+      capacity: 4,
+      displayOrder: 10,
+      active: true,
+      status: 'FREE',
+      activeOrderId: null,
+      activeOrderNumber: null,
+    };
+    const order = {
+      id: '01991a00-0000-7000-8000-000000000901',
+      tenantId: '01991a00-0000-7000-8000-000000000301',
+      locationId: table.locationId,
+      orderType: 'TABLE',
+      channel: 'WAITER',
+      currency: 'MXN',
+      status: 'OPEN',
+      tableIds: [table.id],
+      items: [],
+      rounds: [],
+      payments: [],
+      version: 2,
+      subtotal: { amount: 0, currency: 'MXN' },
+      total: { amount: 0, currency: 'MXN' },
+      paidAmount: { amount: 0, currency: 'MXN' },
+      balanceDue: { amount: 0, currency: 'MXN' },
+      tipTotal: { amount: 0, currency: 'MXN' },
+      createdAt: '2026-08-27T12:00:00.000Z',
+      updatedAt: '2026-08-27T12:00:00.000Z',
+    };
+    const fetchMock = vi.fn(async (url: string) =>
+      jsonResponse(url === '/tables' ? [table] : order),
+    );
+    const client = createEdgeClient({ fetch: fetchMock as EdgeFetch });
+    expect(await client.getTables()).toMatchObject([table]);
+    const move = { commandId: 'move-order', expectedVersion: 1, tableIds: [table.id] };
+    await client.updateOrderTables(order.id, move);
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      `/orders/${order.id}/tables`,
+      expect.objectContaining({ method: 'PUT', body: JSON.stringify(move) }),
+    );
+    const cancellation = { commandId: 'cancel-empty-table', expectedVersion: order.version };
+    await client.cancelEmptyTableOrder(order.id, cancellation);
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      `/orders/${order.id}/cancel-empty`,
+      expect.objectContaining({ method: 'POST', body: JSON.stringify(cancellation) }),
+    );
+    const requestPayment = { commandId: 'request-payment', expectedVersion: order.version };
+    await client.requestOrderPayment(order.id, requestPayment);
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      `/orders/${order.id}/payment-request`,
+      expect.objectContaining({ method: 'POST', body: JSON.stringify(requestPayment) }),
+    );
+  });
 });

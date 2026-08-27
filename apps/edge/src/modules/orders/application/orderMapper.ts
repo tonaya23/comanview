@@ -15,11 +15,13 @@ export function mapOrderToResponse(order: Order): OrderResponse {
     channel: order.orderChannel,
     currency: order.currency,
     status: order.status,
+    paymentRequestedAt: order.paymentRequestedAt?.toISOString() ?? null,
     tableIds: order.tableIds.map((tableId) => tableId.toString()),
     items: order.items.map((item) => ({
       id: item.id.toString(),
       specialInstructions: item.specialInstructions,
       status: item.sendStatus,
+      prepStatus: item.prepStatus,
       addedAt: order.createdAt.toISOString(),
       sentAt: item.isSent ? order.createdAt.toISOString() : null,
       productSnapshot: {

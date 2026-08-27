@@ -16,3 +16,4 @@ export * from './catalog/index.js';
 export * from './order/index.js';
 export * from './payment/index.js';
 export * from './cash/index.js';
+export * from './table/index.js';

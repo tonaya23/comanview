@@ -67,6 +67,11 @@ export interface TablesUpdatedEvent extends OrderDomainEvent {
   readonly tableIds: EntityId[];
 }
 
+export interface PaymentRequestedEvent extends OrderDomainEvent {
+  readonly eventType: 'PAYMENT_REQUESTED';
+  readonly paymentRequestedAt: Date;
+}
+
 export interface PaymentCompletedEvent extends OrderDomainEvent {
   readonly eventType: 'PAYMENT_COMPLETED';
   readonly paymentId: EntityId;
@@ -92,5 +97,6 @@ export type AnyOrderEvent =
   | OrderClosedEvent
   | OrderCancelledEvent
   | TablesUpdatedEvent
+  | PaymentRequestedEvent
   | PaymentCompletedEvent
   | PaymentVoidedEvent;

@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import { sqliteTable, text, integer, uniqueIndex } from 'drizzle-orm/sqlite-core';
 
 // ─── INFRASTRUCTURE ─────────────────────────────────────────────────────────
@@ -244,20 +245,38 @@ export const orders = sqliteTable('orders', {
   orderNumber: text('order_number').notNull(),
   currency: text('currency').notNull(),
   status: text('status').notNull(), // OPEN | CLOSED | CANCELLED
+  paymentRequestedAt: integer('payment_requested_at', { mode: 'timestamp_ms' }),
   version: integer('version').notNull().default(1),
   createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+});
+
+export const restaurantTables = sqliteTable('restaurant_tables', {
+  id: text('id').primaryKey(),
+  tenantId: text('tenant_id').notNull(),
+  locationId: text('location_id').notNull(),
+  name: text('name').notNull(),
+  zone: text('zone'),
+  capacity: integer('capacity'),
+  displayOrder: integer('display_order').notNull().default(0),
+  active: integer('active', { mode: 'boolean' }).notNull().default(true),
 });
 
 export const orderTableAssignments = sqliteTable(
   'order_table_assignments',
   {
+    id: text('id').primaryKey(),
     orderId: text('order_id')
       .notNull()
       .references(() => orders.id),
     tableId: text('table_id').notNull(),
+    assignedAt: integer('assigned_at', { mode: 'timestamp_ms' }).notNull(),
+    releasedAt: integer('released_at', { mode: 'timestamp_ms' }),
+    commandId: text('command_id'),
   },
   (table) => ({
-    unq: uniqueIndex('unq_order_table_assignment').on(table.orderId, table.tableId),
+    activeTable: uniqueIndex('unq_active_table_assignment')
+      .on(table.tableId)
+      .where(sql`${table.releasedAt} IS NULL`),
   }),
 );
 
@@ -379,7 +398,9 @@ export const cashSessions = sqliteTable('cash_sessions', {
 
 export const cashMovements = sqliteTable('cash_movements', {
   id: text('id').primaryKey(),
-  cashSessionId: text('cash_session_id').notNull().references(() => cashSessions.id),
+  cashSessionId: text('cash_session_id')
+    .notNull()
+    .references(() => cashSessions.id),
   movementType: text('movement_type').notNull(),
   amount: integer('amount').notNull(),
   currency: text('currency').notNull(),
@@ -391,7 +412,9 @@ export const cashMovements = sqliteTable('cash_movements', {
 
 export const cashReports = sqliteTable('cash_reports', {
   id: text('id').primaryKey(),
-  cashSessionId: text('cash_session_id').notNull().references(() => cashSessions.id),
+  cashSessionId: text('cash_session_id')
+    .notNull()
+    .references(() => cashSessions.id),
   reportType: text('report_type').notNull(),
   snapshotJson: text('snapshot_json').notNull(),
   generatedAt: integer('generated_at', { mode: 'timestamp_ms' }).notNull(),

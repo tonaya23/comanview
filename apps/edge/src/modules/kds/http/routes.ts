@@ -88,17 +88,19 @@ export function kdsRoutes(
     );
     fastify.get('/realtime', { websocket: true }, (socket) => {
       if (auth.bypassesAuthentication) {
-        realtime.subscribe(socket);
+        const actor = auth.authenticateRealtimeActorAny('', [PERMISSIONS.ORDER_VIEW]);
+        realtime.subscribe(socket, actor!.locationId);
         return;
       }
 
       let sessionToken: string | null = null;
+      const realtimePermissions = [PERMISSIONS.ORDER_VIEW, PERMISSIONS.KDS_VIEW] as const;
       const authenticationTimeout = setTimeout(
         () => socket.close(1008, 'Local session authentication required.'),
         5_000,
       );
       const validityInterval = setInterval(() => {
-        if (sessionToken && !auth.isRealtimeSessionValid(sessionToken, PERMISSIONS.KDS_VIEW)) {
+        if (sessionToken && !auth.isRealtimeSessionValidForAny(sessionToken, realtimePermissions)) {
           socket.close(1008, 'Local session is no longer authorized.');
         }
       }, 5_000);
@@ -107,18 +109,19 @@ export function kdsRoutes(
       socket.once('message', (payload: Buffer) => {
         try {
           const message = JSON.parse(payload.toString()) as { type?: unknown; token?: unknown };
-          if (
-            message.type !== 'AUTHENTICATE' ||
-            typeof message.token !== 'string' ||
-            !auth.authenticateRealtime(message.token, PERMISSIONS.KDS_VIEW)
-          ) {
+          const token = typeof message.token === 'string' ? message.token : null;
+          const actor =
+            message.type !== 'AUTHENTICATE' || !token
+              ? null
+              : auth.authenticateRealtimeActorAny(token, realtimePermissions);
+          if (!actor) {
             socket.close(1008, 'Invalid local session.');
             return;
           }
-          sessionToken = message.token;
+          sessionToken = token;
           clearTimeout(authenticationTimeout);
-          realtime.subscribe(socket, () =>
-            auth.isRealtimeSessionValid(sessionToken!, PERMISSIONS.KDS_VIEW),
+          realtime.subscribe(socket, actor.locationId, () =>
+            auth.isRealtimeSessionValidForAny(sessionToken!, realtimePermissions),
           );
           socket.send(JSON.stringify({ type: 'AUTHENTICATED' }));
         } catch {

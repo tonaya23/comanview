@@ -4306,6 +4306,10 @@ Orden continúa abierta
 
 La generación de precuenta no deberá cerrar la orden.
 
+La intención operacional `Solicitar cuenta` y la impresión `PRECHECK` se mantendrán separadas. Una
+impresión de precuenta aislada no activará necesariamente `PAYMENT_REQUESTED`; ese estado derivado
+requiere registrar explícitamente `payment_requested_at`.
+
 ## 4.27 Flujo de Pago
 
 Cuando el usuario seleccione COBRAR, deberá mostrarse una interfaz clara con:

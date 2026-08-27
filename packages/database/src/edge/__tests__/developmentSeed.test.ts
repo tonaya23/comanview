@@ -76,7 +76,21 @@ describe('development catalog seed', () => {
         });
         expect(sqlite.prepare('SELECT COUNT(*) AS count FROM roles').get()).toEqual({ count: 5 });
         expect(sqlite.prepare('SELECT COUNT(*) AS count FROM users').get()).toEqual({ count: 6 });
-        expect(sqlite.prepare('SELECT COUNT(*) AS count FROM devices').get()).toEqual({ count: 2 });
+        expect(sqlite.prepare('SELECT COUNT(*) AS count FROM devices').get()).toEqual({ count: 3 });
+        expect(
+          sqlite
+            .prepare(
+              'SELECT name, zone, display_order FROM restaurant_tables ORDER BY display_order',
+            )
+            .all(),
+        ).toEqual([
+          { name: 'Mesa 1', zone: 'SALÓN', display_order: 10 },
+          { name: 'Mesa 2', zone: 'SALÓN', display_order: 20 },
+          { name: 'Mesa 3', zone: 'SALÓN', display_order: 30 },
+          { name: 'Mesa 4', zone: 'SALÓN', display_order: 40 },
+          { name: 'Mesa 5', zone: 'TERRAZA', display_order: 50 },
+          { name: 'Mesa 6', zone: 'TERRAZA', display_order: 60 },
+        ]);
         expect(
           sqlite
             .prepare(

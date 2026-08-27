@@ -2,20 +2,80 @@ import type {
   CategoryResponse,
   ProductModifierGroupResponse,
   ProductResponse,
+  RestaurantTableResponse,
 } from '@comanview/contracts';
 import { EdgeClientError } from '@comanview/client-sdk';
 
 export const ALL_CATEGORIES = 'ALL';
 
+export interface OpenTableAccount {
+  orderId: string;
+  orderNumber: string;
+  tableNames: string[];
+  status: Exclude<RestaurantTableResponse['status'], 'FREE'>;
+  total: RestaurantTableResponse['total'];
+  balanceDue: RestaurantTableResponse['balanceDue'];
+  draftItemCount: number;
+  preparingItemCount: number;
+  readyItemCount: number;
+  createdAt: string | null;
+}
+
+export function getOpenTableAccounts(tables: RestaurantTableResponse[]): OpenTableAccount[] {
+  const accounts = new Map<string, OpenTableAccount>();
+  for (const table of tables) {
+    if (table.status === 'FREE' || !table.activeOrderId || !table.activeOrderNumber) continue;
+    const existing = accounts.get(table.activeOrderId);
+    if (existing) {
+      existing.tableNames.push(table.name);
+    } else {
+      accounts.set(table.activeOrderId, {
+        orderId: table.activeOrderId,
+        orderNumber: table.activeOrderNumber,
+        tableNames: [table.name],
+        status: table.status,
+        total: table.total,
+        balanceDue: table.balanceDue,
+        draftItemCount: table.draftItemCount,
+        preparingItemCount: table.preparingItemCount,
+        readyItemCount: table.readyItemCount,
+        createdAt: table.activeOrderCreatedAt,
+      });
+    }
+  }
+  const priority = { PAYMENT_REQUESTED: 0, READY: 1, OPEN: 2 } as const;
+  return [...accounts.values()].sort(
+    (left, right) =>
+      priority[left.status] - priority[right.status] ||
+      (left.createdAt ?? '').localeCompare(right.createdAt ?? '') ||
+      left.orderNumber.localeCompare(right.orderNumber),
+  );
+}
+
+export function getTableStatusLabel(status: RestaurantTableResponse['status']): string {
+  return {
+    FREE: 'LIBRE',
+    OPEN: 'ABIERTA',
+    READY: 'LISTO',
+    PAYMENT_REQUESTED: 'CUENTA SOLICITADA',
+  }[status];
+}
+
 export function getVisibleProducts(
   products: ProductResponse[],
   selectedCategoryId: string,
+  query = '',
 ): ProductResponse[] {
+  const normalizedQuery = query.trim().toLocaleLowerCase('es-MX');
   return products
     .filter(
       (product) =>
         product.active &&
-        (selectedCategoryId === ALL_CATEGORIES || product.categoryId === selectedCategoryId),
+        (normalizedQuery
+          ? [product.name, product.sku, product.barcode].some((value) =>
+              value?.toLocaleLowerCase('es-MX').includes(normalizedQuery),
+            )
+          : selectedCategoryId === ALL_CATEGORIES || product.categoryId === selectedCategoryId),
     )
     .sort(
       (left, right) =>

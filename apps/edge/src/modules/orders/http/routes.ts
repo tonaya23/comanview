@@ -6,12 +6,14 @@ import {
   SendRoundRequestSchema,
   CloseOrderRequestSchema,
   CancelOrderRequestSchema,
+  CancelEmptyTableOrderRequestSchema,
   RemoveOrderItemRequestSchema,
   CreateOrderRequest,
   AddOrderItemRequest,
   SendRoundRequest,
   CloseOrderRequest,
   CancelOrderRequest,
+  CancelEmptyTableOrderRequest,
   RemoveOrderItemRequest,
   UpdateOrderTablesRequestSchema,
   UpdateOrderTablesRequest,
@@ -19,6 +21,8 @@ import {
   UpdateOrderItemSpecialInstructionsRequest,
   UpdateDraftOrderItemConfigurationRequestSchema,
   UpdateDraftOrderItemConfigurationRequest,
+  RequestOrderPaymentRequestSchema,
+  RequestOrderPaymentRequest,
 } from '@comanview/contracts';
 import { PERMISSIONS } from '@comanview/auth';
 import type { AuthGuard } from '../../auth/http/AuthGuard.js';
@@ -172,6 +176,24 @@ export function orderRoutes(orderService: OrderService, auth: AuthGuard): Fastif
 
     // POST /orders/:id/close
     fastify.post(
+      '/:id/payment-request',
+      {
+        preHandler: auth.requirePermission(PERMISSIONS.ORDER_REQUEST_PAYMENT),
+        schema: { body: RequestOrderPaymentRequestSchema },
+      },
+      async (request, reply) => {
+        const { id } = request.params as { id: string };
+        reply.send(
+          await orderService.requestPayment(
+            id,
+            request.body as RequestOrderPaymentRequest,
+            operationFrom(request, PERMISSIONS.ORDER_REQUEST_PAYMENT),
+          ),
+        );
+      },
+    );
+
+    fastify.post(
       '/:id/close',
       {
         preHandler: auth.requirePermission(PERMISSIONS.ORDER_CLOSE),
@@ -207,6 +229,27 @@ export function orderRoutes(orderService: OrderService, auth: AuthGuard): Fastif
           id,
           body,
           operationFrom(request, PERMISSIONS.ORDER_CANCEL),
+        );
+        reply.send(order);
+      },
+    );
+
+    // POST /orders/:id/cancel-empty — limited Waiter flow for untouched TABLE Orders
+    fastify.post(
+      '/:id/cancel-empty',
+      {
+        preHandler: auth.requirePermission(PERMISSIONS.ORDER_CANCEL_EMPTY),
+        schema: {
+          body: CancelEmptyTableOrderRequestSchema,
+        },
+      },
+      async (request, reply) => {
+        const { id } = request.params as { id: string };
+        const body = request.body as CancelEmptyTableOrderRequest;
+        const order = await orderService.cancelEmptyTableOrder(
+          id,
+          body,
+          operationFrom(request, PERMISSIONS.ORDER_CANCEL_EMPTY),
         );
         reply.send(order);
       },

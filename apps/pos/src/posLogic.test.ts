@@ -13,6 +13,7 @@ import {
   getVisibleCategories,
   getVisibleProducts,
   getLocalBusinessDate,
+  getOpenTableAccounts,
   getModifierGroupValidationMessage,
   getSnapshotTotal,
   getUnsatisfiedModifierGroups,
@@ -62,6 +63,59 @@ describe('POS presentation behavior', () => {
       getVisibleProducts(products, '01991a00-0000-7000-8000-000000000001').map((item) => item.name),
     ).toEqual(['Primero', 'Segundo']);
     expect(getVisibleProducts(products, ALL_CATEGORIES)).toHaveLength(3);
+  });
+
+  it('groups occupied physical tables as one open TABLE account', () => {
+    const shared = {
+      tenantId: '01991a00-0000-7000-8000-000000000301',
+      locationId: '01991a00-0000-7000-8000-000000000302',
+      zone: 'SALÓN',
+      capacity: 4,
+      displayOrder: 1,
+      active: true,
+      status: 'READY' as const,
+      activeOrderId: '01991a00-0000-7000-8000-000000000901',
+      activeOrderNumber: '42',
+      activeOrderCreatedAt: '2026-08-27T12:00:00.000Z',
+      paymentRequestedAt: null,
+      pendingItemCount: 0,
+      preparingItemCount: 1,
+      readyItemCount: 1,
+      draftItemCount: 0,
+      total: { amount: 2000, currency: 'MXN' },
+      balanceDue: { amount: 2000, currency: 'MXN' },
+    };
+    const accounts = getOpenTableAccounts([
+      { ...shared, id: '01991a00-0000-7000-8000-000000000801', name: 'Mesa 4' },
+      { ...shared, id: '01991a00-0000-7000-8000-000000000802', name: 'Mesa 5' },
+    ]);
+
+    expect(accounts).toEqual([
+      {
+        orderId: shared.activeOrderId,
+        orderNumber: '42',
+        tableNames: ['Mesa 4', 'Mesa 5'],
+        status: 'READY',
+        total: shared.total,
+        balanceDue: shared.balanceDue,
+        draftItemCount: 0,
+        preparingItemCount: 1,
+        readyItemCount: 1,
+        createdAt: shared.activeOrderCreatedAt,
+      },
+    ]);
+  });
+
+  it('searches the locally loaded catalog by name regardless of category or case', () => {
+    const products = [
+      product({ name: 'Limonada', categoryId: '01991a00-0000-7000-8000-000000000002' }),
+      product({ id: '01991a00-0000-7000-8000-000000000102', name: 'Café' }),
+    ];
+    expect(
+      getVisibleProducts(products, '01991a00-0000-7000-8000-000000000001', 'LIM').map(
+        ({ name }) => name,
+      ),
+    ).toEqual(['Limonada']);
   });
 
   it('presents the authoritative cash difference with operational meaning', () => {

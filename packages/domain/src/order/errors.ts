@@ -86,6 +86,12 @@ export class OrderHasDraftItemsError extends DomainError {
   }
 }
 
+export class EmptyTableCancellationError extends DomainError {
+  constructor(message: string) {
+    super(message, 'ORDER_EMPTY_CANCEL_NOT_ALLOWED');
+  }
+}
+
 /**
  * Thrown when a ProductSnapshot with a different currency than the Order's currency
  * is added. V1 requires a single currency per Order (and per Location).

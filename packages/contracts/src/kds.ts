@@ -51,6 +51,8 @@ export type KdsTransitionRequest = z.infer<typeof KdsTransitionRequestSchema>;
 
 export const KdsRealtimeMessageSchema = z.object({
   type: z.literal('KDS_TICKETS_CHANGED'),
+  locationId: z.string().uuid(),
+  orderId: z.string().uuid(),
   stationIds: z.array(z.string().uuid()),
   reason: z.enum(['ROUND_SENT', 'PREPARING', 'READY']),
   occurredAt: z.string(),

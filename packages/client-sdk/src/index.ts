@@ -18,6 +18,7 @@ import {
   CurrentSessionResponseSchema,
   LogoutResponseSchema,
   AuditListResponseSchema,
+  RestaurantTableSchema,
   type AddOrderItemRequest,
   type CategoryResponse,
   type CreateOrderRequest,
@@ -55,6 +56,10 @@ import {
   type LogoutResponse,
   type AuditListQuery,
   type AuditListResponse,
+  type RestaurantTableResponse,
+  type UpdateOrderTablesRequest,
+  type CancelEmptyTableOrderRequest,
+  type RequestOrderPaymentRequest,
 } from '@comanview/contracts';
 
 interface RuntimeSchema<T> {
@@ -103,6 +108,7 @@ export interface EdgeClient {
   getAuditEntries(query?: Partial<AuditListQuery>): Promise<AuditListResponse>;
   getCategories(): Promise<CategoryResponse[]>;
   getProducts(): Promise<ProductResponse[]>;
+  getTables(): Promise<RestaurantTableResponse[]>;
   createOrder(request: CreateOrderRequest): Promise<OrderResponse>;
   getOrder(orderId: string): Promise<OrderResponse>;
   addOrderItem(orderId: string, request: AddOrderItemRequest): Promise<OrderResponse>;
@@ -122,6 +128,12 @@ export interface EdgeClient {
     request: UpdateDraftOrderItemConfigurationRequest,
   ): Promise<OrderResponse>;
   sendRound(orderId: string, request: SendRoundRequest): Promise<OrderResponse>;
+  updateOrderTables(orderId: string, request: UpdateOrderTablesRequest): Promise<OrderResponse>;
+  cancelEmptyTableOrder(
+    orderId: string,
+    request: CancelEmptyTableOrderRequest,
+  ): Promise<OrderResponse>;
+  requestOrderPayment(orderId: string, request: RequestOrderPaymentRequest): Promise<OrderResponse>;
   getCurrentCashSession(): Promise<CurrentCashSessionResponse>;
   openCashSession(request: OpenCashSessionRequest): Promise<CashSessionResponse>;
   createCashMovement(request: CreateCashMovementRequest): Promise<CashMovementResponse>;
@@ -252,6 +264,7 @@ export function createEdgeClient(options: EdgeClientOptions = {}): EdgeClient {
     },
     getCategories: () => request('/catalog/categories', CategorySchema.array()),
     getProducts: () => request('/catalog/products', ProductSchema.array()),
+    getTables: () => request('/tables', RestaurantTableSchema.array()),
     createOrder: (body) =>
       request('/orders', OrderSchema, { method: 'POST', body: JSON.stringify(body) }),
     getOrder: (orderId) => request(`/orders/${orderId}`, OrderSchema),
@@ -277,6 +290,21 @@ export function createEdgeClient(options: EdgeClientOptions = {}): EdgeClient {
       }),
     sendRound: (orderId, body) =>
       request(`/orders/${orderId}/rounds`, OrderSchema, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    updateOrderTables: (orderId, body) =>
+      request(`/orders/${orderId}/tables`, OrderSchema, {
+        method: 'PUT',
+        body: JSON.stringify(body),
+      }),
+    cancelEmptyTableOrder: (orderId, body) =>
+      request(`/orders/${orderId}/cancel-empty`, OrderSchema, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    requestOrderPayment: (orderId, body) =>
+      request(`/orders/${orderId}/payment-request`, OrderSchema, {
         method: 'POST',
         body: JSON.stringify(body),
       }),

@@ -24,11 +24,26 @@ describe('Edge API Integration Tests', () => {
       '0005_local_auth.sql',
       '0006_audit_log.sql',
       '0007_cash_operations_closure.sql',
+      '0008_tables_waiter.sql',
+      '0009_operational_realtime.sql',
     ]) {
       sqlite.exec(
         readFileSync(path.resolve(__dirname, `../../../../migrations/edge/${migration}`), 'utf-8'),
       );
     }
+    sqlite.exec(`
+      INSERT INTO restaurant_tables
+        (id, tenant_id, location_id, name, zone, capacity, display_order, active)
+      VALUES
+        ('01991a00-0000-7000-8000-000000000899',
+         '01991a00-0000-7000-8000-000000000301',
+         '01991a00-0000-7000-8000-000000000302',
+         'API Test Table', 'TEST', 2, 1, 1),
+        ('01991a00-0000-7000-8000-000000000898',
+         '01991a00-0000-7000-8000-000000000301',
+         '01991a00-0000-7000-8000-000000000302',
+         'API Test Table 2', 'TEST', 2, 2, 1)
+    `);
     sqlite.close();
 
     app = await buildApp(tmpPath, { authMode: 'test-bypass' });
@@ -139,6 +154,7 @@ describe('Edge API Integration Tests', () => {
         orderType: 'TABLE',
         channel: 'WAITER',
         currency: 'MXN',
+        tableIds: ['01991a00-0000-7000-8000-000000000899'],
       },
     });
 
@@ -178,11 +194,12 @@ describe('Edge API Integration Tests', () => {
   });
 
   it('17. PUT /orders/:id/tables', async () => {
-    const tableId = '018f2c70-7b00-7000-8000-000000000001'; // valid UUID v7
+    const tableId = '01991a00-0000-7000-8000-000000000898';
     const response = await app.inject({
       method: 'PUT',
       url: `/orders/${orderId}/tables`,
       payload: {
+        commandId: crypto.randomUUID(),
         expectedVersion: orderVersion,
         tableIds: [tableId],
       },

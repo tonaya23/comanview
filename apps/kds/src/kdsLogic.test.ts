@@ -34,6 +34,8 @@ describe('KDS presentation behavior', () => {
   it('refreshes only when realtime affects the selected station', () => {
     const message = {
       type: 'KDS_TICKETS_CHANGED' as const,
+      locationId: '01991a00-0000-7000-8000-000000000302',
+      orderId: '01991a00-0000-7000-8000-000000000901',
       stationIds: ['station-a'],
       reason: 'ROUND_SENT' as const,
       occurredAt: new Date().toISOString(),

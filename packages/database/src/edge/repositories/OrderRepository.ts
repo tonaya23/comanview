@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import * as schema from '../schema.js';
 import {
@@ -106,6 +106,7 @@ export class OrderRepository {
           orderNumber: order.orderNumber,
           currency: order.currency,
           status: order.status,
+          paymentRequestedAt: order.paymentRequestedAt,
           version: order.version,
           createdAt: order.createdAt,
         })
@@ -113,20 +114,48 @@ export class OrderRepository {
           target: schema.orders.id,
           set: {
             status: order.status,
+            paymentRequestedAt: order.paymentRequestedAt,
             version: order.version,
           },
         })
         .run();
 
-      // 2. Table assignments — reset and reinsert
-      db.delete(schema.orderTableAssignments)
-        .where(eq(schema.orderTableAssignments.orderId, order.id.toString()))
-        .run();
+      // 2. Table assignments — preserve history and enforce one active Order per table.
+      const activeAssignments = db
+        .select()
+        .from(schema.orderTableAssignments)
+        .where(
+          and(
+            eq(schema.orderTableAssignments.orderId, order.id.toString()),
+            isNull(schema.orderTableAssignments.releasedAt),
+          ),
+        )
+        .all();
+      const desiredTableIds = new Set(
+        order.status === 'OPEN' ? order.tableIds.map((tableId) => tableId.toString()) : [],
+      );
+      const reconciliationTime = new Date();
 
-      for (const tableId of order.tableIds) {
+      for (const assignment of activeAssignments) {
+        if (desiredTableIds.has(assignment.tableId)) continue;
+        db.update(schema.orderTableAssignments)
+          .set({ releasedAt: reconciliationTime })
+          .where(eq(schema.orderTableAssignments.id, assignment.id))
+          .run();
+      }
+
+      const alreadyAssigned = new Set(activeAssignments.map((assignment) => assignment.tableId));
+      for (const tableId of desiredTableIds) {
+        if (alreadyAssigned.has(tableId)) continue;
         db.insert(schema.orderTableAssignments)
-          .values({ orderId: order.id.toString(), tableId: tableId.toString() })
-          .onConflictDoNothing()
+          .values({
+            id: EntityId.generate().toString(),
+            orderId: order.id.toString(),
+            tableId,
+            assignedAt: reconciliationTime,
+            releasedAt: null,
+            commandId: commandId ?? null,
+          })
           .run();
       }
 
@@ -329,11 +358,19 @@ export class OrderRepository {
     if (!orderRow) return null;
 
     // Table assignments
-    const tableRows = this.db
+    const allTableRows = this.db
       .select()
       .from(schema.orderTableAssignments)
       .where(eq(schema.orderTableAssignments.orderId, id.toString()))
       .all();
+    const activeTableRows = allTableRows.filter((row) => row.releasedAt === null);
+    const lastReleasedAt = Math.max(
+      ...allTableRows.map((row) => row.releasedAt?.getTime() ?? Number.NEGATIVE_INFINITY),
+    );
+    const tableRows =
+      activeTableRows.length > 0
+        ? activeTableRows
+        : allTableRows.filter((row) => row.releasedAt?.getTime() === lastReleasedAt);
 
     // Rounds
     const roundRows = this.db
@@ -428,6 +465,9 @@ export class OrderRepository {
       orderNumber: orderRow.orderNumber,
       currency: orderRow.currency,
       status: orderRow.status as OrderStatus,
+      paymentRequestedAt: orderRow.paymentRequestedAt
+        ? new Date(orderRow.paymentRequestedAt as unknown as number)
+        : null,
       version: orderRow.version,
       tableIds: tableRows.map((t) => EntityId.fromString(t.tableId)),
       items,

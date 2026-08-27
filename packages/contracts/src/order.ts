@@ -29,6 +29,7 @@ export const OrderItemSchema = z.object({
   productSnapshot: ProductSnapshotSchema,
   specialInstructions: z.string().max(500).nullable(),
   status: OrderItemSendStatusSchema,
+  prepStatus: z.enum(['PENDING', 'PREPARING', 'READY']).default('PENDING'),
   addedAt: z.string(),
   sentAt: z.string().nullable(),
 });
@@ -48,6 +49,7 @@ export const OrderSchema = z.object({
   channel: OrderChannelSchema,
   currency: z.string().length(3),
   status: OrderStatusSchema,
+  paymentRequestedAt: z.string().datetime().nullable().default(null),
   tableIds: z.array(z.string().uuid()),
   items: z.array(OrderItemSchema),
   rounds: z.array(RoundSchema),
@@ -66,6 +68,7 @@ export type OrderResponse = z.infer<typeof OrderSchema>;
 
 // Requests
 export const CreateOrderRequestSchema = z.object({
+  commandId: z.string().min(1).optional(),
   orderType: OrderTypeSchema,
   channel: OrderChannelSchema,
   currency: z.string().length(3),
@@ -99,6 +102,18 @@ export const CancelOrderRequestSchema = z.object({
 });
 export type CancelOrderRequest = z.infer<typeof CancelOrderRequestSchema>;
 
+export const CancelEmptyTableOrderRequestSchema = z.object({
+  commandId: z.string().min(1),
+  expectedVersion: z.number().int(),
+});
+export type CancelEmptyTableOrderRequest = z.infer<typeof CancelEmptyTableOrderRequestSchema>;
+
+export const RequestOrderPaymentRequestSchema = z.object({
+  commandId: z.string().min(1),
+  expectedVersion: z.number().int(),
+});
+export type RequestOrderPaymentRequest = z.infer<typeof RequestOrderPaymentRequestSchema>;
+
 export const RemoveOrderItemRequestSchema = z.object({
   expectedVersion: z.number().int(),
 });
@@ -122,9 +137,3 @@ export const UpdateDraftOrderItemConfigurationRequestSchema = z.object({
 export type UpdateDraftOrderItemConfigurationRequest = z.infer<
   typeof UpdateDraftOrderItemConfigurationRequestSchema
 >;
-
-export const UpdateOrderTablesRequestSchema = z.object({
-  expectedVersion: z.number().int(),
-  tableIds: z.array(z.string().uuid()),
-});
-export type UpdateOrderTablesRequest = z.infer<typeof UpdateOrderTablesRequestSchema>;

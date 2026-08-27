@@ -48,9 +48,15 @@ describe('KDS vertical slice', () => {
       (group: any) => group.modifierGroup.name === 'Término',
     ).modifierGroup.options[0];
     const socket = await app.injectWS('/realtime');
-    const realtime = new Promise<any>((resolve) =>
-      socket.once('message', (payload: Buffer) => resolve(JSON.parse(payload.toString()))),
-    );
+    const realtime = new Promise<any>((resolve) => {
+      const onMessage = (payload: Buffer) => {
+        const message = JSON.parse(payload.toString());
+        if (message.type !== 'KDS_TICKETS_CHANGED') return;
+        socket.off('message', onMessage);
+        resolve(message);
+      };
+      socket.on('message', onMessage);
+    });
 
     const created = await app.inject({
       method: 'POST',

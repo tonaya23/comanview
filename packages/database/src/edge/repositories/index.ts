@@ -5,3 +5,4 @@ export { PrintJobRepository, insertPrintJobs, type NewPrintJob } from './PrintJo
 export * from './KdsRepository.js';
 export * from './AuthRepository.js';
 export * from './AuditRepository.js';
+export * from './TableRepository.js';

@@ -15,3 +15,5 @@ export * from './printing.js';
 export * from './kds.js';
 export * from './auth.js';
 export * from './audit.js';
+export * from './tables.js';
+export * from './realtime.js';

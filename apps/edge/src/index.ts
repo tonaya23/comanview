@@ -27,6 +27,7 @@ import {
   KdsRepository,
   AuthRepository,
   AuditRepository,
+  TableRepository,
 } from '@comanview/database';
 import { DebugPrinterAdapter, PrintWorker, type PrinterAdapter } from '@comanview/printing';
 import { CatalogService } from './modules/catalog/application/CatalogService.js';
@@ -49,6 +50,8 @@ import { AuthGuard, type AuthMode } from './modules/auth/http/AuthGuard.js';
 import { authRoutes } from './modules/auth/http/routes.js';
 import { AuditService } from './modules/audit/application/AuditService.js';
 import { auditRoutes } from './modules/audit/http/routes.js';
+import { TableService } from './modules/tables/application/TableService.js';
+import { tableRoutes } from './modules/tables/http/routes.js';
 
 export interface BuildAppOptions {
   printerAdapter?: PrinterAdapter;
@@ -81,18 +84,21 @@ export async function buildApp(dbPath: string = ':memory:', options: BuildAppOpt
   const kdsRepo = new KdsRepository(db);
   const authRepo = new AuthRepository(db);
   const auditRepo = new AuditRepository(db);
+  const tableRepo = new TableRepository(db);
 
   // Setup Services
   const catalogService = new CatalogService(catalogRepo);
   const printService = new PrintService(printRepo, orderRepo);
   const realtimeHub = new RealtimeHub();
-  const kdsService = new KdsService(kdsRepo, realtimeHub);
+  const kdsService = new KdsService(kdsRepo, tableRepo, realtimeHub);
   const orderService = new OrderService(
     orderRepo,
     catalogRepo,
     defaultOperationalContext,
     printService,
     kdsService,
+    tableRepo,
+    realtimeHub,
   );
   const cashService = new CashService(cashRepo, printRepo, defaultOperationalContext);
   const paymentService = new PaymentService(
@@ -100,6 +106,7 @@ export async function buildApp(dbPath: string = ':memory:', options: BuildAppOpt
     cashRepo,
     auditRepo,
     defaultOperationalContext,
+    realtimeHub,
   );
   const authService = new AuthService(
     authRepo,
@@ -108,6 +115,7 @@ export async function buildApp(dbPath: string = ':memory:', options: BuildAppOpt
   );
   const authGuard = new AuthGuard(authService, options.authMode ?? 'enforced');
   const auditService = new AuditService(auditRepo);
+  const tableService = new TableService(tableRepo, orderRepo, defaultOperationalContext);
   cashService.ensureDefaultRegister();
   const failingTargets = new Set(
     (process.env['COMANVIEW_DEBUG_PRINTER_FAIL_TARGETS'] ?? '').split(',').filter(Boolean),
@@ -133,6 +141,7 @@ export async function buildApp(dbPath: string = ':memory:', options: BuildAppOpt
   app.register(auditRoutes(auditService, authGuard));
   app.register(printRoutes(printService, authGuard));
   app.register(kdsRoutes(kdsService, realtimeHub, authGuard));
+  app.register(tableRoutes(tableService, authGuard));
 
   // Health route
   app.get(

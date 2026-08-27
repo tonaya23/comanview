@@ -9,6 +9,8 @@ export const PermissionSchema = z.enum([
   'ORDER_SEND',
   'ORDER_CLOSE',
   'ORDER_CANCEL',
+  'ORDER_CANCEL_EMPTY',
+  'ORDER_REQUEST_PAYMENT',
   'CASH_SESSION_VIEW',
   'CASH_SESSION_OPEN',
   'CASH_MOVEMENT_CREATE',
