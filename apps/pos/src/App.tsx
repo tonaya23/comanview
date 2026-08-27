@@ -28,6 +28,16 @@ import {
   parseMoneyInputToMinorUnits,
   percentageAmountHalfUp,
 } from './posLogic.js';
+import {
+  applyCashDenomination,
+  canConfirmPaymentTender,
+  createCashTenderInput,
+  getCashDenominationPresets,
+  getCashTenderPreview,
+  setExactCashTender,
+  setManualCashTender,
+  undoCashDenomination,
+} from './cashTenderInput.js';
 
 const edge = createEdgeClient({ baseUrl: import.meta.env['VITE_EDGE_API_URL'] ?? '/api' });
 const currentOrderStorageKey = 'comanview.pos.currentOrderId';
@@ -50,7 +60,7 @@ export function App() {
   const [showPayment, setShowPayment] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('CASH');
   const [paymentAmount, setPaymentAmount] = useState('0.00');
-  const [cashTendered, setCashTendered] = useState('0.00');
+  const [cashTenderInput, setCashTenderInput] = useState(() => createCashTenderInput(0));
   const [tipMode, setTipMode] = useState<'NONE' | 'PERCENTAGE' | 'FIXED_AMOUNT'>('NONE');
   const [tipBasisPoints, setTipBasisPoints] = useState(1000);
   const [fixedTip, setFixedTip] = useState('0.00');
@@ -158,8 +168,9 @@ export function App() {
       : tipMode === 'FIXED_AMOUNT'
         ? fixedTipMinor
         : 0;
-  const tenderedMinor = parseMoneyInputToMinorUnits(cashTendered) ?? 0;
-  const changePreview = Math.max(0, tenderedMinor - amountMinor - tipPreview);
+  const cashRequiredMinor = amountMinor + tipPreview;
+  const cashTenderPreview = getCashTenderPreview(cashTenderInput.value, cashRequiredMinor);
+  const cashDenominations = getCashDenominationPresets(order?.currency ?? '');
   const isBusy = pendingAction !== null;
   const canOperateOrder = order?.status === 'OPEN' && connection === 'CONNECTED' && !isBusy;
 
@@ -429,7 +440,7 @@ export function App() {
     if (!order) return;
     const balance = minorUnitsToInput(order.balanceDue.amount);
     setPaymentAmount(balance);
-    setCashTendered(balance);
+    setCashTenderInput(createCashTenderInput(order.balanceDue.amount));
     setTipMode('NONE');
     setShowPayment(true);
   }
@@ -438,12 +449,12 @@ export function App() {
     event.preventDefault();
     if (!order) return;
     const applied = parseMoneyInputToMinorUnits(paymentAmount);
-    const tendered = parseMoneyInputToMinorUnits(cashTendered);
+    const tendered = parseMoneyInputToMinorUnits(cashTenderInput.value);
     if (!applied || applied > order.balanceDue.amount) {
       setError('El monto debe ser mayor a cero y no superar el saldo pendiente.');
       return;
     }
-    if (paymentMethod === 'CASH' && (tendered === null || tendered < applied + tipPreview)) {
+    if (!canConfirmPaymentTender(paymentMethod, cashTenderPreview.isSufficient)) {
       setError('El efectivo recibido debe cubrir el pago y la propina.');
       return;
     }
@@ -1284,13 +1295,53 @@ export function App() {
                     Efectivo recibido
                     <input
                       inputMode="decimal"
-                      value={cashTendered}
-                      onChange={(event) => setCashTendered(event.target.value)}
+                      value={cashTenderInput.value}
+                      onChange={(event) =>
+                        setCashTenderInput(setManualCashTender(event.target.value))
+                      }
                     />
                   </label>
+                  <div className="cash-quick-input" aria-label="Denominaciones rápidas">
+                    <button
+                      type="button"
+                      className="cash-quick-action exact"
+                      onClick={() => setCashTenderInput(setExactCashTender(cashRequiredMinor))}
+                    >
+                      Exacto
+                    </button>
+                    {cashDenominations.map((denomination) => (
+                      <button
+                        type="button"
+                        key={denomination.minorUnits}
+                        onClick={() =>
+                          setCashTenderInput((current) =>
+                            applyCashDenomination(current, denomination.minorUnits),
+                          )
+                        }
+                      >
+                        {formatMoney(denomination.minorUnits, order.currency)}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      className="cash-quick-action undo"
+                      disabled={cashTenderInput.quickHistory.length === 0}
+                      onClick={() => setCashTenderInput((current) => undoCashDenomination(current))}
+                    >
+                      Undo
+                    </button>
+                  </div>
+                  {!cashTenderPreview.isSufficient && (
+                    <div className="cash-shortfall" role="alert">
+                      Efectivo insuficiente · faltan{' '}
+                      {formatMoney(cashTenderPreview.shortfallMinorUnits, order.currency)}
+                    </div>
+                  )}
                   <div className="change-row">
-                    <span>Cambio</span>
-                    <strong>{formatMoney(changePreview, order.currency)}</strong>
+                    <span>Cambio estimado</span>
+                    <strong>
+                      {formatMoney(cashTenderPreview.changeMinorUnits, order.currency)}
+                    </strong>
                     <small>Edge confirma el valor definitivo</small>
                   </div>
                 </>
@@ -1303,7 +1354,13 @@ export function App() {
                   </span>
                 </div>
               )}
-              <button className="confirm-payment" disabled={isBusy} type="submit">
+              <button
+                className="confirm-payment"
+                disabled={
+                  isBusy || !canConfirmPaymentTender(paymentMethod, cashTenderPreview.isSufficient)
+                }
+                type="submit"
+              >
                 {pendingAction === 'payment'
                   ? 'Confirmando con Edge…'
                   : `Registrar ${paymentMethod === 'CASH' ? 'efectivo' : 'tarjeta'}`}

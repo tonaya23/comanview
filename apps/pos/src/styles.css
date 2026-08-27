@@ -1189,6 +1189,57 @@ button:focus-visible {
   font-weight: 750;
 }
 
+.cash-quick-input {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.cash-quick-input button {
+  min-height: 50px;
+  padding: 8px;
+  border: 1px solid #bfd0ca;
+  border-radius: 10px;
+  color: #1f5148;
+  background: #f4f8f6;
+  font-size: 0.9rem;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.cash-quick-input button.exact {
+  border-color: #1b6659;
+  color: #fff;
+  background: #1b6659;
+}
+
+.cash-quick-input button.undo {
+  border-style: dashed;
+}
+
+.cash-quick-input button:disabled {
+  cursor: not-allowed;
+  color: #778680;
+  background: #eef2f0;
+  opacity: 0.72;
+}
+
+@media (max-width: 460px) {
+  .cash-quick-input {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.cash-shortfall {
+  padding: 10px 13px;
+  border: 1px solid #e6a098;
+  border-radius: 10px;
+  color: #8d2f27;
+  background: #fff0ee;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
 .card-note {
   display: flex;
   flex-direction: column;
@@ -1209,6 +1260,11 @@ button:focus-visible {
   font-size: 0.96rem;
   font-weight: 850;
   cursor: pointer;
+}
+
+.confirm-payment:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .field-help {
