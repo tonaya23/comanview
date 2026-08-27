@@ -1373,12 +1373,20 @@ export function App() {
                       Undo
                     </button>
                   </div>
-                  {!cashTenderPreview.isSufficient && (
-                    <div className="cash-shortfall" role="alert">
-                      Efectivo insuficiente · faltan{' '}
-                      {formatMoney(cashTenderPreview.shortfallMinorUnits, order.currency)}
-                    </div>
-                  )}
+                  <div
+                    className={`cash-tender-feedback${
+                      cashTenderPreview.isSufficient ? '' : ' cash-tender-feedback-warning'
+                    }`}
+                    role="status"
+                    aria-live="polite"
+                  >
+                    {cashTenderPreview.isSufficient
+                      ? '\u00a0'
+                      : `Faltan ${formatMoney(
+                          cashTenderPreview.shortfallMinorUnits,
+                          order.currency,
+                        )}`}
+                  </div>
                   <div className="change-row">
                     <span>Cambio estimado</span>
                     <strong>

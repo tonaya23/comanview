@@ -1247,6 +1247,24 @@ button:focus-visible {
   font-weight: 800;
 }
 
+.cash-tender-feedback {
+  box-sizing: border-box;
+  min-height: 38px;
+  padding: 9px 13px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  color: transparent;
+  background: transparent;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.cash-tender-feedback-warning {
+  border-color: #e6a098;
+  color: #8d2f27;
+  background: #fff0ee;
+}
+
 .card-note {
   display: flex;
   flex-direction: column;
