@@ -8,6 +8,8 @@ import {
   CurrentCashSessionSchema,
   PaymentConfigSchema,
   PrintJobSchema,
+  KdsStationSchema,
+  KdsTicketSchema,
   type AddOrderItemRequest,
   type CategoryResponse,
   type CreateOrderRequest,
@@ -27,6 +29,10 @@ import {
   type UpdateDraftOrderItemConfigurationRequest,
   type PrintJobResponse,
   type RequestPrintJob,
+  type KdsPreparationStatus,
+  type KdsStationResponse,
+  type KdsTicketResponse,
+  type KdsTransitionRequest,
 } from '@comanview/contracts';
 
 interface RuntimeSchema<T> {
@@ -102,6 +108,18 @@ export interface EdgeClient {
   requestPrecheck(orderId: string, request: RequestPrintJob): Promise<PrintJobResponse>;
   requestCustomerReceipt(orderId: string, request: RequestPrintJob): Promise<PrintJobResponse>;
   getRecentPrintJobs(): Promise<PrintJobResponse[]>;
+  getKdsStations(): Promise<KdsStationResponse[]>;
+  getKdsTickets(stationId: string, status?: KdsPreparationStatus): Promise<KdsTicketResponse[]>;
+  startKdsTicket(
+    roundId: string,
+    stationId: string,
+    request: KdsTransitionRequest,
+  ): Promise<KdsTicketResponse>;
+  markKdsTicketReady(
+    roundId: string,
+    stationId: string,
+    request: KdsTransitionRequest,
+  ): Promise<KdsTicketResponse>;
 }
 
 export function createEdgeClient(options: EdgeClientOptions = {}): EdgeClient {
@@ -243,5 +261,20 @@ export function createEdgeClient(options: EdgeClientOptions = {}): EdgeClient {
         body: JSON.stringify(body),
       }),
     getRecentPrintJobs: () => request('/printing/jobs', PrintJobSchema.array()),
+    getKdsStations: () => request('/kds/stations', KdsStationSchema.array()),
+    getKdsTickets: (stationId, status) => {
+      const query = `stationId=${encodeURIComponent(stationId)}${status ? `&status=${status}` : ''}`;
+      return request(`/kds/tickets?${query}`, KdsTicketSchema.array());
+    },
+    startKdsTicket: (roundId, stationId, body) =>
+      request(`/kds/tickets/${roundId}/${stationId}/preparing`, KdsTicketSchema, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    markKdsTicketReady: (roundId, stationId, body) =>
+      request(`/kds/tickets/${roundId}/${stationId}/ready`, KdsTicketSchema, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
   };
 }

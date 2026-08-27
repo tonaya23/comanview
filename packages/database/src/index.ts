@@ -10,4 +10,5 @@ export * from './edge/repositories/CatalogRepository.js';
 export * from './edge/repositories/OrderRepository.js';
 export * from './edge/repositories/CashRepository.js';
 export * from './edge/repositories/PrintJobRepository.js';
+export * from './edge/repositories/KdsRepository.js';
 export * from './edge/prepareDevelopmentDatabase.js';

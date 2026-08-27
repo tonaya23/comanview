@@ -168,6 +168,8 @@ export const orderItems = sqliteTable('order_items', {
   quantity: integer('quantity').notNull().default(1),
   sendStatus: text('send_status').notNull(), // DRAFT | SENT
   prepStatus: text('prep_status').notNull(), // PENDING | PREPARING | READY
+  prepStartedAt: integer('prep_started_at', { mode: 'timestamp_ms' }),
+  readyAt: integer('ready_at', { mode: 'timestamp_ms' }),
   roundId: text('round_id').references(() => rounds.id),
   specialInstructions: text('special_instructions'),
 });

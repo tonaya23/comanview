@@ -13,6 +13,8 @@
     "dev": "turbo run dev",
     "dev:edge": "pnpm build && pnpm --filter @comanview/database dev:prepare && pnpm --filter @comanview/edge dev",
     "dev:pos": "pnpm build && pnpm --filter @comanview/database dev:prepare && pnpm --parallel --filter @comanview/edge --filter @comanview/pos dev",
+    "dev:kds": "pnpm build && pnpm --filter @comanview/database dev:prepare && pnpm --parallel --filter @comanview/edge --filter @comanview/kds dev",
+    "dev:local": "pnpm build && pnpm --filter @comanview/database dev:prepare && pnpm --parallel --filter @comanview/edge --filter @comanview/pos --filter @comanview/kds dev",
     "build": "turbo run build",
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",

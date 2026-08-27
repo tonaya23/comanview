@@ -13,6 +13,7 @@
  */
 
 import fastify, { LogController } from 'fastify';
+import websocket from '@fastify/websocket';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { serializerCompiler, validatorCompiler, ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -23,6 +24,7 @@ import {
   CatalogRepository,
   OrderRepository,
   PrintJobRepository,
+  KdsRepository,
 } from '@comanview/database';
 import { DebugPrinterAdapter, PrintWorker, type PrinterAdapter } from '@comanview/printing';
 import { CatalogService } from './modules/catalog/application/CatalogService.js';
@@ -37,6 +39,9 @@ import { defaultOperationalContext } from './app/operationalContext.js';
 import { HealthResponseSchema } from '@comanview/contracts';
 import { PrintService } from './modules/printing/application/PrintService.js';
 import { printRoutes } from './modules/printing/http/routes.js';
+import { RealtimeHub } from './infrastructure/realtime/RealtimeHub.js';
+import { KdsService } from './modules/kds/application/KdsService.js';
+import { kdsRoutes } from './modules/kds/http/routes.js';
 
 export interface BuildAppOptions {
   printerAdapter?: PrinterAdapter;
@@ -55,6 +60,7 @@ export async function buildApp(dbPath: string = ':memory:', options: BuildAppOpt
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
   app.setErrorHandler(errorHandler);
+  await app.register(websocket);
 
   // Initialize DB
   const db = initDatabase(dbPath);
@@ -64,15 +70,19 @@ export async function buildApp(dbPath: string = ':memory:', options: BuildAppOpt
   const orderRepo = new OrderRepository(db);
   const cashRepo = new CashRepository(db);
   const printRepo = new PrintJobRepository(db);
+  const kdsRepo = new KdsRepository(db);
 
   // Setup Services
   const catalogService = new CatalogService(catalogRepo);
   const printService = new PrintService(printRepo, orderRepo);
+  const realtimeHub = new RealtimeHub();
+  const kdsService = new KdsService(kdsRepo, realtimeHub);
   const orderService = new OrderService(
     orderRepo,
     catalogRepo,
     defaultOperationalContext,
     printService,
+    kdsService,
   );
   const cashService = new CashService(cashRepo, defaultOperationalContext);
   const paymentService = new PaymentService(orderRepo, cashRepo, defaultOperationalContext);
@@ -98,6 +108,7 @@ export async function buildApp(dbPath: string = ':memory:', options: BuildAppOpt
   app.register(cashRoutes(cashService), { prefix: '/cash-sessions' });
   app.register(paymentRoutes(paymentService));
   app.register(printRoutes(printService));
+  app.register(kdsRoutes(kdsService, realtimeHub));
 
   // Health route
   app.get(

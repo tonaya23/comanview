@@ -51,7 +51,7 @@ Thumbs.db
 *.db
 *.db-shm
 *.db-wal
-/.comanview/
+.comanview/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal

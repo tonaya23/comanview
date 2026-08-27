@@ -14,6 +14,7 @@ import type { EdgeOperationalContext } from '../../../app/operationalContext.js'
 import { AppError } from '../../../app/errorHandler.js';
 import { mapOrderToResponse } from './orderMapper.js';
 import type { PrintService } from '../../printing/application/PrintService.js';
+import type { KdsService } from '../../kds/application/KdsService.js';
 import {
   CreateOrderRequest,
   AddOrderItemRequest,
@@ -33,6 +34,7 @@ export class OrderService {
     private readonly catalogRepo: CatalogRepository,
     private readonly context: EdgeOperationalContext,
     private readonly printService: PrintService,
+    private readonly kdsService: KdsService,
   ) {}
 
   async createOrder(request: CreateOrderRequest): Promise<OrderResponse> {
@@ -234,6 +236,7 @@ export class OrderService {
     const round = order.sendDraftItems(request.commandId);
     const jobs = this.printService.createStationJobs(order, round);
     this.orderRepo.saveOrder(order, true, request.commandId, jobs);
+    this.kdsService.notifyRoundSent(order, round);
     return mapOrderToResponse(order);
   }
 

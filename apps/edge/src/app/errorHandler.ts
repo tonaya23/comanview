@@ -27,6 +27,8 @@ import {
   PaymentNotFoundError,
   PaymentOverpaymentError,
   TipsDisabledError,
+  KdsInvalidTransitionError,
+  KdsInconsistentTicketStateError,
 } from '@comanview/domain';
 import {
   ConcurrencyError,
@@ -155,6 +157,12 @@ export function errorHandler(error: Error, request: FastifyRequest, reply: Fasti
       code = error.code;
     } else if (error instanceof InvalidPaymentAmountError || error instanceof InvalidTipError) {
       statusCode = 400;
+      code = error.code;
+    } else if (
+      error instanceof KdsInvalidTransitionError ||
+      error instanceof KdsInconsistentTicketStateError
+    ) {
+      statusCode = 409;
       code = error.code;
     } else {
       statusCode = 400;

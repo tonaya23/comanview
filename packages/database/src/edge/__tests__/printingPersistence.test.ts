@@ -29,6 +29,7 @@ function openDb() {
     '0001_payments_cash.sql',
     '0002_order_item_special_instructions.sql',
     '0003_printing.sql',
+    '0004_kds.sql',
   ]) {
     sqlite.exec(readFileSync(join(process.cwd(), '../../migrations/edge', migration), 'utf8'));
   }

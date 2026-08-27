@@ -12,3 +12,4 @@ export * from './health.js';
 export * from './payment.js';
 export * from './cash.js';
 export * from './printing.js';
+export * from './kds.js';

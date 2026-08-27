@@ -13,6 +13,9 @@ const specialInstructionsMigrationPath = fileURLToPath(
 const printingMigrationPath = fileURLToPath(
   new URL('../../../../migrations/edge/0003_printing.sql', import.meta.url),
 );
+const kdsMigrationPath = fileURLToPath(
+  new URL('../../../../migrations/edge/0004_kds.sql', import.meta.url),
+);
 const defaultDatabasePath = fileURLToPath(
   new URL('../../../../apps/edge/edge-dev.db', import.meta.url),
 );
@@ -33,6 +36,10 @@ export function prepareDevelopmentDatabase(targetPath = databasePath): void {
       sqlite.exec(readFileSync(specialInstructionsMigrationPath, 'utf8'));
     }
     sqlite.exec(readFileSync(printingMigrationPath, 'utf8'));
+    const hasKdsTimestamps = sqlite
+      .prepare("SELECT 1 FROM pragma_table_info('order_items') WHERE name = 'prep_started_at'")
+      .get();
+    if (!hasKdsTimestamps) sqlite.exec(readFileSync(kdsMigrationPath, 'utf8'));
 
     const seed = sqlite.transaction(() => {
       const insertCategory = sqlite.prepare(

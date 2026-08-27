@@ -235,4 +235,38 @@ describe('createEdgeClient', () => {
       expect.objectContaining({ method: 'POST', body: '{"commandId":"print-command"}' }),
     );
   });
+
+  it('queries and advances KDS tickets through Edge', async () => {
+    const ticket = {
+      ticketId: 'round:station',
+      orderId: '01991a00-0000-7000-8000-000000000301',
+      orderNumber: 'K-1',
+      orderType: 'COUNTER',
+      roundId: '01991a00-0000-7000-8000-000000000302',
+      roundNumber: 1,
+      stationId: '01991a00-0000-7000-8000-000000000501',
+      stationName: 'COCINA',
+      status: 'PREPARING',
+      sentAt: '2026-08-26T12:00:00.000Z',
+      preparingAt: '2026-08-26T12:01:00.000Z',
+      readyAt: null,
+      items: [
+        {
+          orderItemId: '01991a00-0000-7000-8000-000000000601',
+          quantity: 1,
+          productName: 'Hamburguesa',
+          modifiers: [],
+          specialInstructions: null,
+          prepStatus: 'PREPARING',
+        },
+      ],
+    };
+    const fetchMock = vi.fn(async () => jsonResponse(ticket));
+    const client = createEdgeClient({ fetch: fetchMock as EdgeFetch });
+    await client.startKdsTicket(ticket.roundId, ticket.stationId, { commandId: 'start-kds' });
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/kds/tickets/${ticket.roundId}/${ticket.stationId}/preparing`,
+      expect.objectContaining({ method: 'POST', body: '{"commandId":"start-kds"}' }),
+    );
+  });
 });
