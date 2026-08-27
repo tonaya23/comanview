@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
+import { BASE_ROLE_PERMISSIONS, hashOperationalPinSync, PERMISSIONS } from '@comanview/auth';
 
 const migrationPaths = [
   fileURLToPath(new URL('../../../../migrations/edge/0000_initial.sql', import.meta.url)),
@@ -16,12 +17,18 @@ const printingMigrationPath = fileURLToPath(
 const kdsMigrationPath = fileURLToPath(
   new URL('../../../../migrations/edge/0004_kds.sql', import.meta.url),
 );
+const localAuthMigrationPath = fileURLToPath(
+  new URL('../../../../migrations/edge/0005_local_auth.sql', import.meta.url),
+);
 const defaultDatabasePath = fileURLToPath(
   new URL('../../../../apps/edge/edge-dev.db', import.meta.url),
 );
 const databasePath = process.env['COMANVIEW_EDGE_DB_PATH'] ?? defaultDatabasePath;
 
 export function prepareDevelopmentDatabase(targetPath = databasePath): void {
+  if (process.env['NODE_ENV'] === 'production') {
+    throw new Error('Development database preparation is disabled in production.');
+  }
   const sqlite = new Database(targetPath);
 
   try {
@@ -40,6 +47,7 @@ export function prepareDevelopmentDatabase(targetPath = databasePath): void {
       .prepare("SELECT 1 FROM pragma_table_info('order_items') WHERE name = 'prep_started_at'")
       .get();
     if (!hasKdsTimestamps) sqlite.exec(readFileSync(kdsMigrationPath, 'utf8'));
+    sqlite.exec(readFileSync(localAuthMigrationPath, 'utf8'));
 
     const seed = sqlite.transaction(() => {
       const insertCategory = sqlite.prepare(
@@ -87,6 +95,26 @@ export function prepareDevelopmentDatabase(targetPath = databasePath): void {
         VALUES (?, ?, ?, ?, ?, 'DEBUG', '{}', 1)
       `);
       const assignStation = sqlite.prepare('UPDATE products SET station_id = ? WHERE id = ?');
+      const insertRole = sqlite.prepare('INSERT OR IGNORE INTO roles (id, name) VALUES (?, ?)');
+      const insertPermission = sqlite.prepare(
+        'INSERT OR IGNORE INTO permissions (code, description) VALUES (?, ?)',
+      );
+      const assignPermission = sqlite.prepare(
+        'INSERT OR IGNORE INTO role_permissions (role_id, permission_code) VALUES (?, ?)',
+      );
+      const insertUser = sqlite.prepare(`
+        INSERT OR IGNORE INTO users
+          (id, tenant_id, location_id, display_name, status, pin_hash, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `);
+      const assignRole = sqlite.prepare(
+        'INSERT OR IGNORE INTO user_roles (user_id, role_id) VALUES (?, ?)',
+      );
+      const insertDevice = sqlite.prepare(`
+        INSERT OR IGNORE INTO devices
+          (id, tenant_id, location_id, name, device_type, status, session_timeout_minutes, created_at)
+        VALUES (?, ?, ?, ?, ?, 'ACTIVE', ?, ?)
+      `);
 
       const foodCategoryId = '01991a00-0000-7000-8000-000000000001';
       const drinksCategoryId = '01991a00-0000-7000-8000-000000000002';
@@ -95,6 +123,7 @@ export function prepareDevelopmentDatabase(targetPath = databasePath): void {
       const locationId = '01991a00-0000-7000-8000-000000000302';
       const kitchenStationId = '01991a00-0000-7000-8000-000000000501';
       const barStationId = '01991a00-0000-7000-8000-000000000502';
+      const now = Date.now();
 
       insertCategory.run(foodCategoryId, 'Alimentos');
       insertCategory.run(drinksCategoryId, 'Bebidas');
@@ -216,6 +245,94 @@ export function prepareDevelopmentDatabase(targetPath = databasePath): void {
       assignModifierGroup.run(hamburgerId, extrasGroupId, 20);
       assignModifierGroup.run(hamburgerId, preparationGroupId, 30);
       insertPriceOverride.run(hamburgerId, '01991a00-0000-7000-8000-000000000421', 2000);
+
+      const roleIds = {
+        OWNER: '01991a00-0000-7000-8000-000000000701',
+        MANAGER: '01991a00-0000-7000-8000-000000000702',
+        CASHIER: '01991a00-0000-7000-8000-000000000703',
+        WAITER: '01991a00-0000-7000-8000-000000000704',
+        KITCHEN: '01991a00-0000-7000-8000-000000000705',
+      } as const;
+      for (const [roleName, roleId] of Object.entries(roleIds)) {
+        insertRole.run(roleId, roleName);
+      }
+      for (const permission of Object.values(PERMISSIONS)) {
+        insertPermission.run(permission, permission);
+      }
+      for (const [role, roleId] of Object.entries(roleIds)) {
+        for (const permission of BASE_ROLE_PERMISSIONS[role as keyof typeof roleIds]) {
+          assignPermission.run(roleId, permission);
+        }
+      }
+
+      const developmentUsers = [
+        [
+          '01991a00-0000-7000-8000-000000000711',
+          'Dueño desarrollo',
+          'ACTIVE',
+          process.env['COMANVIEW_DEV_OWNER_PIN'] ?? '1111',
+          roleIds.OWNER,
+        ],
+        [
+          '01991a00-0000-7000-8000-000000000712',
+          'Cajero desarrollo',
+          'ACTIVE',
+          process.env['COMANVIEW_DEV_CASHIER_PIN'] ?? '2222',
+          roleIds.CASHIER,
+        ],
+        [
+          '01991a00-0000-7000-8000-000000000713',
+          'Mesero desarrollo',
+          'ACTIVE',
+          process.env['COMANVIEW_DEV_WAITER_PIN'] ?? '3333',
+          roleIds.WAITER,
+        ],
+        [
+          '01991a00-0000-7000-8000-000000000714',
+          'Cocina desarrollo',
+          'ACTIVE',
+          process.env['COMANVIEW_DEV_KITCHEN_PIN'] ?? '4444',
+          roleIds.KITCHEN,
+        ],
+        [
+          '01991a00-0000-7000-8000-000000000715',
+          'Usuario deshabilitado',
+          'DISABLED',
+          process.env['COMANVIEW_DEV_DISABLED_PIN'] ?? '9999',
+          roleIds.CASHIER,
+        ],
+      ] as const;
+      for (const [id, displayName, status, pin, roleId] of developmentUsers) {
+        insertUser.run(
+          id,
+          tenantId,
+          locationId,
+          displayName,
+          status,
+          hashOperationalPinSync(pin),
+          now,
+        );
+        assignRole.run(id, roleId);
+      }
+
+      insertDevice.run(
+        '01991a00-0000-7000-8000-000000000721',
+        tenantId,
+        locationId,
+        'POS de desarrollo',
+        'POS',
+        720,
+        now,
+      );
+      insertDevice.run(
+        '01991a00-0000-7000-8000-000000000722',
+        tenantId,
+        locationId,
+        'KDS de desarrollo',
+        'KDS',
+        1_440,
+        now,
+      );
     });
 
     seed();

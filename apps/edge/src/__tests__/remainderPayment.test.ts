@@ -14,7 +14,7 @@ describe('CASH remainder tip', () => {
 
   beforeAll(async () => {
     prepareDevelopmentDatabase(dbPath);
-    app = await buildApp(dbPath, { startPrintWorker: false });
+    app = await buildApp(dbPath, { startPrintWorker: false, authMode: 'test-bypass' });
     await app.ready();
     const products = (await app.inject({ method: 'GET', url: '/catalog/products' })).json();
     waterId = products.find((product: any) => product.name === 'Agua mineral').id;

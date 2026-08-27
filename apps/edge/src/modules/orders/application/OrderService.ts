@@ -15,6 +15,7 @@ import { AppError } from '../../../app/errorHandler.js';
 import { mapOrderToResponse } from './orderMapper.js';
 import type { PrintService } from '../../printing/application/PrintService.js';
 import type { KdsService } from '../../kds/application/KdsService.js';
+import type { AuthorizedOperation } from '../../../app/authContext.js';
 import {
   CreateOrderRequest,
   AddOrderItemRequest,
@@ -37,7 +38,11 @@ export class OrderService {
     private readonly kdsService: KdsService,
   ) {}
 
-  async createOrder(request: CreateOrderRequest): Promise<OrderResponse> {
+  async createOrder(
+    request: CreateOrderRequest,
+    operation: AuthorizedOperation,
+  ): Promise<OrderResponse> {
+    void operation;
     const tenantId = EntityId.fromString(this.context.tenantId);
     const locationId = EntityId.fromString(this.context.locationId);
     const tableIds = request.tableIds ? request.tableIds.map((t) => EntityId.fromString(t)) : [];
@@ -62,7 +67,12 @@ export class OrderService {
     return mapOrderToResponse(order);
   }
 
-  async addItem(orderId: string, request: AddOrderItemRequest): Promise<OrderResponse> {
+  async addItem(
+    orderId: string,
+    request: AddOrderItemRequest,
+    operation: AuthorizedOperation,
+  ): Promise<OrderResponse> {
+    void operation;
     const order = this.orderRepo.getOrderById(EntityId.fromString(orderId));
     if (!order) throw new ObjectNotFoundError(`Order ${orderId} not found`);
 
@@ -92,7 +102,9 @@ export class OrderService {
     orderId: string,
     itemId: string,
     request: UpdateDraftOrderItemConfigurationRequest,
+    operation: AuthorizedOperation,
   ): Promise<OrderResponse> {
+    void operation;
     const order = this.orderRepo.getOrderById(EntityId.fromString(orderId));
     if (!order) throw new ObjectNotFoundError(`Order ${orderId} not found`);
 
@@ -149,7 +161,9 @@ export class OrderService {
     orderId: string,
     itemId: string,
     request: UpdateOrderItemSpecialInstructionsRequest,
+    operation: AuthorizedOperation,
   ): Promise<OrderResponse> {
+    void operation;
     const order = this.orderRepo.getOrderById(EntityId.fromString(orderId));
     if (!order) throw new ObjectNotFoundError(`Order ${orderId} not found`);
 
@@ -196,7 +210,9 @@ export class OrderService {
     orderId: string,
     itemId: string,
     request: RemoveOrderItemRequest,
+    operation: AuthorizedOperation,
   ): Promise<OrderResponse> {
+    void operation;
     const order = this.orderRepo.getOrderById(EntityId.fromString(orderId));
     if (!order) throw new ObjectNotFoundError(`Order ${orderId} not found`);
 
@@ -211,7 +227,12 @@ export class OrderService {
     return mapOrderToResponse(order);
   }
 
-  async sendRound(orderId: string, request: SendRoundRequest): Promise<OrderResponse> {
+  async sendRound(
+    orderId: string,
+    request: SendRoundRequest,
+    operation: AuthorizedOperation,
+  ): Promise<OrderResponse> {
+    void operation;
     const order = this.orderRepo.getOrderById(EntityId.fromString(orderId));
     if (!order) throw new ObjectNotFoundError(`Order ${orderId} not found`);
 
@@ -240,7 +261,12 @@ export class OrderService {
     return mapOrderToResponse(order);
   }
 
-  async closeOrder(orderId: string, request: CloseOrderRequest): Promise<OrderResponse> {
+  async closeOrder(
+    orderId: string,
+    request: CloseOrderRequest,
+    operation: AuthorizedOperation,
+  ): Promise<OrderResponse> {
+    void operation;
     const order = this.orderRepo.getOrderById(EntityId.fromString(orderId));
     if (!order) throw new ObjectNotFoundError(`Order ${orderId} not found`);
 
@@ -267,7 +293,12 @@ export class OrderService {
     return mapOrderToResponse(order);
   }
 
-  async cancelOrder(orderId: string, request: CancelOrderRequest): Promise<OrderResponse> {
+  async cancelOrder(
+    orderId: string,
+    request: CancelOrderRequest,
+    operation: AuthorizedOperation,
+  ): Promise<OrderResponse> {
+    void operation;
     const order = this.orderRepo.getOrderById(EntityId.fromString(orderId));
     if (!order) throw new ObjectNotFoundError(`Order ${orderId} not found`);
 
@@ -282,7 +313,12 @@ export class OrderService {
     return mapOrderToResponse(order);
   }
 
-  async updateTables(orderId: string, request: UpdateOrderTablesRequest): Promise<OrderResponse> {
+  async updateTables(
+    orderId: string,
+    request: UpdateOrderTablesRequest,
+    operation: AuthorizedOperation,
+  ): Promise<OrderResponse> {
+    void operation;
     const order = this.orderRepo.getOrderById(EntityId.fromString(orderId));
     if (!order) throw new ObjectNotFoundError(`Order ${orderId} not found`);
 

@@ -18,6 +18,91 @@ export const processedCommands = sqliteTable('processed_commands', {
   processedAt: integer('processed_at', { mode: 'timestamp_ms' }).notNull(),
 });
 
+// ─── LOCAL AUTH / RBAC ─────────────────────────────────────────────────────
+
+export const roles = sqliteTable('roles', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull().unique(),
+});
+
+export const permissions = sqliteTable('permissions', {
+  code: text('code').primaryKey(),
+  description: text('description').notNull(),
+});
+
+export const rolePermissions = sqliteTable(
+  'role_permissions',
+  {
+    roleId: text('role_id')
+      .notNull()
+      .references(() => roles.id),
+    permissionCode: text('permission_code')
+      .notNull()
+      .references(() => permissions.code),
+  },
+  (table) => ({ unq: uniqueIndex('unq_role_permission').on(table.roleId, table.permissionCode) }),
+);
+
+export const users = sqliteTable('users', {
+  id: text('id').primaryKey(),
+  tenantId: text('tenant_id').notNull(),
+  locationId: text('location_id').notNull(),
+  displayName: text('display_name').notNull(),
+  status: text('status').notNull(),
+  pinHash: text('pin_hash').notNull(),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+});
+
+export const userRoles = sqliteTable(
+  'user_roles',
+  {
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id),
+    roleId: text('role_id')
+      .notNull()
+      .references(() => roles.id),
+  },
+  (table) => ({ unq: uniqueIndex('unq_user_role').on(table.userId, table.roleId) }),
+);
+
+export const devices = sqliteTable('devices', {
+  id: text('id').primaryKey(),
+  tenantId: text('tenant_id').notNull(),
+  locationId: text('location_id').notNull(),
+  name: text('name').notNull(),
+  deviceType: text('device_type').notNull(),
+  status: text('status').notNull(),
+  sessionTimeoutMinutes: integer('session_timeout_minutes').notNull(),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+});
+
+export const authSessions = sqliteTable('auth_sessions', {
+  id: text('id').primaryKey(),
+  userId: text('user_id')
+    .notNull()
+    .references(() => users.id),
+  deviceId: text('device_id')
+    .notNull()
+    .references(() => devices.id),
+  tenantId: text('tenant_id').notNull(),
+  locationId: text('location_id').notNull(),
+  tokenHash: text('token_hash').notNull().unique(),
+  loginAt: integer('login_at', { mode: 'timestamp_ms' }).notNull(),
+  lastActivity: integer('last_activity', { mode: 'timestamp_ms' }).notNull(),
+  expiresAt: integer('expires_at', { mode: 'timestamp_ms' }).notNull(),
+  revokedAt: integer('revoked_at', { mode: 'timestamp_ms' }),
+});
+
+export const loginAttempts = sqliteTable('login_attempts', {
+  deviceId: text('device_id')
+    .primaryKey()
+    .references(() => devices.id),
+  failedAttempts: integer('failed_attempts').notNull().default(0),
+  lockedUntil: integer('locked_until', { mode: 'timestamp_ms' }),
+  updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+});
+
 // ─── CATALOG ────────────────────────────────────────────────────────────────
 
 export const categories = sqliteTable('categories', {

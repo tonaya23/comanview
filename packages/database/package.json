@@ -37,6 +37,7 @@
     "vitest": "^3.2.4"
   },
   "dependencies": {
+    "@comanview/auth": "workspace:*",
     "@comanview/domain": "workspace:*",
     "@comanview/money": "workspace:*",
     "@comanview/printing": "workspace:*",

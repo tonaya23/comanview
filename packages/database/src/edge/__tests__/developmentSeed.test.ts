@@ -6,6 +6,21 @@ import { describe, expect, it } from 'vitest';
 import { prepareDevelopmentDatabase } from '../prepareDevelopmentDatabase.js';
 
 describe('development catalog seed', () => {
+  it('refuses to create known development credentials in production', () => {
+    const productionPath = join(tmpdir(), `comanview-production-seed-${Date.now()}.db`);
+    const previousNodeEnv = process.env['NODE_ENV'];
+    process.env['NODE_ENV'] = 'production';
+    try {
+      expect(() => prepareDevelopmentDatabase(productionPath)).toThrow(
+        'Development database preparation is disabled in production.',
+      );
+      expect(existsSync(productionPath)).toBe(false);
+    } finally {
+      if (previousNodeEnv === undefined) delete process.env['NODE_ENV'];
+      else process.env['NODE_ENV'] = previousNodeEnv;
+    }
+  });
+
   it('is idempotent and keeps one configured Hamburger fixture', () => {
     const databasePath = join(tmpdir(), `comanview-development-seed-${Date.now()}.db`);
 
@@ -59,6 +74,16 @@ describe('development catalog seed', () => {
         expect(sqlite.prepare('SELECT COUNT(*) AS count FROM print_targets').get()).toEqual({
           count: 3,
         });
+        expect(sqlite.prepare('SELECT COUNT(*) AS count FROM roles').get()).toEqual({ count: 5 });
+        expect(sqlite.prepare('SELECT COUNT(*) AS count FROM users').get()).toEqual({ count: 5 });
+        expect(sqlite.prepare('SELECT COUNT(*) AS count FROM devices').get()).toEqual({ count: 2 });
+        const credentials = sqlite.prepare('SELECT pin_hash AS pinHash FROM users').all() as Array<{
+          pinHash: string;
+        }>;
+        expect(credentials.every(({ pinHash }) => pinHash.startsWith('scrypt-v1$'))).toBe(true);
+        expect(
+          credentials.some(({ pinHash }) => ['1111', '2222', '3333', '4444'].includes(pinHash)),
+        ).toBe(false);
       } finally {
         sqlite.close();
       }

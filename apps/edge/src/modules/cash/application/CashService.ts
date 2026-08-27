@@ -8,6 +8,7 @@ import type {
 } from '@comanview/contracts';
 import type { EdgeOperationalContext } from '../../../app/operationalContext.js';
 import { AppError } from '../../../app/errorHandler.js';
+import type { AuthorizedOperation } from '../../../app/authContext.js';
 
 export class CashService {
   constructor(
@@ -34,7 +35,10 @@ export class CashService {
     return { session: session ? this.mapSession(session) : null };
   }
 
-  openSession(request: OpenCashSessionRequest): CashSessionResponse {
+  openSession(
+    request: OpenCashSessionRequest,
+    operation: AuthorizedOperation,
+  ): CashSessionResponse {
     const existingForCommand = this.cashRepo.getSessionByCommandId(request.commandId);
     if (existingForCommand) {
       if (
@@ -61,7 +65,7 @@ export class CashService {
       locationId: EntityId.fromString(this.context.locationId),
       openingFloat: Money.fromMinorUnits(request.openingFloatAmount, this.context.currency),
       businessDate: request.businessDate,
-      openedBy: EntityId.fromString(this.context.operatorId),
+      openedBy: EntityId.fromString(operation.actor.userId),
       commandId: request.commandId,
     });
     this.cashRepo.openSession(session);

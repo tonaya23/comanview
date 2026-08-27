@@ -9,6 +9,7 @@ import type {
 import { KdsRepository, type KdsTicketView } from '@comanview/database';
 import { AppError } from '../../../app/errorHandler.js';
 import type { RealtimeHub } from '../../../infrastructure/realtime/RealtimeHub.js';
+import type { AuthorizedOperation } from '../../../app/authContext.js';
 
 function mapTicket(ticket: KdsTicketView): KdsTicketResponse {
   return {
@@ -38,7 +39,9 @@ export class KdsService {
     stationId: string,
     target: KdsTransitionTarget,
     request: KdsTransitionRequest,
+    operation: AuthorizedOperation,
   ): KdsTicketResponse {
+    void operation;
     const expectedEvent = `KDS_TICKET_${target}`;
     if (this.repository.hasProcessedCommand(request.commandId)) {
       const result = this.repository.getCommandResult(request.commandId);

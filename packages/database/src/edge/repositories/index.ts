@@ -3,3 +3,4 @@ export { OrderRepository } from './OrderRepository.js';
 export { CashRepository } from './CashRepository.js';
 export { PrintJobRepository, insertPrintJobs, type NewPrintJob } from './PrintJobRepository.js';
 export * from './KdsRepository.js';
+export * from './AuthRepository.js';

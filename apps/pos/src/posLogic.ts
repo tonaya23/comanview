@@ -146,6 +146,9 @@ const errorMessages: Record<string, string> = {
   PAYMENT_CURRENCY_MISMATCH: 'La moneda del pago no coincide con la venta.',
   COMMAND_ID_CONFLICT: 'La operación ya fue utilizada con datos diferentes. Intenta nuevamente.',
   INVALID_EDGE_RESPONSE: 'Edge respondió con datos inesperados. Intenta recargar la pantalla.',
+  AUTHENTICATION_REQUIRED: 'La sesión local ya no está disponible. Inicia sesión nuevamente.',
+  AUTH_SESSION_INVALID: 'La sesión local expiró o fue revocada. Inicia sesión nuevamente.',
+  PERMISSION_DENIED: 'Tu usuario no tiene permiso para realizar esta operación.',
 };
 
 export function canEditDraftItem(status: 'DRAFT' | 'SENT'): boolean {

@@ -19,6 +19,7 @@ describe('KDS vertical slice', () => {
   beforeAll(async () => {
     prepareDevelopmentDatabase(dbPath);
     app = await buildApp(dbPath, {
+      authMode: 'test-bypass',
       printerAdapter: {
         print: async () => {
           throw new PrinterAdapterError('printer offline', 'NOT_STARTED');
@@ -172,7 +173,7 @@ describe('KDS vertical slice', () => {
     socket.close();
 
     await app.close();
-    app = await buildApp(dbPath, { startPrintWorker: false });
+    app = await buildApp(dbPath, { startPrintWorker: false, authMode: 'test-bypass' });
     await app.ready();
     const persisted = (
       await app.inject({ method: 'GET', url: `/kds/tickets?stationId=${kitchenId}` })

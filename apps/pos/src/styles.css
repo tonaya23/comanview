@@ -1265,6 +1265,104 @@ button:focus-visible {
   background: #fff0ee;
 }
 
+.pos-login-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background:
+    radial-gradient(circle at top left, rgba(54, 130, 113, 0.2), transparent 40%), #eef3f1;
+}
+
+.pos-login-card {
+  width: min(100%, 390px);
+  display: grid;
+  gap: 18px;
+  padding: 28px;
+  border: 1px solid #d8e2de;
+  border-radius: 24px;
+  background: #fff;
+  box-shadow: 0 20px 60px rgba(26, 61, 53, 0.14);
+}
+
+.pos-login-brand {
+  justify-content: center;
+}
+
+.pin-display {
+  min-height: 58px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #ccd9d4;
+  border-radius: 14px;
+  color: #173e35;
+  background: #f7faf9;
+  font-size: 1.3rem;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+}
+
+.pin-keypad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+.pin-keypad button {
+  min-height: 62px;
+  border-radius: 14px;
+  font-size: 1.2rem;
+  font-weight: 800;
+}
+
+.pin-keypad .pin-submit {
+  color: #fff;
+  background: #1b6659;
+}
+
+.pin-feedback {
+  min-height: 20px;
+  color: #9b332b;
+  text-align: center;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.pos-login-card > small {
+  color: #64756f;
+  text-align: center;
+}
+
+.operator-identity {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid #d9e2df;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.operator-identity div {
+  display: grid;
+}
+
+.operator-identity span {
+  color: #64756f;
+  font-size: 0.68rem;
+  font-weight: 800;
+}
+
+.operator-identity button {
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid #b9cbc5;
+  border-radius: 9px;
+  color: #2b5d52;
+  background: #f4f8f6;
+  font-weight: 800;
+}
+
 .card-note {
   display: flex;
   flex-direction: column;

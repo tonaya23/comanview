@@ -10,6 +10,96 @@ function jsonResponse(body: unknown, status = 200): EdgeResponse {
 }
 
 describe('createEdgeClient', () => {
+  it('keeps PIN login unauthenticated and sends the opaque session token afterwards', async () => {
+    let token: string | null = null;
+    const fetchMock = vi.fn(async (input: string, init?: { headers?: Record<string, string> }) => {
+      if (input.endsWith('/auth/login')) {
+        return jsonResponse({
+          token: 'opaque-local-session-token-with-sufficient-length',
+          user: {
+            id: '01991a00-0000-7000-8000-000000000712',
+            displayName: 'Cajero desarrollo',
+            status: 'ACTIVE',
+            roles: ['CASHIER'],
+            permissions: ['ORDER_CREATE'],
+          },
+          session: {
+            id: '01991a00-0000-7000-8000-000000000799',
+            deviceId: '01991a00-0000-7000-8000-000000000721',
+            loginAt: '2026-08-27T12:00:00.000Z',
+            lastActivity: '2026-08-27T12:00:00.000Z',
+            expiresAt: '2026-08-28T00:00:00.000Z',
+          },
+        });
+      }
+      expect(init?.headers?.['authorization']).toBe(`Bearer ${token}`);
+      return jsonResponse({
+        user: {
+          id: '01991a00-0000-7000-8000-000000000712',
+          displayName: 'Cajero desarrollo',
+          status: 'ACTIVE',
+          roles: ['CASHIER'],
+          permissions: ['ORDER_CREATE'],
+        },
+        session: {
+          id: '01991a00-0000-7000-8000-000000000799',
+          deviceId: '01991a00-0000-7000-8000-000000000721',
+          loginAt: '2026-08-27T12:00:00.000Z',
+          lastActivity: '2026-08-27T12:00:00.000Z',
+          expiresAt: '2026-08-28T00:00:00.000Z',
+        },
+      });
+    });
+    const client = createEdgeClient({
+      baseUrl: 'http://localhost:3000',
+      fetch: fetchMock as EdgeFetch,
+      getAccessToken: () => token,
+    });
+
+    const loggedIn = await client.login({
+      pin: '2222',
+      deviceId: '01991a00-0000-7000-8000-000000000721',
+    });
+    expect(fetchMock.mock.calls[0]?.[1]?.headers).not.toHaveProperty('authorization');
+    token = loggedIn.token;
+    await client.getCurrentSession();
+  });
+
+  it('preserves the current Bearer token when adding JSON content headers', async () => {
+    const token = 'current-local-session-token';
+    const fetchMock = vi.fn(async (_input: string, init?: { headers?: Record<string, string> }) => {
+      expect(init?.headers).toEqual({
+        authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      });
+      return jsonResponse(
+        {
+          id: '01991a00-0000-7000-8000-000000000731',
+          cashRegisterId: '01991a00-0000-7000-8000-000000000601',
+          status: 'OPEN',
+          openingFloat: { amount: 1000, currency: 'MXN' },
+          expectedCash: { amount: 1000, currency: 'MXN' },
+          businessDate: '2026-08-27',
+          openedAt: '2026-08-27T12:00:00.000Z',
+          openedBy: '01991a00-0000-7000-8000-000000000712',
+          closedAt: null,
+        },
+        201,
+      );
+    });
+    const client = createEdgeClient({
+      baseUrl: 'http://localhost:3000',
+      fetch: fetchMock as EdgeFetch,
+      getAccessToken: () => token,
+    });
+
+    await client.openCashSession({
+      commandId: 'sdk-auth-open-cash',
+      openingFloatAmount: 1000,
+      businessDate: '2026-08-27',
+    });
+  });
+
   it('requests and validates the Edge health endpoint', async () => {
     const fetchMock = vi.fn(async () =>
       jsonResponse({

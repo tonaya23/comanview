@@ -5,6 +5,7 @@ import type { PrintJob, PrintItemSnapshot } from '@comanview/printing';
 import type { PrintJobResponse, RequestPrintJob } from '@comanview/contracts';
 import { ObjectNotFoundError } from '../../../app/errors.js';
 import { AppError } from '../../../app/errorHandler.js';
+import type { AuthorizedOperation } from '../../../app/authContext.js';
 
 export function mapPrintJob(job: PrintJob): PrintJobResponse {
   return {
@@ -68,7 +69,12 @@ export class PrintService {
     return jobs;
   }
 
-  requestPrecheck(orderId: string, request: RequestPrintJob): PrintJobResponse {
+  requestPrecheck(
+    orderId: string,
+    request: RequestPrintJob,
+    operation: AuthorizedOperation,
+  ): PrintJobResponse {
+    void operation;
     const existing = this.printRepo.getByDedupeKey(`precheck:${request.commandId}`);
     if (existing) return mapPrintJob(existing);
     if (this.orderRepo.hasProcessedCommand(request.commandId)) throw this.commandConflict();
@@ -107,7 +113,12 @@ export class PrintService {
     return mapPrintJob(this.printRepo.getByDedupeKey(job.dedupeKey)!);
   }
 
-  requestCustomerReceipt(orderId: string, request: RequestPrintJob): PrintJobResponse {
+  requestCustomerReceipt(
+    orderId: string,
+    request: RequestPrintJob,
+    operation: AuthorizedOperation,
+  ): PrintJobResponse {
+    void operation;
     const existing = this.printRepo.getByDedupeKey(`receipt:${request.commandId}`);
     if (existing) return mapPrintJob(existing);
     if (this.orderRepo.hasProcessedCommand(request.commandId)) throw this.commandConflict();

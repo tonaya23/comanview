@@ -25,6 +25,7 @@ import {
   OrderRepository,
   PrintJobRepository,
   KdsRepository,
+  AuthRepository,
 } from '@comanview/database';
 import { DebugPrinterAdapter, PrintWorker, type PrinterAdapter } from '@comanview/printing';
 import { CatalogService } from './modules/catalog/application/CatalogService.js';
@@ -42,11 +43,15 @@ import { printRoutes } from './modules/printing/http/routes.js';
 import { RealtimeHub } from './infrastructure/realtime/RealtimeHub.js';
 import { KdsService } from './modules/kds/application/KdsService.js';
 import { kdsRoutes } from './modules/kds/http/routes.js';
+import { AuthService } from './modules/auth/application/AuthService.js';
+import { AuthGuard, type AuthMode } from './modules/auth/http/AuthGuard.js';
+import { authRoutes } from './modules/auth/http/routes.js';
 
 export interface BuildAppOptions {
   printerAdapter?: PrinterAdapter;
   startPrintWorker?: boolean;
   debugPrintDirectory?: string;
+  authMode?: AuthMode;
 }
 
 export async function buildApp(dbPath: string = ':memory:', options: BuildAppOptions = {}) {
@@ -71,6 +76,7 @@ export async function buildApp(dbPath: string = ':memory:', options: BuildAppOpt
   const cashRepo = new CashRepository(db);
   const printRepo = new PrintJobRepository(db);
   const kdsRepo = new KdsRepository(db);
+  const authRepo = new AuthRepository(db);
 
   // Setup Services
   const catalogService = new CatalogService(catalogRepo);
@@ -86,6 +92,12 @@ export async function buildApp(dbPath: string = ':memory:', options: BuildAppOpt
   );
   const cashService = new CashService(cashRepo, defaultOperationalContext);
   const paymentService = new PaymentService(orderRepo, cashRepo, defaultOperationalContext);
+  const authService = new AuthService(
+    authRepo,
+    defaultOperationalContext.tenantId,
+    defaultOperationalContext.locationId,
+  );
+  const authGuard = new AuthGuard(authService, options.authMode ?? 'enforced');
   cashService.ensureDefaultRegister();
   const failingTargets = new Set(
     (process.env['COMANVIEW_DEBUG_PRINTER_FAIL_TARGETS'] ?? '').split(',').filter(Boolean),
@@ -103,12 +115,13 @@ export async function buildApp(dbPath: string = ':memory:', options: BuildAppOpt
   if (options.startPrintWorker !== false) printWorker.start();
 
   // Setup Routes
-  app.register(catalogRoutes(catalogService), { prefix: '/catalog' });
-  app.register(orderRoutes(orderService), { prefix: '/orders' });
-  app.register(cashRoutes(cashService), { prefix: '/cash-sessions' });
-  app.register(paymentRoutes(paymentService));
-  app.register(printRoutes(printService));
-  app.register(kdsRoutes(kdsService, realtimeHub));
+  app.register(authRoutes(authService, authGuard), { prefix: '/auth' });
+  app.register(catalogRoutes(catalogService, authGuard), { prefix: '/catalog' });
+  app.register(orderRoutes(orderService, authGuard), { prefix: '/orders' });
+  app.register(cashRoutes(cashService, authGuard), { prefix: '/cash-sessions' });
+  app.register(paymentRoutes(paymentService, authGuard));
+  app.register(printRoutes(printService, authGuard));
+  app.register(kdsRoutes(kdsService, realtimeHub, authGuard));
 
   // Health route
   app.get(

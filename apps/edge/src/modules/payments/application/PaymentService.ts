@@ -8,6 +8,7 @@ import type {
   VoidPaymentRequest,
 } from '@comanview/contracts';
 import { AppError } from '../../../app/errorHandler.js';
+import type { AuthorizedOperation } from '../../../app/authContext.js';
 import { ConcurrencyError, ObjectNotFoundError } from '../../../app/errors.js';
 import type { EdgeOperationalContext } from '../../../app/operationalContext.js';
 import { mapOrderToResponse } from '../../orders/application/orderMapper.js';
@@ -26,7 +27,12 @@ export class PaymentService {
     };
   }
 
-  createPayment(orderId: string, request: CreatePaymentRequest): OrderResponse {
+  createPayment(
+    orderId: string,
+    request: CreatePaymentRequest,
+    operation: AuthorizedOperation,
+  ): OrderResponse {
+    void operation;
     const previousOrderId = this.orderRepo.getOrderIdByPaymentCommand(request.commandId);
     if (previousOrderId) {
       if (previousOrderId.toString() !== orderId) {
@@ -116,7 +122,13 @@ export class PaymentService {
     return mapOrderToResponse(order);
   }
 
-  voidPayment(orderId: string, paymentId: string, request: VoidPaymentRequest): OrderResponse {
+  voidPayment(
+    orderId: string,
+    paymentId: string,
+    request: VoidPaymentRequest,
+    operation: AuthorizedOperation,
+  ): OrderResponse {
+    void operation;
     const order = this.orderRepo.getOrderById(EntityId.fromString(orderId));
     if (!order) throw new ObjectNotFoundError(`Order ${orderId} not found`);
 

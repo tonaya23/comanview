@@ -21,6 +21,93 @@ body {
   min-height: 100vh;
   background: #080d14;
 }
+
+.kds-login-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  color: #eff7f4;
+  background: #10241f;
+}
+
+.kds-login-card {
+  width: min(100%, 390px);
+  display: grid;
+  gap: 18px;
+  padding: 28px;
+  border: 1px solid #31534a;
+  border-radius: 22px;
+  background: #19332c;
+  box-shadow: 0 22px 70px rgba(0, 0, 0, 0.32);
+}
+
+.kds-login-card h1 {
+  margin: 0;
+}
+
+.kds-pin-display {
+  min-height: 58px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #486a60;
+  border-radius: 13px;
+  color: #fff;
+  background: #10241f;
+  font-weight: 900;
+  letter-spacing: 0.16em;
+}
+
+.kds-pin-keypad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+.kds-pin-keypad button {
+  min-height: 62px;
+  border: 1px solid #486a60;
+  border-radius: 12px;
+  color: #eff7f4;
+  background: #24483e;
+  font-size: 1.2rem;
+  font-weight: 900;
+}
+
+.kds-pin-keypad .confirm {
+  color: #10241f;
+  background: #62d4b5;
+}
+
+.kds-login-feedback {
+  min-height: 20px;
+  color: #ffaaa0;
+  text-align: center;
+  font-weight: 800;
+}
+
+.kds-operator {
+  display: grid;
+  gap: 2px;
+  padding-left: 14px;
+  border-left: 1px solid #35574e;
+}
+
+.kds-operator span {
+  color: #9ab8af;
+  font-size: 0.7rem;
+  font-weight: 800;
+}
+
+.kds-operator button {
+  min-height: 34px;
+  margin-top: 4px;
+  border: 1px solid #4c7267;
+  border-radius: 8px;
+  color: #dcebe6;
+  background: #24483e;
+  font-weight: 800;
+}
 button {
   font: inherit;
 }

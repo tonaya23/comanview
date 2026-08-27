@@ -28,7 +28,7 @@ describe('Edge API Integration Tests', () => {
     }
     sqlite.close();
 
-    app = await buildApp(tmpPath);
+    app = await buildApp(tmpPath, { authMode: 'test-bypass' });
     await app.ready();
   });
 
@@ -1038,7 +1038,7 @@ describe('Edge API Integration Tests', () => {
     await app.close();
 
     // Start a new instance pointing to the same db
-    const newApp = await buildApp(tmpPath);
+    const newApp = await buildApp(tmpPath, { authMode: 'test-bypass' });
     await newApp.ready();
 
     const response = await newApp.inject({

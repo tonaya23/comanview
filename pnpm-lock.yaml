@@ -122,6 +122,9 @@ importers:
         specifier: ^3.25.67
         version: 3.25.76
     devDependencies:
+      '@comanview/client-sdk':
+        specifier: workspace:*
+        version: link:../../packages/client-sdk
       '@comanview/testing':
         specifier: workspace:*
         version: link:../../packages/testing
@@ -286,6 +289,9 @@ importers:
 
   packages/auth:
     devDependencies:
+      '@types/node':
+        specifier: 26.2.0
+        version: 26.2.0
       typescript:
         specifier: ^5.8.3
         version: 5.9.3
@@ -334,6 +340,9 @@ importers:
 
   packages/database:
     dependencies:
+      '@comanview/auth':
+        specifier: workspace:*
+        version: link:../auth
       '@comanview/domain':
         specifier: workspace:*
         version: link:../domain

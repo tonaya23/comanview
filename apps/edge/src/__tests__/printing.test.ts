@@ -15,7 +15,7 @@ describe('Printing vertical slice', () => {
 
   beforeAll(async () => {
     prepareDevelopmentDatabase(dbPath);
-    app = await buildApp(dbPath, { startPrintWorker: false });
+    app = await buildApp(dbPath, { startPrintWorker: false, authMode: 'test-bypass' });
     await app.ready();
   });
 
@@ -259,7 +259,10 @@ describe('TCP virtual printer pipeline', () => {
         .run(JSON.stringify({ host: '127.0.0.1', port: bar.port }));
       sqlite.close();
 
-      tcpApp = await buildApp(tcpDbPath, { printerAdapter: new TcpPrinterAdapter() });
+      tcpApp = await buildApp(tcpDbPath, {
+        printerAdapter: new TcpPrinterAdapter(),
+        authMode: 'test-bypass',
+      });
       await tcpApp.ready();
       const products = (await tcpApp.inject({ method: 'GET', url: '/catalog/products' })).json();
       const burger = products.find((product: any) => product.name === 'Hamburguesa clásica');

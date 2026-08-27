@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { createEdgeClient } from '@comanview/client-sdk';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { createEdgeClient, EdgeClientError } from '@comanview/client-sdk';
 import {
   KdsRealtimeMessageSchema,
+  PermissionCodes,
+  type AuthUserResponse,
   type KdsPreparationStatus,
   type KdsStationResponse,
   type KdsTicketResponse,
@@ -14,7 +16,14 @@ import {
   timerTone,
 } from './kdsLogic.js';
 
-const edge = createEdgeClient({ baseUrl: '/api' });
+const sessionTokenStorageKey = 'comanview.kds.sessionToken';
+const kdsDeviceId =
+  import.meta.env['VITE_COMANVIEW_DEVICE_ID'] ??
+  (import.meta.env.DEV ? '01991a00-0000-7000-8000-000000000722' : '');
+const edge = createEdgeClient({
+  baseUrl: '/api',
+  getAccessToken: () => window.localStorage.getItem(sessionTokenStorageKey),
+});
 const columns: Array<{ status: KdsPreparationStatus; title: string }> = [
   { status: 'PENDING', title: 'PENDIENTES' },
   { status: 'PREPARING', title: 'PREPARANDO' },
@@ -22,6 +31,11 @@ const columns: Array<{ status: KdsPreparationStatus; title: string }> = [
 ];
 
 export function App() {
+  const [authUser, setAuthUser] = useState<AuthUserResponse | null>(null);
+  const [authChecking, setAuthChecking] = useState(true);
+  const [pin, setPin] = useState('');
+  const [loginPending, setLoginPending] = useState(false);
+  const [loginError, setLoginError] = useState<string | null>(null);
   const [stations, setStations] = useState<KdsStationResponse[]>([]);
   const [stationId, setStationId] = useState('');
   const [tickets, setTickets] = useState<KdsTicketResponse[]>([]);
@@ -33,6 +47,37 @@ export function App() {
   const [now, setNow] = useState(Date.now());
   const stationRef = useRef(stationId);
   stationRef.current = stationId;
+
+  const clearLocalSession = useCallback(() => {
+    window.localStorage.removeItem(sessionTokenStorageKey);
+    setAuthUser(null);
+    setStations([]);
+    setTickets([]);
+    setStationId('');
+  }, []);
+
+  useEffect(() => {
+    const restore = async () => {
+      if (!window.localStorage.getItem(sessionTokenStorageKey)) {
+        setAuthChecking(false);
+        return;
+      }
+      try {
+        const current = await edge.getCurrentSession();
+        if (!current.user.permissions.includes(PermissionCodes.KDS_VIEW)) {
+          await edge.logout();
+          clearLocalSession();
+          return;
+        }
+        setAuthUser(current.user);
+      } catch {
+        clearLocalSession();
+      } finally {
+        setAuthChecking(false);
+      }
+    };
+    void restore();
+  }, [clearLocalSession]);
 
   const refreshStations = useCallback(async () => {
     const next = await edge.getKdsStations();
@@ -64,11 +109,12 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    if (!authUser) return;
     void refreshStations().catch((problem) => {
       setConnection('DISCONNECTED');
       setError(getKdsErrorMessage(problem));
     });
-  }, [refreshStations]);
+  }, [authUser, refreshStations]);
 
   useEffect(() => {
     if (!stationId) return;
@@ -77,6 +123,7 @@ export function App() {
   }, [stationId, refreshTickets]);
 
   useEffect(() => {
+    if (!authUser) return;
     const clock = window.setInterval(() => setNow(Date.now()), 1_000);
     const fallback = window.setInterval(() => {
       if (stationRef.current) {
@@ -92,9 +139,10 @@ export function App() {
       window.clearInterval(clock);
       window.clearInterval(fallback);
     };
-  }, [refreshStations, refreshTickets]);
+  }, [authUser, refreshStations, refreshTickets]);
 
   useEffect(() => {
+    if (!authUser) return;
     let socket: WebSocket | null = null;
     let reconnectTimer: number | undefined;
     let stopped = false;
@@ -104,6 +152,13 @@ export function App() {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       socket = new WebSocket(`${protocol}//${window.location.host}/api/realtime`);
       socket.onopen = () => {
+        const sessionToken = window.localStorage.getItem(sessionTokenStorageKey);
+        if (!sessionToken) {
+          socket?.close();
+          clearLocalSession();
+          return;
+        }
+        socket?.send(JSON.stringify({ type: 'AUTHENTICATE', token: sessionToken }));
         attempt = 0;
         setConnection('CONNECTED');
         void refreshStations()
@@ -136,7 +191,7 @@ export function App() {
       if (reconnectTimer) window.clearTimeout(reconnectTimer);
       socket?.close();
     };
-  }, [refreshStations, refreshTickets]);
+  }, [authUser, clearLocalSession, refreshStations, refreshTickets]);
 
   async function transition(ticket: KdsTicketResponse, target: 'PREPARING' | 'READY') {
     setPendingTicket(ticket.ticketId);
@@ -150,6 +205,7 @@ export function App() {
       }
       await refreshTickets(ticket.stationId);
     } catch (problem) {
+      if (problem instanceof EdgeClientError && problem.status === 401) clearLocalSession();
       setError(getKdsErrorMessage(problem));
       await refreshTickets(ticket.stationId);
     } finally {
@@ -165,6 +221,87 @@ export function App() {
     [tickets],
   );
   const selectedStation = stations.find((station) => station.stationId === stationId);
+
+  async function login(event: FormEvent) {
+    event.preventDefault();
+    if (pin.length < 4) return;
+    setLoginPending(true);
+    setLoginError(null);
+    try {
+      if (!kdsDeviceId) {
+        setLoginError('Este KDS no tiene un dispositivo configurado.');
+        return;
+      }
+      const authenticated = await edge.login({ pin, deviceId: kdsDeviceId });
+      if (!authenticated.user.permissions.includes(PermissionCodes.KDS_VIEW)) {
+        window.localStorage.setItem(sessionTokenStorageKey, authenticated.token);
+        await edge.logout();
+        window.localStorage.removeItem(sessionTokenStorageKey);
+        setLoginError('Este usuario no tiene acceso a KDS.');
+        return;
+      }
+      window.localStorage.setItem(sessionTokenStorageKey, authenticated.token);
+      setAuthUser(authenticated.user);
+      setPin('');
+    } catch {
+      setPin('');
+      setLoginError('PIN incorrecto o acceso temporalmente bloqueado.');
+    } finally {
+      setLoginPending(false);
+    }
+  }
+
+  async function logout() {
+    try {
+      await edge.logout();
+    } catch {
+      // The display locks locally even if Edge became unavailable.
+    } finally {
+      clearLocalSession();
+      setPin('');
+      setLoginError(null);
+    }
+  }
+
+  if (authChecking) {
+    return <main className="kds-login-shell">Restaurando sesión local…</main>;
+  }
+
+  if (!authUser) {
+    return (
+      <main className="kds-login-shell">
+        <form className="kds-login-card" onSubmit={(event) => void login(event)}>
+          <span className="eyebrow">COMANVIEW KDS</span>
+          <h1>Acceso de cocina</h1>
+          <div className="kds-pin-display">{pin ? '•'.repeat(pin.length) : 'Ingresa tu PIN'}</div>
+          <div className="kds-pin-keypad" aria-label="Teclado de PIN">
+            {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((digit) => (
+              <button
+                key={digit}
+                type="button"
+                disabled={loginPending || pin.length >= 12}
+                onClick={() => setPin((current) => `${current}${digit}`)}
+              >
+                {digit}
+              </button>
+            ))}
+            <button type="button" onClick={() => setPin((current) => current.slice(0, -1))}>
+              ←
+            </button>
+            <button type="button" onClick={() => setPin((current) => `${current}0`)}>
+              0
+            </button>
+            <button className="confirm" type="submit" disabled={loginPending || pin.length < 4}>
+              {loginPending ? '…' : '✓'}
+            </button>
+          </div>
+          <div className="kds-login-feedback" role="status">
+            {loginError ?? '\u00a0'}
+          </div>
+        </form>
+      </main>
+    );
+  }
 
   return (
     <div className="kds-shell">
@@ -186,6 +323,13 @@ export function App() {
         </nav>
         <div className={`connection ${connection.toLowerCase()}`}>
           <span /> {connection === 'CONNECTED' ? 'EDGE LOCAL' : 'CONEXIÓN LOCAL PERDIDA'}
+        </div>
+        <div className="kds-operator">
+          <strong>{authUser.displayName}</strong>
+          <span>{authUser.roles.join(' · ')}</span>
+          <button type="button" onClick={() => void logout()}>
+            Bloquear
+          </button>
         </div>
       </header>
 
@@ -241,7 +385,11 @@ export function App() {
                   {ticket.status === 'PENDING' && (
                     <button
                       className="action start"
-                      disabled={pendingTicket === ticket.ticketId || connection !== 'CONNECTED'}
+                      disabled={
+                        pendingTicket === ticket.ticketId ||
+                        connection !== 'CONNECTED' ||
+                        !authUser.permissions.includes(PermissionCodes.KDS_UPDATE_PREPARATION)
+                      }
                       onClick={() => void transition(ticket, 'PREPARING')}
                     >
                       {pendingTicket === ticket.ticketId ? 'CONFIRMANDO…' : 'COMENZAR'}
@@ -250,7 +398,11 @@ export function App() {
                   {ticket.status === 'PREPARING' && (
                     <button
                       className="action ready"
-                      disabled={pendingTicket === ticket.ticketId || connection !== 'CONNECTED'}
+                      disabled={
+                        pendingTicket === ticket.ticketId ||
+                        connection !== 'CONNECTED' ||
+                        !authUser.permissions.includes(PermissionCodes.KDS_UPDATE_PREPARATION)
+                      }
                       onClick={() => void transition(ticket, 'READY')}
                     >
                       {pendingTicket === ticket.ticketId ? 'CONFIRMANDO…' : 'LISTO'}

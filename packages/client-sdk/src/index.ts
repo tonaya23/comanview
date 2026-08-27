@@ -10,6 +10,9 @@ import {
   PrintJobSchema,
   KdsStationSchema,
   KdsTicketSchema,
+  LoginResponseSchema,
+  CurrentSessionResponseSchema,
+  LogoutResponseSchema,
   type AddOrderItemRequest,
   type CategoryResponse,
   type CreateOrderRequest,
@@ -33,6 +36,10 @@ import {
   type KdsStationResponse,
   type KdsTicketResponse,
   type KdsTransitionRequest,
+  type LoginRequest,
+  type LoginResponse,
+  type CurrentSessionResponse,
+  type LogoutResponse,
 } from '@comanview/contracts';
 
 interface RuntimeSchema<T> {
@@ -42,6 +49,7 @@ interface RuntimeSchema<T> {
 export interface EdgeClientOptions {
   baseUrl?: string;
   fetch?: EdgeFetch;
+  getAccessToken?: () => string | null;
 }
 
 export interface EdgeRequestInit {
@@ -74,6 +82,9 @@ export class EdgeClientError extends Error {
 
 export interface EdgeClient {
   getHealth(): Promise<HealthResponse>;
+  login(request: LoginRequest): Promise<LoginResponse>;
+  getCurrentSession(): Promise<CurrentSessionResponse>;
+  logout(): Promise<LogoutResponse>;
   getCategories(): Promise<CategoryResponse[]>;
   getProducts(): Promise<ProductResponse[]>;
   createOrder(request: CreateOrderRequest): Promise<OrderResponse>;
@@ -136,13 +147,18 @@ export function createEdgeClient(options: EdgeClientOptions = {}): EdgeClient {
     path: string,
     schema: RuntimeSchema<T>,
     init?: EdgeRequestInit,
+    authenticated = true,
   ): Promise<T> {
     let response: EdgeResponse;
 
     try {
       const requestInit: EdgeRequestInit = { ...init };
+      const accessToken = authenticated ? options.getAccessToken?.() : null;
+      if (accessToken) {
+        requestInit.headers = { ...requestInit.headers, authorization: `Bearer ${accessToken}` };
+      }
       if (init?.body) {
-        requestInit.headers = { ...init.headers, 'content-type': 'application/json' };
+        requestInit.headers = { ...requestInit.headers, 'content-type': 'application/json' };
       }
       response = await edgeFetch(`${baseUrl}${path}`, requestInit);
     } catch (error) {
@@ -197,7 +213,16 @@ export function createEdgeClient(options: EdgeClientOptions = {}): EdgeClient {
   }
 
   return {
-    getHealth: () => request('/health', HealthResponseSchema),
+    getHealth: () => request('/health', HealthResponseSchema, undefined, false),
+    login: (body) =>
+      request(
+        '/auth/login',
+        LoginResponseSchema,
+        { method: 'POST', body: JSON.stringify(body) },
+        false,
+      ),
+    getCurrentSession: () => request('/auth/session', CurrentSessionResponseSchema),
+    logout: () => request('/auth/logout', LogoutResponseSchema, { method: 'POST' }),
     getCategories: () => request('/catalog/categories', CategorySchema.array()),
     getProducts: () => request('/catalog/products', ProductSchema.array()),
     createOrder: (body) =>

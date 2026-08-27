@@ -9,7 +9,10 @@ import type {
   PrintJobResponse,
   ProductResponse,
   TipSelection,
+  AuthUserResponse,
+  PermissionCode,
 } from '@comanview/contracts';
+import { PermissionCodes } from '@comanview/contracts';
 import {
   ALL_CATEGORIES,
   canEditDraftItem,
@@ -39,11 +42,23 @@ import {
   undoCashDenomination,
 } from './cashTenderInput.js';
 
-const edge = createEdgeClient({ baseUrl: import.meta.env['VITE_EDGE_API_URL'] ?? '/api' });
+const sessionTokenStorageKey = 'comanview.pos.sessionToken';
+const posDeviceId =
+  import.meta.env['VITE_COMANVIEW_DEVICE_ID'] ??
+  (import.meta.env.DEV ? '01991a00-0000-7000-8000-000000000721' : '');
+const edge = createEdgeClient({
+  baseUrl: import.meta.env['VITE_EDGE_API_URL'] ?? '/api',
+  getAccessToken: () => window.localStorage.getItem(sessionTokenStorageKey),
+});
 const currentOrderStorageKey = 'comanview.pos.currentOrderId';
 type ConnectionState = 'CHECKING' | 'CONNECTED' | 'DISCONNECTED';
 
 export function App() {
+  const [authUser, setAuthUser] = useState<AuthUserResponse | null>(null);
+  const [authChecking, setAuthChecking] = useState(true);
+  const [pin, setPin] = useState('');
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [loginPending, setLoginPending] = useState(false);
   const [connection, setConnection] = useState<ConnectionState>('CHECKING');
   const [categories, setCategories] = useState<CategoryResponse[]>([]);
   const [products, setProducts] = useState<ProductResponse[]>([]);
@@ -73,6 +88,40 @@ export function App() {
   const [configuredSpecialInstructions, setConfiguredSpecialInstructions] = useState('');
   const [printJobs, setPrintJobs] = useState<PrintJobResponse[]>([]);
 
+  const hasPermission = useCallback(
+    (permission: PermissionCode) => authUser?.permissions.includes(permission) ?? false,
+    [authUser],
+  );
+
+  const clearLocalSession = useCallback(() => {
+    window.localStorage.removeItem(sessionTokenStorageKey);
+    setAuthUser(null);
+    setOrder(null);
+    setCashSession(null);
+    setPaymentConfig(null);
+    setPrintJobs([]);
+    setShowOpenCash(false);
+    setShowPayment(false);
+  }, []);
+
+  useEffect(() => {
+    const restoreSession = async () => {
+      if (!window.localStorage.getItem(sessionTokenStorageKey)) {
+        setAuthChecking(false);
+        return;
+      }
+      try {
+        const current = await edge.getCurrentSession();
+        setAuthUser(current.user);
+      } catch {
+        clearLocalSession();
+      } finally {
+        setAuthChecking(false);
+      }
+    };
+    void restoreSession();
+  }, [clearLocalSession]);
+
   const updateOrder = useCallback((next: OrderResponse) => {
     setOrder(next);
     window.localStorage.setItem(currentOrderStorageKey, next.id);
@@ -91,12 +140,21 @@ export function App() {
   }, []);
 
   const refreshOperationalState = useCallback(async () => {
+    if (!authUser) return;
     try {
       const [nextCategories, nextProducts, currentCash, config] = await Promise.all([
-        edge.getCategories(),
-        edge.getProducts(),
-        edge.getCurrentCashSession(),
-        edge.getPaymentConfig(),
+        authUser.permissions.includes(PermissionCodes.CATALOG_VIEW)
+          ? edge.getCategories()
+          : Promise.resolve([]),
+        authUser.permissions.includes(PermissionCodes.CATALOG_VIEW)
+          ? edge.getProducts()
+          : Promise.resolve([]),
+        authUser.permissions.includes(PermissionCodes.CASH_SESSION_VIEW)
+          ? edge.getCurrentCashSession()
+          : Promise.resolve({ session: null }),
+        authUser.permissions.includes(PermissionCodes.PAYMENT_CONFIG_VIEW)
+          ? edge.getPaymentConfig()
+          : Promise.resolve(null),
       ]);
       setCategories(nextCategories);
       setProducts(nextProducts);
@@ -106,13 +164,15 @@ export function App() {
     } catch (stateError) {
       if (stateError instanceof EdgeClientError && stateError.code === 'EDGE_UNREACHABLE')
         setConnection('DISCONNECTED');
+      if (stateError instanceof EdgeClientError && stateError.status === 401) clearLocalSession();
       setError(getErrorMessage(stateError));
     } finally {
       setLoadingCatalog(false);
     }
-  }, []);
+  }, [authUser, clearLocalSession]);
 
   const restoreCurrentOrder = useCallback(async () => {
+    if (!authUser?.permissions.includes(PermissionCodes.ORDER_VIEW)) return;
     const id = window.localStorage.getItem(currentOrderStorageKey);
     if (!id) return;
     try {
@@ -122,13 +182,13 @@ export function App() {
       if (!(restoreError instanceof EdgeClientError && restoreError.code === 'ORDER_NOT_FOUND'))
         setError(getErrorMessage(restoreError));
     }
-  }, []);
+  }, [authUser]);
 
   useEffect(() => {
     let wasConnected = false;
     const check = async () => {
       const connected = await refreshConnection();
-      if (connected && !wasConnected) {
+      if (connected && authUser && !wasConnected) {
         wasConnected = true;
         await Promise.all([refreshOperationalState(), restoreCurrentOrder()]);
       } else if (!connected) {
@@ -139,10 +199,14 @@ export function App() {
     void check();
     const timer = window.setInterval(() => void check(), 5000);
     return () => window.clearInterval(timer);
-  }, [refreshConnection, refreshOperationalState, restoreCurrentOrder]);
+  }, [authUser, refreshConnection, refreshOperationalState, restoreCurrentOrder]);
 
   useEffect(() => {
-    if (connection !== 'CONNECTED') return;
+    if (
+      connection !== 'CONNECTED' ||
+      !authUser?.permissions.includes(PermissionCodes.PRINT_JOBS_VIEW)
+    )
+      return;
     const refresh = async () => {
       try {
         setPrintJobs(await edge.getRecentPrintJobs());
@@ -153,7 +217,7 @@ export function App() {
     void refresh();
     const timer = window.setInterval(() => void refresh(), 3000);
     return () => window.clearInterval(timer);
-  }, [connection]);
+  }, [authUser, connection]);
 
   const visibleCategories = useMemo(() => getVisibleCategories(categories), [categories]);
   const visibleProducts = useMemo(
@@ -209,6 +273,7 @@ export function App() {
     } catch (problem) {
       if (problem instanceof EdgeClientError && problem.code === 'EDGE_UNREACHABLE')
         setConnection('DISCONNECTED');
+      if (problem instanceof EdgeClientError && problem.status === 401) clearLocalSession();
       if (problem instanceof EdgeClientError && problem.code === 'STALE_ORDER_VERSION' && order) {
         try {
           updateOrder(await edge.getOrder(order.id));
@@ -535,6 +600,115 @@ export function App() {
       await Promise.all([refreshOperationalState(), restoreCurrentOrder()]);
   }
 
+  async function login(event?: FormEvent) {
+    event?.preventDefault();
+    if (pin.length < 4) return;
+    setLoginPending(true);
+    setLoginError(null);
+    try {
+      if (!posDeviceId) {
+        setLoginError('Este POS no tiene un dispositivo configurado.');
+        return;
+      }
+      const authenticated = await edge.login({ pin, deviceId: posDeviceId });
+      window.localStorage.setItem(sessionTokenStorageKey, authenticated.token);
+      setAuthUser(authenticated.user);
+      setPin('');
+      setLoadingCatalog(true);
+    } catch (problem) {
+      setPin('');
+      setLoginError(
+        problem instanceof EdgeClientError && problem.code === 'EDGE_UNREACHABLE'
+          ? 'No fue posible conectar con el Edge local.'
+          : 'PIN incorrecto o acceso temporalmente bloqueado.',
+      );
+    } finally {
+      setLoginPending(false);
+      setAuthChecking(false);
+    }
+  }
+
+  async function logout() {
+    try {
+      await edge.logout();
+    } catch {
+      // Local lock is immediate even if Edge became unavailable.
+    } finally {
+      clearLocalSession();
+      setPin('');
+      setLoginError(null);
+    }
+  }
+
+  if (authChecking) {
+    return (
+      <main className="pos-login-shell">
+        <div className="pos-login-card" role="status">
+          <span className="spinner" />
+          <strong>Restaurando sesión local</strong>
+        </div>
+      </main>
+    );
+  }
+
+  if (!authUser) {
+    return (
+      <main className="pos-login-shell">
+        <form className="pos-login-card" onSubmit={(event) => void login(event)}>
+          <div className="brand pos-login-brand">
+            <span className="brand-mark">C</span>
+            <div>
+              <strong>ComanView</strong>
+              <span>Acceso local POS</span>
+            </div>
+          </div>
+          <div className="pin-display" aria-label={`${pin.length} dígitos ingresados`}>
+            {pin ? '•'.repeat(pin.length) : 'Ingresa tu PIN'}
+          </div>
+          <div className="pin-keypad" aria-label="Teclado de PIN">
+            {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((digit) => (
+              <button
+                key={digit}
+                type="button"
+                disabled={loginPending || pin.length >= 12}
+                onClick={() => setPin((current) => `${current}${digit}`)}
+              >
+                {digit}
+              </button>
+            ))}
+            <button
+              type="button"
+              aria-label="Borrar último dígito"
+              disabled={loginPending || pin.length === 0}
+              onClick={() => setPin((current) => current.slice(0, -1))}
+            >
+              ←
+            </button>
+            <button
+              type="button"
+              disabled={loginPending || pin.length >= 12}
+              onClick={() => setPin((current) => `${current}0`)}
+            >
+              0
+            </button>
+            <button
+              type="submit"
+              className="pin-submit"
+              aria-label="Iniciar sesión"
+              disabled={loginPending || pin.length < 4}
+            >
+              {loginPending ? '…' : '✓'}
+            </button>
+          </div>
+          <div className="pin-feedback" role="status">
+            {loginError ?? '\u00a0'}
+          </div>
+          <small>La identidad se valida directamente en el Edge local.</small>
+        </form>
+      </main>
+    );
+  }
+
   return (
     <div className="pos-shell">
       <header className="topbar">
@@ -546,16 +720,38 @@ export function App() {
           </div>
         </div>
         <div className="topbar-statuses">
+          <div className="operator-identity">
+            <div>
+              <strong>{authUser.displayName}</strong>
+              <span>{authUser.roles.join(' · ')}</span>
+            </div>
+            <button type="button" onClick={() => void logout()}>
+              Cerrar sesión
+            </button>
+          </div>
           <button
             className={`cash-status ${cashSession ? 'cash-status--open' : ''}`}
             type="button"
-            onClick={() => !cashSession && setShowOpenCash(true)}
+            disabled={!hasPermission(PermissionCodes.CASH_SESSION_OPEN) && !cashSession}
+            onClick={() =>
+              !cashSession &&
+              hasPermission(PermissionCodes.CASH_SESSION_OPEN) &&
+              setShowOpenCash(true)
+            }
           >
-            <strong>{cashSession ? 'Caja abierta' : 'Caja cerrada'}</strong>
+            <strong>
+              {!hasPermission(PermissionCodes.CASH_SESSION_VIEW)
+                ? 'Caja restringida'
+                : cashSession
+                  ? 'Caja abierta'
+                  : 'Caja cerrada'}
+            </strong>
             <span>
-              {cashSession
-                ? `${cashSession.businessDate} · Esperado ${formatMoney(cashSession.expectedCash.amount, cashSession.expectedCash.currency)}`
-                : 'Toca para abrir'}
+              {!hasPermission(PermissionCodes.CASH_SESSION_VIEW)
+                ? 'Sin permiso de caja'
+                : cashSession
+                  ? `${cashSession.businessDate} · Esperado ${formatMoney(cashSession.expectedCash.amount, cashSession.expectedCash.currency)}`
+                  : 'Toca para abrir'}
             </span>
           </button>
           <div className={`connection connection--${connection.toLowerCase()}`} role="status">
@@ -669,7 +865,11 @@ export function App() {
                   type="button"
                   className={`product-card ${!product.available ? 'product-card--unavailable' : ''}`}
                   key={product.id}
-                  disabled={!product.available || !canOperateOrder}
+                  disabled={
+                    !product.available ||
+                    !canOperateOrder ||
+                    !hasPermission(PermissionCodes.ORDER_EDIT_DRAFT)
+                  }
                   onClick={() => chooseProduct(product)}
                 >
                   <span className="product-card-accent" />
@@ -717,7 +917,9 @@ export function App() {
             <button
               type="button"
               className="new-order-button"
-              disabled={isBusy || connection !== 'CONNECTED'}
+              disabled={
+                isBusy || connection !== 'CONNECTED' || !hasPermission(PermissionCodes.ORDER_CREATE)
+              }
               onClick={() => void createOrder()}
             >
               {pendingAction === 'create-order' ? 'Creando…' : order ? 'Nueva' : 'Crear venta'}
@@ -731,7 +933,11 @@ export function App() {
               <button
                 type="button"
                 className="primary-button"
-                disabled={isBusy || connection !== 'CONNECTED'}
+                disabled={
+                  isBusy ||
+                  connection !== 'CONNECTED' ||
+                  !hasPermission(PermissionCodes.ORDER_CREATE)
+                }
                 onClick={() => void createOrder()}
               >
                 Crear venta COUNTER
@@ -792,14 +998,18 @@ export function App() {
                           <button
                             type="button"
                             className="edit-button"
-                            disabled={!canOperateOrder}
+                            disabled={
+                              !canOperateOrder || !hasPermission(PermissionCodes.ORDER_EDIT_DRAFT)
+                            }
                             onClick={() => beginEditDraftItem(item)}
                           >
                             Editar
                           </button>
                           <button
                             type="button"
-                            disabled={!canOperateOrder}
+                            disabled={
+                              !canOperateOrder || !hasPermission(PermissionCodes.ORDER_EDIT_DRAFT)
+                            }
                             onClick={() => void removeItem(item.id)}
                           >
                             Eliminar
@@ -916,7 +1126,11 @@ export function App() {
                     <button
                       type="button"
                       className="send-button"
-                      disabled={draftItems.length === 0 || !canOperateOrder}
+                      disabled={
+                        draftItems.length === 0 ||
+                        !canOperateOrder ||
+                        !hasPermission(PermissionCodes.ORDER_SEND)
+                      }
                       onClick={() => void sendRound()}
                     >
                       <span>{pendingAction === 'send-round' ? 'Enviando…' : 'Enviar ronda'}</span>
@@ -925,7 +1139,11 @@ export function App() {
                     <button
                       type="button"
                       className="secondary-order-button"
-                      disabled={order.items.length === 0 || !canOperateOrder}
+                      disabled={
+                        order.items.length === 0 ||
+                        !canOperateOrder ||
+                        !hasPermission(PermissionCodes.PRINT_PRECHECK)
+                      }
                       onClick={() => void requestPrint('PRECHECK')}
                     >
                       {pendingAction === 'precheck' ? 'Encolando…' : 'Precuenta'}
@@ -937,7 +1155,8 @@ export function App() {
                         order.balanceDue.amount === 0 ||
                         order.items.length === 0 ||
                         !canOperateOrder ||
-                        !cashSession
+                        !cashSession ||
+                        !hasPermission(PermissionCodes.PAYMENT_CREATE)
                       }
                       onClick={beginPayment}
                     >
@@ -948,7 +1167,11 @@ export function App() {
                         <button
                           type="button"
                           className="close-order-button"
-                          disabled={!canOperateOrder || draftItems.length > 0}
+                          disabled={
+                            !canOperateOrder ||
+                            draftItems.length > 0 ||
+                            !hasPermission(PermissionCodes.ORDER_CLOSE)
+                          }
                           onClick={() => void closeOrder()}
                         >
                           {pendingAction === 'close-order' ? 'Cerrando…' : 'Cerrar venta'}
@@ -968,22 +1191,28 @@ export function App() {
                     <button
                       type="button"
                       className="secondary-order-button receipt-button"
-                      disabled={isBusy || connection !== 'CONNECTED'}
+                      disabled={
+                        isBusy ||
+                        connection !== 'CONNECTED' ||
+                        !hasPermission(PermissionCodes.PRINT_RECEIPT)
+                      }
                       onClick={() => void requestPrint('CUSTOMER_RECEIPT')}
                     >
                       {pendingAction === 'receipt' ? 'Encolando…' : 'Generar recibo'}
                     </button>
                   </>
                 )}
-                {!cashSession && order.status === 'OPEN' && (
-                  <button
-                    type="button"
-                    className="cash-required"
-                    onClick={() => setShowOpenCash(true)}
-                  >
-                    Abre la caja para poder cobrar
-                  </button>
-                )}
+                {!cashSession &&
+                  order.status === 'OPEN' &&
+                  hasPermission(PermissionCodes.CASH_SESSION_OPEN) && (
+                    <button
+                      type="button"
+                      className="cash-required"
+                      onClick={() => setShowOpenCash(true)}
+                    >
+                      Abre la caja para poder cobrar
+                    </button>
+                  )}
               </footer>
             </>
           )}
@@ -1177,7 +1406,7 @@ export function App() {
         </div>
       )}
 
-      {showOpenCash && (
+      {showOpenCash && hasPermission(PermissionCodes.CASH_SESSION_OPEN) && (
         <div className="modal-backdrop">
           <section
             className="payment-modal"
