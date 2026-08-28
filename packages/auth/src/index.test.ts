@@ -4,6 +4,8 @@ import {
   hashOperationalPin,
   hashSessionToken,
   verifyOperationalPin,
+  hashCloudAdminPassword,
+  verifyCloudAdminPassword,
 } from './index.js';
 
 describe('local authentication primitives', () => {
@@ -25,5 +27,15 @@ describe('local authentication primitives', () => {
     expect(first.length).toBeGreaterThanOrEqual(40);
     expect(hashSessionToken(first)).toHaveLength(64);
     expect(hashSessionToken(first)).toBe(hashSessionToken(first));
+  });
+});
+
+describe('Cloud Admin password hashing', () => {
+  it('uses a separate versioned credential format and verifies safely', async () => {
+    const hash = await hashCloudAdminPassword('correct-horse-battery-staple');
+    expect(hash).toContain('scrypt-cloud-password-v1$');
+    expect(hash).not.toContain('correct-horse-battery-staple');
+    await expect(verifyCloudAdminPassword('correct-horse-battery-staple', hash)).resolves.toBe(true);
+    await expect(verifyCloudAdminPassword('incorrect-password', hash)).resolves.toBe(false);
   });
 });

@@ -20,6 +20,7 @@
     "dev:cloud:migrate": "pnpm --filter @comanview/database cloud:migrate",
     "dev:cloud": "pnpm build && pnpm --filter @comanview/cloud-api dev",
     "dev:cloud:worker": "pnpm build && pnpm --filter @comanview/cloud-worker dev",
+    "dev:super-admin": "pnpm --filter @comanview/super-admin dev",
     "cloud:projections:replay": "pnpm --filter @comanview/cloud-worker replay",
     "build": "turbo run build",
     "lint": "turbo run lint",

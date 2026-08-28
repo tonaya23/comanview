@@ -77,6 +77,26 @@ export interface CloudConfig {
   bodyLimit: number;
   maxBatchSize: number;
   edgeCredentials: CloudEdgeCredential[];
+  admin: CloudAdminConfig;
+}
+
+export interface CloudAdminConfig {
+  environment: 'development' | 'test' | 'production';
+  sessionTtlMs: number;
+  idleTimeoutMs: number;
+  maxFailedLoginAttempts: number;
+  loginLockoutMs: number;
+  heartbeatStaleThresholdMs: number;
+  projectionLagThresholdMs: number;
+  projectionVersion: number;
+  secureCookie: boolean;
+  developmentBootstrap: {
+    email: string;
+    password: string;
+    displayName: string;
+    role: 'PLATFORM_ADMIN_READ' | 'SUPPORT_READ';
+    tenantIds: string[];
+  } | null;
 }
 
 export interface CloudWorkerConfig {
@@ -119,6 +139,34 @@ export function loadCloudConfig(environment: NodeJS.ProcessEnv = process.env): C
   } catch {
     throw new Error('COMANVIEW_CLOUD_EDGE_CREDENTIALS must be valid JSON.');
   }
+  const nodeEnvironment = z
+    .enum(['development', 'test', 'production'])
+    .default('development')
+    .parse(environment['NODE_ENV']);
+  const bootstrapEmail = environment['COMANVIEW_CLOUD_DEV_ADMIN_EMAIL']?.trim();
+  const bootstrapPassword = environment['COMANVIEW_CLOUD_DEV_ADMIN_PASSWORD'];
+  if (nodeEnvironment === 'production' && (bootstrapEmail || bootstrapPassword)) {
+    throw new Error('Development Cloud Admin bootstrap is forbidden in production.');
+  }
+  if (Boolean(bootstrapEmail) !== Boolean(bootstrapPassword)) {
+    throw new Error(
+      'COMANVIEW_CLOUD_DEV_ADMIN_EMAIL and COMANVIEW_CLOUD_DEV_ADMIN_PASSWORD must be configured together.',
+    );
+  }
+  let tenantIds: string[] = [];
+  if (environment['COMANVIEW_CLOUD_DEV_ADMIN_TENANT_IDS']) {
+    try {
+      tenantIds = z
+        .array(z.string().uuid())
+        .parse(JSON.parse(environment['COMANVIEW_CLOUD_DEV_ADMIN_TENANT_IDS']));
+    } catch {
+      throw new Error('COMANVIEW_CLOUD_DEV_ADMIN_TENANT_IDS must be a JSON UUID array.');
+    }
+  }
+  const role = z
+    .enum(['PLATFORM_ADMIN_READ', 'SUPPORT_READ'])
+    .default('PLATFORM_ADMIN_READ')
+    .parse(environment['COMANVIEW_CLOUD_DEV_ADMIN_ROLE']);
   return {
     databaseUrl: z.string().url().parse(environment['DATABASE_URL']),
     port: optionalPositiveInteger(4000, 65_535).parse(environment['COMANVIEW_CLOUD_PORT']),
@@ -130,5 +178,42 @@ export function loadCloudConfig(environment: NodeJS.ProcessEnv = process.env): C
       environment['COMANVIEW_CLOUD_SYNC_MAX_BATCH_SIZE'],
     ),
     edgeCredentials: z.array(CloudEdgeCredentialSchema).parse(credentials),
+    admin: {
+      environment: nodeEnvironment,
+      sessionTtlMs: optionalPositiveInteger(28_800_000, 604_800_000).parse(
+        environment['COMANVIEW_CLOUD_ADMIN_SESSION_TTL_MS'],
+      ),
+      idleTimeoutMs: optionalPositiveInteger(1_800_000, 86_400_000).parse(
+        environment['COMANVIEW_CLOUD_ADMIN_IDLE_TIMEOUT_MS'],
+      ),
+      maxFailedLoginAttempts: optionalPositiveInteger(5, 20).parse(
+        environment['COMANVIEW_CLOUD_ADMIN_MAX_LOGIN_ATTEMPTS'],
+      ),
+      loginLockoutMs: optionalPositiveInteger(900_000, 86_400_000).parse(
+        environment['COMANVIEW_CLOUD_ADMIN_LOCKOUT_MS'],
+      ),
+      heartbeatStaleThresholdMs: optionalPositiveInteger(90_000, 3_600_000).parse(
+        environment['COMANVIEW_CLOUD_HEARTBEAT_STALE_MS'],
+      ),
+      projectionLagThresholdMs: optionalPositiveInteger(120_000, 3_600_000).parse(
+        environment['COMANVIEW_CLOUD_PROJECTION_LAG_MS'],
+      ),
+      projectionVersion: optionalPositiveInteger(1, 1_000).parse(
+        environment['COMANVIEW_CLOUD_PROJECTION_VERSION'],
+      ),
+      secureCookie: nodeEnvironment !== 'development',
+      developmentBootstrap:
+        bootstrapEmail && bootstrapPassword
+          ? {
+              email: z.string().email().parse(bootstrapEmail),
+              password: z.string().min(12).max(200).parse(bootstrapPassword),
+              displayName:
+                environment['COMANVIEW_CLOUD_DEV_ADMIN_DISPLAY_NAME']?.trim() ||
+                'Cloud Admin Development',
+              role,
+              tenantIds,
+            }
+          : null,
+    },
   };
 }

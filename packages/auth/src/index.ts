@@ -30,6 +30,24 @@ export const PERMISSIONS = {
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
 export type BaseRole = 'OWNER' | 'MANAGER' | 'CASHIER' | 'WAITER' | 'KITCHEN';
 
+export const CLOUD_PERMISSIONS = {
+  CLOUD_LOCATION_VIEW: 'CLOUD_LOCATION_VIEW',
+  CLOUD_OPERATIONAL_VIEW: 'CLOUD_OPERATIONAL_VIEW',
+  CLOUD_FINANCIAL_VIEW: 'CLOUD_FINANCIAL_VIEW',
+  CLOUD_TENANT_READ_ALL: 'CLOUD_TENANT_READ_ALL',
+} as const;
+
+export type CloudPermission = (typeof CLOUD_PERMISSIONS)[keyof typeof CLOUD_PERMISSIONS];
+export type CloudAdminRole = 'PLATFORM_ADMIN_READ' | 'SUPPORT_READ';
+
+export const CLOUD_ROLE_PERMISSIONS: Readonly<Record<CloudAdminRole, readonly CloudPermission[]>> = {
+  PLATFORM_ADMIN_READ: Object.values(CLOUD_PERMISSIONS),
+  SUPPORT_READ: [
+    CLOUD_PERMISSIONS.CLOUD_LOCATION_VIEW,
+    CLOUD_PERMISSIONS.CLOUD_OPERATIONAL_VIEW,
+  ],
+};
+
 const ALL_PERMISSIONS = Object.values(PERMISSIONS);
 
 export const BASE_ROLE_PERMISSIONS: Readonly<Record<BaseRole, readonly Permission[]>> = {
@@ -72,6 +90,7 @@ const SCRYPT_R = 8;
 const SCRYPT_P = 1;
 const SCRYPT_KEY_LENGTH = 32;
 const SCRYPT_MAX_MEMORY = 64 * 1024 * 1024;
+const CLOUD_PASSWORD_VERSION = 'scrypt-cloud-password-v1';
 
 function derivePin(pin: string, salt: Buffer): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -131,6 +150,39 @@ export async function verifyOperationalPin(pin: string, encodedHash: string): Pr
 
   const expected = Buffer.from(hashValue, 'base64url');
   const actual = await derivePin(pin, Buffer.from(saltValue, 'base64url'));
+  return expected.length === actual.length && timingSafeEqual(expected, actual);
+}
+
+export async function hashCloudAdminPassword(password: string): Promise<string> {
+  const salt = randomBytes(16);
+  const derived = await derivePin(password, salt);
+  return [
+    CLOUD_PASSWORD_VERSION,
+    SCRYPT_N,
+    SCRYPT_R,
+    SCRYPT_P,
+    salt.toString('base64url'),
+    derived.toString('base64url'),
+  ].join('$');
+}
+
+export async function verifyCloudAdminPassword(
+  password: string,
+  encodedHash: string,
+): Promise<boolean> {
+  const [version, n, r, p, saltValue, hashValue] = encodedHash.split('$');
+  if (
+    version !== CLOUD_PASSWORD_VERSION ||
+    Number(n) !== SCRYPT_N ||
+    Number(r) !== SCRYPT_R ||
+    Number(p) !== SCRYPT_P ||
+    !saltValue ||
+    !hashValue
+  ) {
+    return false;
+  }
+  const expected = Buffer.from(hashValue, 'base64url');
+  const actual = await derivePin(password, Buffer.from(saltValue, 'base64url'));
   return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
 

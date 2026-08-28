@@ -17,3 +17,4 @@ export * from './auth.js';
 export * from './audit.js';
 export * from './tables.js';
 export * from './realtime.js';
+export * from './cloudAdmin.js';

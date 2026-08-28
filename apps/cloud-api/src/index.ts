@@ -3,7 +3,12 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z, ZodError } from 'zod';
 import { loadCloudConfig } from '@comanview/config';
-import { CloudSyncRepository, createCloudDatabase } from '@comanview/database';
+import {
+  CloudAdminAuthRepository,
+  CloudReadRepository,
+  CloudSyncRepository,
+  createCloudDatabase,
+} from '@comanview/database';
 import {
   HeartbeatAckSchema,
   MAX_SYNC_BATCH_SIZE,
@@ -17,6 +22,11 @@ import {
   type CloudSyncPersistence,
   type RawSyncBatch,
 } from './sync/CloudSyncService.js';
+import { CloudAdminAuthService } from './admin/CloudAdminAuthService.js';
+import {
+  registerCloudAdminRoutes,
+  type CloudAdminRouteDependencies,
+} from './admin/routes.js';
 
 const RawSyncBatchSchema = z.object({
   protocolVersion: z.string(),
@@ -35,6 +45,7 @@ export interface BuildCloudAppOptions {
   repository: CloudRepository;
   bodyLimit?: number;
   maxBatchSize?: number;
+  admin?: CloudAdminRouteDependencies;
 }
 
 export function buildCloudApp(options: BuildCloudAppOptions) {
@@ -97,6 +108,8 @@ export function buildCloudApp(options: BuildCloudAppOptions) {
     );
   });
 
+  if (options.admin) registerCloudAdminRoutes(app, options.admin);
+
   return app;
 }
 
@@ -104,10 +117,14 @@ async function start(): Promise<void> {
   const config = loadCloudConfig();
   const database = createCloudDatabase(config.databaseUrl);
   const repository = new CloudSyncRepository(database.db);
+  const adminRepository = new CloudAdminAuthRepository(database.pool);
+  const adminAuth = new CloudAdminAuthService(adminRepository, config.admin);
+  const cloudRead = new CloudReadRepository(database.pool, config.admin.projectionVersion);
   const app = buildCloudApp({
     repository,
     bodyLimit: config.bodyLimit,
     maxBatchSize: config.maxBatchSize,
+    admin: { auth: adminAuth, read: cloudRead, config: config.admin },
   });
   app.addHook('onClose', () => database.close());
   try {
@@ -119,6 +136,7 @@ async function start(): Promise<void> {
         credentialHash: hashEdgeToken(credential.token),
       });
     }
+    await adminAuth.provisionDevelopmentAdmin();
     await app.listen({ host: config.host, port: config.port });
   } catch (error) {
     app.log.error({ err: error }, 'Cloud API startup failed');

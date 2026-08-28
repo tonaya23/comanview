@@ -1,4 +1,4 @@
-# Desarrollo local de Cloud Sync y Projections (Fases 1P–1Q)
+# Desarrollo local de Cloud Sync, Projections y Read API (Fases 1P–1R)
 
 ## Arquitectura
 
@@ -157,10 +157,15 @@ Cloud Worker: `DATABASE_URL`, `COMANVIEW_CLOUD_PROJECTION_VERSION`,
 `COMANVIEW_CLOUD_WORKER_POLL_INTERVAL_MS`, `COMANVIEW_CLOUD_WORKER_LEASE_MS`,
 `COMANVIEW_CLOUD_WORKER_BATCH_SIZE` y `COMANVIEW_CLOUD_WORKER_MAX_ATTEMPTS`.
 
-## Límites después de 1Q
+## Cloud Read API
+
+La preparación de autenticación humana y Super Admin se documenta en
+`docs/Development_Cloud_Admin.md`.
+
+## Límites actuales de las projections
 
 Las proyecciones son deliberadamente parciales porque solo usan información presente en los
 eventos actuales. No reconstruyen líneas, snapshots completos, totales de venta independientes de
 Payments, impuestos/descuentos detallados, Audit Log ni Catalog. No hay Cloud → Edge, Super Admin,
-analytics avanzados, provisioning completo, PKI, licensing ni OTA. La credencial configurada por
-entorno continúa siendo el mecanismo provisional reemplazable de 1P.
+analytics avanzados, provisioning completo, PKI, licensing ni OTA. Las credenciales Edge de Sync y
+las sesiones humanas Cloud son mecanismos separados.

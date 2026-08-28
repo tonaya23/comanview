@@ -242,3 +242,48 @@ export const edgeHeartbeats = pgTable('edge_heartbeats', {
   status: text('status').notNull(),
   reportedAt: timestamp('reported_at', { withTimezone: true }).notNull(),
 });
+
+export const cloudAdminUsers = pgTable(
+  'cloud_admin_users',
+  {
+    userId: uuid('user_id').primaryKey(),
+    email: text('email').notNull(),
+    displayName: text('display_name').notNull(),
+    credentialHash: text('credential_hash').notNull(),
+    role: text('role').notNull(),
+    status: text('status').notNull().default('ACTIVE'),
+    failedLoginCount: integer('failed_login_count').notNull().default(0),
+    lockedUntil: timestamp('locked_until', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    normalizedEmail: uniqueIndex('unq_cloud_admin_users_email_normalized').on(
+      sql`lower(${table.email})`,
+    ),
+  }),
+);
+
+export const cloudAdminSessions = pgTable(
+  'cloud_admin_sessions',
+  {
+    sessionId: uuid('session_id').primaryKey(),
+    userId: uuid('user_id').notNull(),
+    tokenHash: text('token_hash').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+    lastActivityAt: timestamp('last_activity_at', { withTimezone: true }).notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  },
+  (table) => ({ tokenHash: uniqueIndex('unq_cloud_admin_sessions_token_hash').on(table.tokenHash) }),
+);
+
+export const cloudAdminTenantGrants = pgTable(
+  'cloud_admin_tenant_grants',
+  {
+    userId: uuid('user_id').notNull(),
+    tenantId: uuid('tenant_id').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({ pk: primaryKey({ columns: [table.userId, table.tenantId] }) }),
+);
