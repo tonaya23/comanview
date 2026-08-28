@@ -1,4 +1,4 @@
-import { eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { SyncEventEnvelope } from '@comanview/sync';
 import type { CloudDatabase } from '../db.js';
 import * as schema from '../schema.js';
@@ -9,6 +9,21 @@ export interface CloudEdgeRecord {
   locationId: string;
   credentialHash: string;
   status: string;
+}
+
+export interface SyncIntegrityRejection {
+  eventId: string;
+  code: 'SYNC_LOCAL_SEQUENCE_CONFLICT';
+  message: string;
+}
+
+export class CloudSyncSequenceConflictError extends Error {
+  readonly code = 'SYNC_LOCAL_SEQUENCE_CONFLICT';
+
+  constructor() {
+    super('An Edge local sequence is already bound to a different event.');
+    this.name = 'CloudSyncSequenceConflictError';
+  }
 }
 
 export class CloudSyncRepository {
@@ -64,45 +79,107 @@ export class CloudSyncRepository {
     batchId: string,
     protocolVersion: string,
     events: SyncEventEnvelope[],
-  ): Promise<{ accepted: string[]; duplicates: string[] }> {
-    return this.db.transaction(async (tx) => {
-      const eventIds = events.map((event) => event.eventId);
-      if (eventIds.length === 0) return { accepted: [], duplicates: [] };
-      const existing = await tx
-        .select({ eventId: schema.cloudSyncInbox.eventId })
-        .from(schema.cloudSyncInbox)
-        .where(inArray(schema.cloudSyncInbox.eventId, eventIds));
-      const existingIds = new Set(existing.map((row) => row.eventId));
-      const candidates = events.filter((event) => !existingIds.has(event.eventId));
-      const inserted =
-        candidates.length === 0
-          ? []
-          : await tx
-              .insert(schema.cloudSyncInbox)
-              .values(
-                candidates.map((event) => ({
-                  eventId: event.eventId,
-                  schemaVersion: event.schemaVersion,
-                  protocolVersion,
-                  eventType: event.eventType,
-                  aggregateType: event.aggregateType,
-                  aggregateId: event.aggregateId,
-                  aggregateVersion: event.aggregateVersion,
-                  tenantId: event.tenantId,
-                  locationId: event.locationId,
-                  edgeId: event.edgeId,
-                  batchId,
-                  localSequence: event.localSequence,
-                  payload: event.payload,
-                  occurredAt: new Date(event.occurredAt),
-                })),
-              )
-              .onConflictDoNothing({ target: schema.cloudSyncInbox.eventId })
-              .returning({ eventId: schema.cloudSyncInbox.eventId });
-      const accepted = inserted.map((row) => row.eventId);
-      const acceptedIds = new Set(accepted);
-      return { accepted, duplicates: eventIds.filter((id) => !acceptedIds.has(id)) };
-    });
+  ): Promise<{
+    accepted: string[];
+    duplicates: string[];
+    integrityRejected: SyncIntegrityRejection[];
+  }> {
+    return this.db
+      .transaction(async (tx) => {
+        const eventIds = events.map((event) => event.eventId);
+        if (eventIds.length === 0) {
+          return { accepted: [], duplicates: [], integrityRejected: [] };
+        }
+        const existing = await tx
+          .select({ eventId: schema.cloudSyncInbox.eventId })
+          .from(schema.cloudSyncInbox)
+          .where(inArray(schema.cloudSyncInbox.eventId, eventIds));
+        const existingIds = new Set(existing.map((row) => row.eventId));
+        const newEvents = events.filter((event) => !existingIds.has(event.eventId));
+        const edges = [...new Set(newEvents.map((event) => event.edgeId))];
+        const persistedSequences = new Map<string, string>();
+        for (const edgeId of edges) {
+          const sequences = newEvents
+            .filter((event) => event.edgeId === edgeId)
+            .map((event) => event.localSequence);
+          if (sequences.length === 0) continue;
+          const rows = await tx
+            .select({
+              eventId: schema.cloudSyncInbox.eventId,
+              localSequence: schema.cloudSyncInbox.localSequence,
+            })
+            .from(schema.cloudSyncInbox)
+            .where(
+              and(
+                eq(schema.cloudSyncInbox.edgeId, edgeId),
+                inArray(schema.cloudSyncInbox.localSequence, sequences),
+              ),
+            );
+          for (const row of rows) {
+            persistedSequences.set(`${edgeId}:${row.localSequence}`, row.eventId);
+          }
+        }
+
+        const integrityRejected: SyncIntegrityRejection[] = [];
+        const batchSequences = new Map<string, string>();
+        const candidates = newEvents.filter((event) => {
+          const key = `${event.edgeId}:${event.localSequence}`;
+          const boundEventId = persistedSequences.get(key) ?? batchSequences.get(key);
+          if (boundEventId && boundEventId !== event.eventId) {
+            integrityRejected.push({
+              eventId: event.eventId,
+              code: 'SYNC_LOCAL_SEQUENCE_CONFLICT',
+              message: 'Edge local sequence is already bound to a different event.',
+            });
+            return false;
+          }
+          batchSequences.set(key, event.eventId);
+          return true;
+        });
+        const inserted =
+          candidates.length === 0
+            ? []
+            : await tx
+                .insert(schema.cloudSyncInbox)
+                .values(
+                  candidates.map((event) => ({
+                    eventId: event.eventId,
+                    schemaVersion: event.schemaVersion,
+                    protocolVersion,
+                    eventType: event.eventType,
+                    aggregateType: event.aggregateType,
+                    aggregateId: event.aggregateId,
+                    aggregateVersion: event.aggregateVersion,
+                    tenantId: event.tenantId,
+                    locationId: event.locationId,
+                    edgeId: event.edgeId,
+                    batchId,
+                    localSequence: event.localSequence,
+                    payload: event.payload,
+                    occurredAt: new Date(event.occurredAt),
+                  })),
+                )
+                .onConflictDoNothing({ target: schema.cloudSyncInbox.eventId })
+                .returning({ eventId: schema.cloudSyncInbox.eventId });
+        const accepted = inserted.map((row) => row.eventId);
+        const acceptedIds = new Set(accepted);
+        const rejectedIds = new Set(integrityRejected.map((item) => item.eventId));
+        return {
+          accepted,
+          duplicates: eventIds.filter((id) => !acceptedIds.has(id) && !rejectedIds.has(id)),
+          integrityRejected,
+        };
+      })
+      .catch((error: unknown) => {
+        const cause = error as { code?: string; constraint?: string; cause?: unknown };
+        const nested = cause.cause as { code?: string; constraint?: string } | undefined;
+        const code = cause.code ?? nested?.code;
+        const constraint = cause.constraint ?? nested?.constraint;
+        if (code === '23505' && constraint === 'unq_cloud_sync_inbox_edge_sequence') {
+          throw new CloudSyncSequenceConflictError();
+        }
+        throw error;
+      });
   }
 
   async saveHeartbeat(input: {

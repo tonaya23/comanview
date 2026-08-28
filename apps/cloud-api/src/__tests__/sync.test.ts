@@ -36,6 +36,7 @@ function event(eventId = '01991a00-0000-7000-8000-000000000932'): SyncEventEnvel
 
 class MemoryCloudRepository implements CloudRepository {
   readonly events = new Set<string>();
+  readonly sequences = new Map<number, string>();
   heartbeat: Parameters<CloudRepository['saveHeartbeat']>[0] | null = null;
 
   async getEdge(requestedEdgeId: string): Promise<CloudEdgeRecord | null> {
@@ -45,14 +46,26 @@ class MemoryCloudRepository implements CloudRepository {
   async ingestBatch(_batchId: string, _protocolVersion: string, events: SyncEventEnvelope[]) {
     const accepted: string[] = [];
     const duplicates: string[] = [];
+    const integrityRejected: Array<{
+      eventId: string;
+      code: 'SYNC_LOCAL_SEQUENCE_CONFLICT';
+      message: string;
+    }> = [];
     for (const item of events) {
       if (this.events.has(item.eventId)) duplicates.push(item.eventId);
-      else {
+      else if (this.sequences.has(item.localSequence)) {
+        integrityRejected.push({
+          eventId: item.eventId,
+          code: 'SYNC_LOCAL_SEQUENCE_CONFLICT',
+          message: 'Edge local sequence is already bound to a different event.',
+        });
+      } else {
         this.events.add(item.eventId);
+        this.sequences.set(item.localSequence, item.eventId);
         accepted.push(item.eventId);
       }
     }
-    return { accepted, duplicates };
+    return { accepted, duplicates, integrityRejected };
   }
 
   async saveHeartbeat(input: Parameters<CloudRepository['saveHeartbeat']>[0]): Promise<void> {
@@ -117,6 +130,30 @@ describe('Cloud sync ingestion', () => {
     expect(response.json()).toMatchObject({
       accepted: [event().eventId],
       rejected: [{ eventId: invalid.eventId, code: 'SYNC_EVENT_INVALID' }],
+    });
+  });
+
+  it('reports an Edge localSequence collision as an explicit integrity rejection', async () => {
+    const { app, headers } = setup();
+    const first = event();
+    const conflicting = event('01991a00-0000-7000-8000-000000000938');
+    await app.inject({
+      method: 'POST',
+      url: '/sync/v1/events',
+      headers,
+      payload: batch([first]),
+    });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/sync/v1/events',
+      headers,
+      payload: batch([conflicting], '01991a00-0000-7000-8000-000000000939'),
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      accepted: [],
+      duplicates: [],
+      rejected: [{ eventId: conflicting.eventId, code: 'SYNC_LOCAL_SEQUENCE_CONFLICT' }],
     });
   });
 

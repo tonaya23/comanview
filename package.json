@@ -19,6 +19,8 @@
     "dev:cloud:db": "docker compose -f docker-compose.cloud.yml up -d",
     "dev:cloud:migrate": "pnpm --filter @comanview/database cloud:migrate",
     "dev:cloud": "pnpm build && pnpm --filter @comanview/cloud-api dev",
+    "dev:cloud:worker": "pnpm build && pnpm --filter @comanview/cloud-worker dev",
+    "cloud:projections:replay": "pnpm --filter @comanview/cloud-worker replay",
     "build": "turbo run build",
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",

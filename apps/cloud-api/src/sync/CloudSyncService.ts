@@ -7,7 +7,11 @@ import {
   type SyncEventEnvelope,
 } from '@comanview/sync';
 import { z } from 'zod';
-import type { CloudEdgeRecord } from '@comanview/database';
+import {
+  CloudSyncSequenceConflictError,
+  type CloudEdgeRecord,
+  type SyncIntegrityRejection,
+} from '@comanview/database';
 import { CloudError } from '../app/CloudError.js';
 
 export interface CloudSyncPersistence {
@@ -15,7 +19,11 @@ export interface CloudSyncPersistence {
     batchId: string,
     protocolVersion: string,
     events: SyncEventEnvelope[],
-  ): Promise<{ accepted: string[]; duplicates: string[] }>;
+  ): Promise<{
+    accepted: string[];
+    duplicates: string[];
+    integrityRejected: SyncIntegrityRejection[];
+  }>;
   saveHeartbeat(input: {
     edgeId: string;
     tenantId: string;
@@ -83,17 +91,25 @@ export class CloudSyncService {
       seen.add(event.eventId);
       acceptedForPersistence.push(event);
     }
-    const persisted = await this.repository.ingestBatch(
-      batch.batchId,
-      batch.protocolVersion,
-      acceptedForPersistence,
-    );
+    let persisted: Awaited<ReturnType<CloudSyncPersistence['ingestBatch']>>;
+    try {
+      persisted = await this.repository.ingestBatch(
+        batch.batchId,
+        batch.protocolVersion,
+        acceptedForPersistence,
+      );
+    } catch (error) {
+      if (error instanceof CloudSyncSequenceConflictError) {
+        throw new CloudError(error.code, 409, error.message);
+      }
+      throw error;
+    }
     return {
       protocolVersion: SYNC_PROTOCOL_VERSION,
       batchId: batch.batchId,
       accepted: persisted.accepted,
       duplicates: persisted.duplicates,
-      rejected,
+      rejected: [...rejected, ...persisted.integrityRejected],
     };
   }
 

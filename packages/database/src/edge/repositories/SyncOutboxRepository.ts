@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, lte, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, or, sql } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { EntityId } from '@comanview/domain';
 import * as schema from '../schema.js';
@@ -76,26 +76,37 @@ export class SyncOutboxRepository {
 
   claimBatch(limit: number, leaseDurationMs: number, now = new Date()): SyncOutboxEvent[] {
     return this.db.transaction((tx) => {
-      const eligible = tx
+      // localSequence is the Edge commit order. A retryable head event blocks later
+      // events until it succeeds or becomes explicitly permanent (FAILED with no
+      // nextAttemptAt), preventing N+1 from overtaking N in Cloud.
+      const unresolved = tx
         .select()
         .from(schema.eventLog)
         .where(
           or(
             eq(schema.eventLog.syncStatus, 'PENDING'),
-            and(eq(schema.eventLog.syncStatus, 'FAILED'), lte(schema.eventLog.nextAttemptAt, now)),
             and(
-              eq(schema.eventLog.syncStatus, 'SYNCING'),
-              lte(schema.eventLog.leaseExpiresAt, now),
+              eq(schema.eventLog.syncStatus, 'FAILED'),
+              sql`${schema.eventLog.nextAttemptAt} IS NOT NULL`,
             ),
+            eq(schema.eventLog.syncStatus, 'SYNCING'),
           ),
         )
-        .orderBy(
-          asc(schema.eventLog.occurredAt),
-          asc(schema.eventLog.localSequence),
-          asc(schema.eventLog.id),
-        )
+        .orderBy(asc(schema.eventLog.localSequence), asc(schema.eventLog.id))
         .limit(limit)
         .all();
+      const eligible: typeof unresolved = [];
+      for (const row of unresolved) {
+        const canClaim =
+          row.syncStatus === 'PENDING' ||
+          (row.syncStatus === 'FAILED' && row.nextAttemptAt !== null && row.nextAttemptAt <= now) ||
+          (row.syncStatus === 'SYNCING' &&
+            row.leaseExpiresAt !== null &&
+            row.leaseExpiresAt <= now);
+        if (!canClaim) break;
+        eligible.push(row);
+        if (eligible.length >= limit) break;
+      }
       if (eligible.length === 0) return [];
       const ids = eligible.map((row) => row.id);
       tx.update(schema.eventLog)

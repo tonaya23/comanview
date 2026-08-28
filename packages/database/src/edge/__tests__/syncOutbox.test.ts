@@ -89,4 +89,81 @@ describe('durable Edge sync outbox', () => {
     expect(recoveredRepository.claimBatch(10, 1_000, new Date(now.getTime() + 3_000))).toEqual([]);
     reopened.close();
   });
+
+  it('uses localSequence as authority even when occurredAt moves backwards', () => {
+    const database = createDatabase();
+    const repository = new SyncOutboxRepository(database.db);
+    repository.ensureIdentity({ configuredEdgeId: null, tenantId, locationId });
+    database.db
+      .insert(eventLog)
+      .values([
+        {
+          id: '01991a00-0000-7000-8000-000000000921',
+          eventType: 'ORDER_CREATED',
+          aggregateType: 'ORDER',
+          aggregateId: '01991a00-0000-7000-8000-000000000923',
+          version: 1,
+          payload: '{}',
+          occurredAt: new Date('2026-08-27T12:00:10.000Z'),
+        },
+        {
+          id: '01991a00-0000-7000-8000-000000000922',
+          eventType: 'ITEM_ADDED',
+          aggregateType: 'ORDER',
+          aggregateId: '01991a00-0000-7000-8000-000000000923',
+          version: 2,
+          payload: '{}',
+          occurredAt: new Date('2026-08-27T11:59:00.000Z'),
+        },
+      ])
+      .run();
+
+    const claimed = repository.claimBatch(10, 1_000, new Date('2026-08-27T12:01:00.000Z'));
+    expect(claimed.map((event) => event.id)).toEqual([
+      '01991a00-0000-7000-8000-000000000921',
+      '01991a00-0000-7000-8000-000000000922',
+    ]);
+    database.close();
+  });
+
+  it('blocks later events behind a transient failure but advances after a permanent failure', () => {
+    const database = createDatabase();
+    const repository = new SyncOutboxRepository(database.db);
+    repository.ensureIdentity({ configuredEdgeId: null, tenantId, locationId });
+    const now = new Date('2026-08-27T12:00:00.000Z');
+    database.db
+      .insert(eventLog)
+      .values([
+        {
+          id: '01991a00-0000-7000-8000-000000000924',
+          eventType: 'ORDER_CREATED',
+          aggregateType: 'ORDER',
+          aggregateId: '01991a00-0000-7000-8000-000000000926',
+          version: 1,
+          payload: '{}',
+          occurredAt: now,
+        },
+        {
+          id: '01991a00-0000-7000-8000-000000000925',
+          eventType: 'ITEM_ADDED',
+          aggregateType: 'ORDER',
+          aggregateId: '01991a00-0000-7000-8000-000000000926',
+          version: 2,
+          payload: '{}',
+          occurredAt: now,
+        },
+      ])
+      .run();
+
+    const first = repository.claimBatch(1, 1_000, now)[0]!;
+    repository.markFailed(first.id, 'temporary', new Date(now.getTime() + 5_000));
+    expect(repository.claimBatch(10, 1_000, new Date(now.getTime() + 1_000))).toEqual([]);
+
+    const retry = repository.claimBatch(1, 1_000, new Date(now.getTime() + 5_001))[0]!;
+    repository.markFailed(retry.id, 'permanent', null);
+    expect(
+      repository.claimBatch(10, 1_000, new Date(now.getTime() + 5_002)).map((event) => event.id),
+    ).toEqual(['01991a00-0000-7000-8000-000000000925']);
+    database.close();
+  });
 });

@@ -5,7 +5,9 @@
   "type": "module",
   "description": "ComanView Cloud Worker — background jobs, async processing, scheduled tasks",
   "scripts": {
-    "dev": "node --watch --experimental-strip-types src/index.ts",
+    "dev": "tsx watch src/index.ts",
+    "replay": "tsx src/index.ts --replay",
+    "once": "tsx src/index.ts --once",
     "build": "tsc --project tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
@@ -17,10 +19,12 @@
     "@comanview/contracts": "workspace:*",
     "@comanview/domain": "workspace:*",
     "@comanview/sync": "workspace:*",
-    "@comanview/database": "workspace:*"
+    "@comanview/database": "workspace:*",
+    "zod": "^3.25.67"
   },
   "devDependencies": {
     "@comanview/testing": "workspace:*",
+    "tsx": "^4.20.5",
     "typescript": "^5.8.3",
     "vitest": "^3.2.4"
   }

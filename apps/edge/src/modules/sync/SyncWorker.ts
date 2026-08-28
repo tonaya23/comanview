@@ -228,7 +228,7 @@ export class SyncWorker {
     error?: unknown,
   ): void {
     const statusCode = error instanceof CloudTransportError ? error.statusCode : null;
-    const permanent = statusCode !== null && [400, 413, 422].includes(statusCode);
+    const permanent = statusCode !== null && [400, 409, 413, 422].includes(statusCode);
     const delay =
       statusCode === 401 || statusCode === 403
         ? 300_000

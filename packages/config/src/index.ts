@@ -79,6 +79,38 @@ export interface CloudConfig {
   edgeCredentials: CloudEdgeCredential[];
 }
 
+export interface CloudWorkerConfig {
+  databaseUrl: string;
+  projectionVersion: number;
+  pollIntervalMs: number;
+  leaseDurationMs: number;
+  batchSize: number;
+  maxAttempts: number;
+}
+
+export function loadCloudWorkerConfig(
+  environment: NodeJS.ProcessEnv = process.env,
+): CloudWorkerConfig {
+  return {
+    databaseUrl: z.string().url().parse(environment['DATABASE_URL']),
+    projectionVersion: optionalPositiveInteger(1, 1_000).parse(
+      environment['COMANVIEW_CLOUD_PROJECTION_VERSION'],
+    ),
+    pollIntervalMs: optionalPositiveInteger(1_000, 60_000).parse(
+      environment['COMANVIEW_CLOUD_WORKER_POLL_INTERVAL_MS'],
+    ),
+    leaseDurationMs: optionalPositiveInteger(30_000, 600_000).parse(
+      environment['COMANVIEW_CLOUD_WORKER_LEASE_MS'],
+    ),
+    batchSize: optionalPositiveInteger(25, 100).parse(
+      environment['COMANVIEW_CLOUD_WORKER_BATCH_SIZE'],
+    ),
+    maxAttempts: optionalPositiveInteger(3, 20).parse(
+      environment['COMANVIEW_CLOUD_WORKER_MAX_ATTEMPTS'],
+    ),
+  };
+}
+
 export function loadCloudConfig(environment: NodeJS.ProcessEnv = process.env): CloudConfig {
   const credentialsText = environment['COMANVIEW_CLOUD_EDGE_CREDENTIALS'] ?? '[]';
   let credentials: unknown;

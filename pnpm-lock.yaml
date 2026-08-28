@@ -81,10 +81,16 @@ importers:
       '@comanview/sync':
         specifier: workspace:*
         version: link:../../packages/sync
+      zod:
+        specifier: ^3.25.67
+        version: 3.25.76
     devDependencies:
       '@comanview/testing':
         specifier: workspace:*
         version: link:../../packages/testing
+      tsx:
+        specifier: ^4.20.5
+        version: 4.23.12
       typescript:
         specifier: ^5.8.3
         version: 5.9.3
