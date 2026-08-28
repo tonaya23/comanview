@@ -1,0 +1,74 @@
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import type { SyncEventEnvelope } from '@comanview/sync';
+import { createCloudDatabase } from '../db.js';
+import { migrateCloudDatabase } from '../migrate.js';
+import { CloudSyncRepository } from '../repositories/CloudSyncRepository.js';
+
+const databaseUrl = process.env['COMANVIEW_TEST_POSTGRES_URL'];
+const edgeId = '01991a00-0000-7000-8000-000000000941';
+const tenantId = '01991a00-0000-7000-8000-000000000942';
+const locationId = '01991a00-0000-7000-8000-000000000943';
+const eventId = '01991a00-0000-7000-8000-000000000944';
+
+describe.skipIf(!databaseUrl)('Cloud PostgreSQL Inbox integration', () => {
+  const database = createCloudDatabase(databaseUrl!);
+  const repository = new CloudSyncRepository(database.db);
+
+  beforeAll(async () => {
+    await migrateCloudDatabase(databaseUrl!);
+    await database.pool.query('DELETE FROM edge_heartbeats WHERE edge_id = $1', [edgeId]);
+    await database.pool.query('DELETE FROM cloud_sync_inbox WHERE edge_id = $1', [edgeId]);
+    await database.pool.query('DELETE FROM edges WHERE edge_id = $1', [edgeId]);
+    await repository.provisionEdge({ edgeId, tenantId, locationId, credentialHash: 'test-hash' });
+  });
+
+  afterAll(async () => {
+    await database.pool.query('DELETE FROM edge_heartbeats WHERE edge_id = $1', [edgeId]);
+    await database.pool.query('DELETE FROM cloud_sync_inbox WHERE edge_id = $1', [edgeId]);
+    await database.pool.query('DELETE FROM edges WHERE edge_id = $1', [edgeId]);
+    await database.close();
+  });
+
+  it('enforces durable eventId idempotency across batches and stores heartbeat', async () => {
+    const event: SyncEventEnvelope = {
+      schemaVersion: 1,
+      eventId,
+      eventType: 'ORDER_CREATED',
+      aggregateType: 'ORDER',
+      aggregateId: '01991a00-0000-7000-8000-000000000945',
+      tenantId,
+      locationId,
+      edgeId,
+      occurredAt: '2026-08-27T12:00:00.000Z',
+      localSequence: 1,
+      aggregateVersion: 1,
+      payload: { orderId: '01991a00-0000-7000-8000-000000000945' },
+    };
+    const first = await repository.ingestBatch('01991a00-0000-7000-8000-000000000946', '1', [
+      event,
+    ]);
+    const retry = await repository.ingestBatch('01991a00-0000-7000-8000-000000000947', '1', [
+      event,
+    ]);
+    expect(first).toEqual({ accepted: [eventId], duplicates: [] });
+    expect(retry).toEqual({ accepted: [], duplicates: [eventId] });
+    expect(await repository.countInboxEvents()).toBeGreaterThanOrEqual(1);
+
+    await repository.saveHeartbeat({
+      edgeId,
+      tenantId,
+      locationId,
+      edgeVersion: 'test',
+      schemaVersion: '10',
+      pendingEventCount: 0,
+      status: 'ONLINE',
+      reportedAt: new Date('2026-08-27T12:00:00.000Z'),
+      receivedAt: new Date('2026-08-27T12:00:01.000Z'),
+    });
+    const heartbeat = await database.pool.query(
+      'SELECT last_seen_at, pending_event_count FROM edge_heartbeats WHERE edge_id = $1',
+      [edgeId],
+    );
+    expect(heartbeat.rows[0]?.pending_event_count).toBe(0);
+  });
+});

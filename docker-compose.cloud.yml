@@ -1,0 +1,21 @@
+name: comanview-cloud-development
+
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: comanview_dev
+      POSTGRES_USER: comanview_dev
+      POSTGRES_PASSWORD: ${COMANVIEW_DEV_POSTGRES_PASSWORD:?Set COMANVIEW_DEV_POSTGRES_PASSWORD}
+    ports:
+      - '127.0.0.1:5432:5432'
+    volumes:
+      - comanview_cloud_postgres:/var/lib/postgresql
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U comanview_dev -d comanview_dev']
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  comanview_cloud_postgres:

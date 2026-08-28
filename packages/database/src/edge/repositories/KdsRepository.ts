@@ -241,6 +241,7 @@ export class KdsRepository {
         .values({
           id: EntityId.generate().toString(),
           eventType: `KDS_TICKET_${target}`,
+          aggregateType: 'ORDER',
           aggregateId: rows[0]!.orderId,
           version: target === 'PREPARING' ? 1 : 2,
           payload: JSON.stringify({ roundId, stationId, status: target }),

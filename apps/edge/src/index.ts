@@ -28,7 +28,9 @@ import {
   AuthRepository,
   AuditRepository,
   TableRepository,
+  SyncOutboxRepository,
 } from '@comanview/database';
+import { loadEdgeSyncConfig, type EdgeSyncConfig } from '@comanview/config';
 import { DebugPrinterAdapter, PrintWorker, type PrinterAdapter } from '@comanview/printing';
 import { CatalogService } from './modules/catalog/application/CatalogService.js';
 import { OrderService } from './modules/orders/application/OrderService.js';
@@ -52,12 +54,21 @@ import { AuditService } from './modules/audit/application/AuditService.js';
 import { auditRoutes } from './modules/audit/http/routes.js';
 import { TableService } from './modules/tables/application/TableService.js';
 import { tableRoutes } from './modules/tables/http/routes.js';
+import {
+  HttpCloudSyncTransport,
+  type CloudSyncTransport,
+} from './modules/sync/HttpCloudSyncTransport.js';
+import { SyncWorker } from './modules/sync/SyncWorker.js';
+import { syncRoutes } from './modules/sync/routes.js';
 
 export interface BuildAppOptions {
   printerAdapter?: PrinterAdapter;
   startPrintWorker?: boolean;
   debugPrintDirectory?: string;
   authMode?: AuthMode;
+  syncConfig?: EdgeSyncConfig;
+  syncTransport?: CloudSyncTransport;
+  startSyncWorker?: boolean;
 }
 
 export async function buildApp(dbPath: string = ':memory:', options: BuildAppOptions = {}) {
@@ -85,6 +96,7 @@ export async function buildApp(dbPath: string = ':memory:', options: BuildAppOpt
   const authRepo = new AuthRepository(db);
   const auditRepo = new AuditRepository(db);
   const tableRepo = new TableRepository(db);
+  const syncRepo = new SyncOutboxRepository(db);
 
   // Setup Services
   const catalogService = new CatalogService(catalogRepo);
@@ -116,6 +128,23 @@ export async function buildApp(dbPath: string = ':memory:', options: BuildAppOpt
   const authGuard = new AuthGuard(authService, options.authMode ?? 'enforced');
   const auditService = new AuditService(auditRepo);
   const tableService = new TableService(tableRepo, orderRepo, defaultOperationalContext);
+  const syncConfig = options.syncConfig ?? loadEdgeSyncConfig();
+  const edgeIdentity = syncRepo.ensureIdentity({
+    configuredEdgeId: syncConfig.configuredEdgeId,
+    tenantId: defaultOperationalContext.tenantId,
+    locationId: defaultOperationalContext.locationId,
+  });
+  const syncTransport =
+    options.syncTransport ??
+    (syncConfig.enabled && syncConfig.cloudUrl && syncConfig.token
+      ? new HttpCloudSyncTransport(
+          syncConfig.cloudUrl,
+          edgeIdentity.edgeId,
+          syncConfig.token,
+          syncConfig.requestTimeoutMs,
+        )
+      : null);
+  const syncWorker = new SyncWorker(syncRepo, syncTransport, syncConfig, app.log);
   cashService.ensureDefaultRegister();
   const failingTargets = new Set(
     (process.env['COMANVIEW_DEBUG_PRINTER_FAIL_TARGETS'] ?? '').split(',').filter(Boolean),
@@ -131,6 +160,7 @@ export async function buildApp(dbPath: string = ':memory:', options: BuildAppOpt
     });
   const printWorker = new PrintWorker(printRepo, printerAdapter);
   if (options.startPrintWorker !== false) printWorker.start();
+  if (options.startSyncWorker !== false) syncWorker.start();
 
   // Setup Routes
   app.register(authRoutes(authService, authGuard), { prefix: '/auth' });
@@ -142,6 +172,7 @@ export async function buildApp(dbPath: string = ':memory:', options: BuildAppOpt
   app.register(printRoutes(printService, authGuard));
   app.register(kdsRoutes(kdsService, realtimeHub, authGuard));
   app.register(tableRoutes(tableService, authGuard));
+  app.register(syncRoutes(syncWorker, authGuard));
 
   // Health route
   app.get(
@@ -180,6 +211,7 @@ export async function buildApp(dbPath: string = ':memory:', options: BuildAppOpt
 
   app.addHook('onClose', async () => {
     printWorker.stop();
+    syncWorker.stop();
     closeDatabase();
   });
 

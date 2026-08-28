@@ -324,6 +324,7 @@ export class OrderRepository {
             .values({
               id: event.eventId.toString(),
               eventType: event.eventType,
+              aggregateType: 'ORDER',
               aggregateId: order.id.toString(),
               version: order.version,
               payload: JSON.stringify(event, (_k, v) => (v instanceof EntityId ? v.toString() : v)),

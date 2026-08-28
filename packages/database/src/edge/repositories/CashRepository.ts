@@ -103,6 +103,7 @@ export class CashRepository {
           .values({
             id: eventId.toString(),
             eventType: 'CASH_SESSION_OPENED',
+            aggregateType: 'CASH_SESSION',
             aggregateId: session.id.toString(),
             version: 1,
             payload: JSON.stringify({
@@ -244,6 +245,7 @@ export class CashRepository {
         .values({
           id: audit.eventId!,
           eventType: 'CASH_MOVEMENT_CREATED',
+          aggregateType: 'CASH_SESSION',
           aggregateId: movement.cashSessionId.toString(),
           version: null,
           payload: JSON.stringify({
@@ -340,6 +342,7 @@ export class CashRepository {
         .values({
           id: input.audit.eventId!,
           eventType: 'CASH_SESSION_CLOSED',
+          aggregateType: 'CASH_SESSION',
           aggregateId: session.id.toString(),
           version: null,
           payload: JSON.stringify({

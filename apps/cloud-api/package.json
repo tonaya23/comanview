@@ -5,7 +5,7 @@
   "type": "module",
   "description": "ComanView Cloud API — Fastify server with PostgreSQL, idempotent Sync Inbox, Cloud config distribution",
   "scripts": {
-    "dev": "node --watch --experimental-strip-types src/index.ts",
+    "dev": "tsx watch src/index.ts",
     "build": "tsc --project tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
@@ -19,10 +19,14 @@
     "@comanview/money": "workspace:*",
     "@comanview/sync": "workspace:*",
     "@comanview/database": "workspace:*",
-    "@comanview/auth": "workspace:*"
+    "@comanview/auth": "workspace:*",
+    "fastify": "^5.12.0",
+    "fastify-type-provider-zod": "^4.0.2",
+    "zod": "^3.25.67"
   },
   "devDependencies": {
     "@comanview/testing": "workspace:*",
+    "tsx": "^4.23.12",
     "typescript": "^5.8.3",
     "vitest": "^3.2.4"
   }

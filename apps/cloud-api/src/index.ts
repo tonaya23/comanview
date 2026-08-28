@@ -1,8 +1,132 @@
-/**
- * @comanview/cloud-api
- *
- * Cloud API server — Fastify · PostgreSQL · Drizzle.
- * Provides idempotent Sync Inbox, configuration distribution and reporting.
- */
+import fastify from 'fastify';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { z, ZodError } from 'zod';
+import { loadCloudConfig } from '@comanview/config';
+import { CloudSyncRepository, createCloudDatabase } from '@comanview/database';
+import {
+  HeartbeatAckSchema,
+  MAX_SYNC_BATCH_SIZE,
+  SyncBatchAckSchema,
+  type EdgeHeartbeat,
+} from '@comanview/sync';
+import { CloudError } from './app/CloudError.js';
+import { EdgeAuthenticator, hashEdgeToken, type EdgeLookup } from './auth/EdgeAuthenticator.js';
+import {
+  CloudSyncService,
+  type CloudSyncPersistence,
+  type RawSyncBatch,
+} from './sync/CloudSyncService.js';
 
-// Entry point — implementation pending PRD completion.
+const RawSyncBatchSchema = z.object({
+  protocolVersion: z.string(),
+  edgeId: z.string().uuid(),
+  tenantId: z.string().uuid(),
+  locationId: z.string().uuid(),
+  batchId: z.string().uuid(),
+  events: z.array(z.unknown()).min(1).max(MAX_SYNC_BATCH_SIZE),
+});
+
+export interface CloudRepository extends EdgeLookup, CloudSyncPersistence {
+  countInboxEvents(): Promise<number>;
+}
+
+export interface BuildCloudAppOptions {
+  repository: CloudRepository;
+  bodyLimit?: number;
+  maxBatchSize?: number;
+}
+
+export function buildCloudApp(options: BuildCloudAppOptions) {
+  const app = fastify({ logger: true, bodyLimit: options.bodyLimit ?? 1_048_576 });
+  const authenticator = new EdgeAuthenticator(options.repository);
+  const service = new CloudSyncService(options.repository);
+  const maxBatchSize = options.maxBatchSize ?? MAX_SYNC_BATCH_SIZE;
+
+  app.setErrorHandler((error, _request, reply) => {
+    if (error instanceof CloudError) {
+      return reply.status(error.statusCode).send({ error: error.code, message: error.message });
+    }
+    if (error instanceof ZodError) {
+      return reply.status(422).send({
+        error: 'VALIDATION_ERROR',
+        message: error.issues[0]?.message ?? 'Invalid request.',
+      });
+    }
+    const requestError = error as Error & { statusCode?: number };
+    if (typeof requestError.statusCode === 'number' && requestError.statusCode < 500) {
+      return reply.status(requestError.statusCode).send({
+        error: requestError.statusCode === 413 ? 'PAYLOAD_TOO_LARGE' : 'REQUEST_ERROR',
+        message: requestError.message,
+      });
+    }
+    app.log.error({ err: error }, 'Cloud request failed');
+    return reply.status(500).send({ error: 'INTERNAL_ERROR', message: 'Internal server error.' });
+  });
+
+  app.get('/health', async (_request, reply) => {
+    try {
+      await options.repository.countInboxEvents();
+      return { status: 'UP', database: 'OK' };
+    } catch {
+      return reply.status(503).send({ status: 'DOWN', database: 'ERROR' });
+    }
+  });
+
+  app.post('/sync/v1/events', async (request, reply) => {
+    const edge = await authenticator.authenticate(
+      request.headers['x-comanview-edge-id'],
+      request.headers.authorization,
+    );
+    const batch = RawSyncBatchSchema.parse(request.body) as RawSyncBatch;
+    if (batch.events.length > maxBatchSize) {
+      throw new CloudError('SYNC_BATCH_TOO_LARGE', 413, 'Sync batch exceeds configured limit.');
+    }
+    const ack = await service.ingest(edge, batch);
+    reply.status(200).send(SyncBatchAckSchema.parse(ack));
+  });
+
+  app.post('/sync/v1/heartbeat', async (request, reply) => {
+    const edge = await authenticator.authenticate(
+      request.headers['x-comanview-edge-id'],
+      request.headers.authorization,
+    );
+    const receivedAt = await service.heartbeat(edge, request.body as EdgeHeartbeat);
+    reply.send(
+      HeartbeatAckSchema.parse({ edgeId: edge.edgeId, receivedAt: receivedAt.toISOString() }),
+    );
+  });
+
+  return app;
+}
+
+async function start(): Promise<void> {
+  const config = loadCloudConfig();
+  const database = createCloudDatabase(config.databaseUrl);
+  const repository = new CloudSyncRepository(database.db);
+  const app = buildCloudApp({
+    repository,
+    bodyLimit: config.bodyLimit,
+    maxBatchSize: config.maxBatchSize,
+  });
+  app.addHook('onClose', () => database.close());
+  try {
+    for (const credential of config.edgeCredentials) {
+      await repository.provisionEdge({
+        edgeId: credential.edgeId,
+        tenantId: credential.tenantId,
+        locationId: credential.locationId,
+        credentialHash: hashEdgeToken(credential.token),
+      });
+    }
+    await app.listen({ host: config.host, port: config.port });
+  } catch (error) {
+    app.log.error({ err: error }, 'Cloud API startup failed');
+    await app.close();
+    process.exitCode = 1;
+  }
+}
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+  await start();
+}

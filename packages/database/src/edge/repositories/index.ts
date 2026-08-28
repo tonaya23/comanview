@@ -6,3 +6,4 @@ export * from './KdsRepository.js';
 export * from './AuthRepository.js';
 export * from './AuditRepository.js';
 export * from './TableRepository.js';
+export * from './SyncOutboxRepository.js';

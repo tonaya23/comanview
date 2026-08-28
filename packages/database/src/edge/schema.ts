@@ -6,12 +6,36 @@ import { sqliteTable, text, integer, uniqueIndex } from 'drizzle-orm/sqlite-core
 export const eventLog = sqliteTable('event_log', {
   id: text('id').primaryKey(),
   eventType: text('event_type').notNull(),
+  aggregateType: text('aggregate_type').notNull().default('UNKNOWN'),
   aggregateId: text('aggregate_id').notNull(),
   version: integer('version'),
   payload: text('payload').notNull(), // JSON
   occurredAt: integer('occurred_at', { mode: 'timestamp_ms' }).notNull(),
+  localSequence: integer('local_sequence'),
   commandId: text('command_id'),
-  syncStatus: text('sync_status').notNull().default('PENDING'), // PENDING | SYNCED
+  syncStatus: text('sync_status').notNull().default('PENDING'),
+  attemptCount: integer('attempt_count').notNull().default(0),
+  lastAttemptAt: integer('last_attempt_at', { mode: 'timestamp_ms' }),
+  leaseExpiresAt: integer('lease_expires_at', { mode: 'timestamp_ms' }),
+  nextAttemptAt: integer('next_attempt_at', { mode: 'timestamp_ms' }),
+  syncedAt: integer('synced_at', { mode: 'timestamp_ms' }),
+  lastError: text('last_error'),
+});
+
+export const edgeInstallations = sqliteTable('edge_installations', {
+  singletonKey: text('singleton_key').primaryKey(),
+  edgeId: text('edge_id').notNull().unique(),
+  tenantId: text('tenant_id').notNull(),
+  locationId: text('location_id').notNull(),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+});
+
+export const syncRuntimeState = sqliteTable('sync_runtime_state', {
+  singletonKey: text('singleton_key').primaryKey(),
+  cloudReachable: integer('cloud_reachable', { mode: 'boolean' }),
+  lastSuccessfulSyncAt: integer('last_successful_sync_at', { mode: 'timestamp_ms' }),
+  lastHeartbeatAt: integer('last_heartbeat_at', { mode: 'timestamp_ms' }),
+  lastError: text('last_error'),
 });
 
 export const processedCommands = sqliteTable('processed_commands', {
