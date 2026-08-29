@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { hashCloudAdminPassword } from '@comanview/auth';
 import type { CloudAdminConfig } from '@comanview/config';
@@ -6,16 +6,20 @@ import type {
   CloudAdminSessionRecord,
   CloudAdminUserRecord,
   CloudReadRepository,
+  EdgeReplacementRecord,
   LocationOperationalRecord,
 } from '@comanview/database';
+import { ControlPlaneConflictError } from '@comanview/database';
 import type { CloudRepository } from '../index.js';
 import { buildCloudApp } from '../index.js';
 import { CloudAdminAuthService, type CloudAdminAuthPersistence } from './CloudAdminAuthService.js';
+import type { CloudControlPlaneService } from '../provisioning/CloudControlPlaneService.js';
 
 const tenantId = '01991a00-0000-7000-8000-000000000201';
 const foreignTenantId = '01991a00-0000-7000-8000-000000000202';
 const locationId = '01991a00-0000-7000-8000-000000000203';
 const foreignLocationId = '01991a00-0000-7000-8000-000000000204';
+const unprovisionedLocationId = '01991a00-0000-7000-8000-000000000205';
 
 class AuthMemory implements CloudAdminAuthPersistence {
   user!: CloudAdminUserRecord;
@@ -60,7 +64,13 @@ function readPort(): Pick<CloudReadRepository, keyof CloudReadRepository> {
       const visible = locations.filter((item) => input.scope.global || input.scope.tenantIds.includes(item.tenantId));
       return { data: visible.slice(0, input.limit), hasMore: false };
     },
-    async getLocation(id, scope) { return locations.find((item) => item.locationId === id && (scope.global || scope.tenantIds.includes(item.tenantId))) ?? null; },
+    async getLocation(id, scope) {
+      if (id === unprovisionedLocationId && (scope.global || scope.tenantIds.includes(tenantId))) {
+        return { ...location(), locationId: unprovisionedLocationId, edgeId: null, heartbeatStatus: null,
+          lastSeenAt: null, reportedAt: null, edgeVersion: null, schemaVersion: null, pendingEventCount: null };
+      }
+      return locations.find((item) => item.locationId === id && (scope.global || scope.tenantIds.includes(item.tenantId))) ?? null;
+    },
     async getOrderCounts() { return { open: 1, closed: 2, cancelled: 0 }; },
     async getCompleteSalesTotals() { return []; }, async countIncompleteSales() { return 0; },
     async listOrders() { return { data: [], hasMore: false }; }, async getOrder() { return null; },
@@ -81,7 +91,7 @@ const syncRepository: CloudRepository = {
 const apps: ReturnType<typeof buildCloudApp>[] = [];
 afterEach(async () => Promise.all(apps.splice(0).map((app) => app.close())));
 
-async function setup(role: 'PLATFORM_ADMIN_READ' | 'SUPPORT_READ') {
+async function setup(role: 'PLATFORM_ADMIN' | 'PLATFORM_ADMIN_READ' | 'SUPPORT_READ', controlPlane?: CloudControlPlaneService) {
   const persistence = new AuthMemory();
   persistence.user = {
     userId: '01991a00-0000-7000-8000-000000000211', email: 'admin@example.test',
@@ -89,7 +99,7 @@ async function setup(role: 'PLATFORM_ADMIN_READ' | 'SUPPORT_READ') {
     role, status: 'ACTIVE', failedLoginCount: 0, lockedUntil: null,
   };
   const auth = new CloudAdminAuthService(persistence, adminConfig, () => now);
-  const app = buildCloudApp({ repository: syncRepository, admin: { auth, read: readPort(), config: adminConfig, now: () => now } });
+  const app = buildCloudApp({ repository: syncRepository, admin: { auth, read: readPort(), config: adminConfig, now: () => now }, ...(controlPlane ? { controlPlane } : {}) });
   apps.push(app);
   return { app };
 }
@@ -129,6 +139,82 @@ describe('Cloud Admin HTTP security', () => {
     const { app } = await setup('SUPPORT_READ'); const cookie = await login(app);
     expect((await app.inject({ url: `/admin/v1/locations/${locationId}/orders`, headers: { cookie } })).statusCode).toBe(200);
     expect((await app.inject({ url: `/admin/v1/locations/${locationId}/sales`, headers: { cookie } })).statusCode).toBe(403);
+  });
+
+  it('returns the structured unprovisioned error when Overview has no ACTIVE Edge', async () => {
+    const { app } = await setup('SUPPORT_READ'); const cookie = await login(app);
+    const response = await app.inject({ url: `/admin/v1/locations/${unprovisionedLocationId}/overview`, headers: { cookie } });
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({
+      error: 'CLOUD_LOCATION_UNPROVISIONED',
+      message: 'Location does not have an ACTIVE Edge yet.',
+    });
+  });
+
+  it('protects replacement cancellation with RBAC and returns the cancelled record', async () => {
+    const record: EdgeReplacementRecord = {
+      replacementId: '01991a00-0000-7000-8000-000000000220', tenantId,
+      locationId, oldEdgeId: '01991a00-0000-7000-8000-000000000221', newEdgeId: null,
+      status: 'CANCELLED', reason: 'Replacement test', initiatedAt: now,
+      completedAt: null, cancelledAt: now,
+      provisioningCode: {
+        provisioningCodeId: '01991a00-0000-7000-8000-000000000222', tenantId, locationId,
+        status: 'REVOKED', createdAt: now, expiresAt: new Date(now.getTime() + 60_000),
+      },
+    };
+    const cancelReplacement = vi.fn().mockResolvedValue(record);
+    const controlPlane = {
+      getReplacement: vi.fn().mockResolvedValue(record),
+      getLocation: vi.fn().mockResolvedValue({ tenantId, locationId }),
+      cancelReplacement,
+    } as unknown as CloudControlPlaneService;
+    const payload = { commandId: '01991a00-0000-7000-8000-000000000223', reason: 'Lost one-time code' };
+
+    const restricted = await setup('SUPPORT_READ', controlPlane);
+    const restrictedCookie = await login(restricted.app);
+    expect((await restricted.app.inject({ method: 'POST', url: `/admin/v1/replacements/${record.replacementId}/cancel`,
+      headers: { cookie: restrictedCookie, origin: 'http://localhost:80' }, payload })).statusCode).toBe(403);
+
+    const allowed = await setup('PLATFORM_ADMIN', controlPlane);
+    const allowedCookie = await login(allowed.app);
+    const response = await allowed.app.inject({ method: 'POST', url: `/admin/v1/replacements/${record.replacementId}/cancel`,
+      headers: { cookie: allowedCookie, origin: 'http://localhost:80' }, payload });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ replacementId: record.replacementId, status: 'CANCELLED',
+      provisioningCode: { status: 'REVOKED' } });
+    expect(cancelReplacement).toHaveBeenCalledWith(record.replacementId, payload, expect.any(Object));
+  });
+
+  it('returns a stable conflict when revoking an Edge with a pending replacement', async () => {
+    const edgeId = '01991a00-0000-7000-8000-000000000224';
+    const edge = {
+      edgeId, tenantId, locationId, status: 'ACTIVE' as const,
+      provisionedAt: now, activatedAt: now, revokedAt: null, replacedAt: null,
+      replacedByEdgeId: null,
+    };
+    const controlPlane = {
+      listTenants: vi.fn().mockResolvedValue([{ tenantId }]),
+      listLocations: vi.fn().mockResolvedValue([{ locationId }]),
+      listEdges: vi.fn().mockResolvedValue([edge]),
+      getLocation: vi.fn().mockResolvedValue({ tenantId, locationId }),
+      revokeEdge: vi.fn().mockRejectedValue(new ControlPlaneConflictError('EDGE_REPLACEMENT_PENDING')),
+    } as unknown as CloudControlPlaneService;
+    const { app } = await setup('PLATFORM_ADMIN', controlPlane);
+    const cookie = await login(app);
+    const response = await app.inject({
+      method: 'POST', url: `/admin/v1/edges/${edgeId}/revoke`,
+      headers: { cookie, origin: 'http://localhost:80' },
+      payload: {
+        commandId: '01991a00-0000-7000-8000-000000000225',
+        reason: 'Must not revoke during replacement',
+      },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({
+      error: 'EDGE_REPLACEMENT_PENDING',
+      message: 'Cancel the pending Replacement before revoking this Edge.',
+    });
   });
 
   it('revokes logout so the previous cookie returns 401', async () => {

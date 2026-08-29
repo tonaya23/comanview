@@ -5,9 +5,15 @@ export const CloudPermissionSchema = z.enum([
   'CLOUD_OPERATIONAL_VIEW',
   'CLOUD_FINANCIAL_VIEW',
   'CLOUD_TENANT_READ_ALL',
+  'CLOUD_TENANT_CREATE',
+  'CLOUD_LOCATION_CREATE',
+  'CLOUD_EDGE_PROVISION',
+  'CLOUD_EDGE_REVOKE',
+  'CLOUD_EDGE_REPLACE',
+  'CLOUD_ADMIN_AUDIT_VIEW',
 ]);
-export const CloudAdminRoleSchema = z.enum(['PLATFORM_ADMIN_READ', 'SUPPORT_READ']);
-export const CloudEdgeStatusSchema = z.enum(['ONLINE', 'OFFLINE', 'DEGRADED']);
+export const CloudAdminRoleSchema = z.enum(['PLATFORM_ADMIN', 'PLATFORM_ADMIN_READ', 'SUPPORT_READ']);
+export const CloudEdgeStatusSchema = z.enum(['ONLINE', 'OFFLINE', 'DEGRADED', 'UNPROVISIONED']);
 export const CloudProjectionHealthSchema = z.object({
   degraded: z.boolean(),
   activeDeadLetterCount: z.number().int().nonnegative(),
@@ -49,7 +55,7 @@ const MoneyAmountSchema = z.number().int().safe();
 export const CloudLocationSummarySchema = z.object({
   tenantId: z.string().uuid(),
   locationId: z.string().uuid(),
-  edgeId: z.string().uuid(),
+  edgeId: z.string().uuid().nullable(),
   edgeStatus: CloudEdgeStatusSchema,
   lastSeenAt: NullableTimestampSchema,
   reportedAt: NullableTimestampSchema,

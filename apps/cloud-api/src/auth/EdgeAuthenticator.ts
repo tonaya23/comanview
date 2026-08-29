@@ -28,11 +28,22 @@ export class EdgeAuthenticator {
     }
     const token = authorization.slice('Bearer '.length).trim();
     const edge = await this.edges.getEdge(edgeIdHeader);
+    const tokenHash = token ? hashEdgeToken(token) : '';
+    const currentCredentials = edge?.credentialHashes?.filter(
+      (credential) =>
+        credential.status === 'ACTIVE' ||
+        (credential.status === 'RETIRING' &&
+          credential.retireAfter !== null &&
+          credential.retireAfter > new Date()),
+    );
+    const validCredential = edge?.credentialHashes
+      ? currentCredentials!.some((credential) => safeHashEquals(tokenHash, credential.hash))
+      : Boolean(edge?.credentialHash && safeHashEquals(tokenHash, edge.credentialHash));
     if (
       !token ||
       !edge ||
       edge.status !== 'ACTIVE' ||
-      !safeHashEquals(hashEdgeToken(token), edge.credentialHash)
+      !validCredential
     ) {
       throw new CloudError('EDGE_AUTH_INVALID', 401, 'Edge credential is invalid.');
     }

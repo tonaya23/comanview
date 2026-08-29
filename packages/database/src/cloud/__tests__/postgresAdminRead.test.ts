@@ -22,6 +22,9 @@ describe.skipIf(!databaseUrl)('Cloud Admin Read repositories with PostgreSQL', (
 
   beforeAll(async () => {
     await migrateCloudDatabase(databaseUrl!);
+    await database.pool.query(`INSERT INTO cloud_tenants(tenant_id,status) VALUES ($1,'ACTIVE'),($2,'ACTIVE')`, [tenantA, tenantB]);
+    await database.pool.query(`INSERT INTO cloud_locations(location_id,tenant_id,status,configuration_status)
+      VALUES ($1,$2,'ACTIVE','PENDING_CONFIGURATION'),($3,$4,'ACTIVE','PENDING_CONFIGURATION')`, [locationA, tenantA, locationB, tenantB]);
     await database.pool.query(
       `INSERT INTO edges (edge_id, tenant_id, location_id, credential_hash, status)
        VALUES ($1,$2,$3,'hash','ACTIVE'),($4,$5,$6,'hash','ACTIVE')`,
@@ -67,6 +70,8 @@ describe.skipIf(!databaseUrl)('Cloud Admin Read repositories with PostgreSQL', (
     await database.pool.query('DELETE FROM cloud_order_operational_summaries WHERE edge_id = ANY($1::uuid[])', [[edgeA, edgeB]]);
     await database.pool.query('DELETE FROM edge_heartbeats WHERE edge_id = ANY($1::uuid[])', [[edgeA, edgeB]]);
     await database.pool.query('DELETE FROM edges WHERE edge_id = ANY($1::uuid[])', [[edgeA, edgeB]]);
+    await database.pool.query('DELETE FROM cloud_locations WHERE location_id = ANY($1::uuid[])', [[locationA, locationB]]);
+    await database.pool.query('DELETE FROM cloud_tenants WHERE tenant_id = ANY($1::uuid[])', [[tenantA, tenantB]]);
     await database.close();
   });
 

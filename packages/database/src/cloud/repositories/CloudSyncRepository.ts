@@ -1,4 +1,5 @@
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, lte, sql } from 'drizzle-orm';
+import { randomUUID } from 'node:crypto';
 import type { SyncEventEnvelope } from '@comanview/sync';
 import type { CloudDatabase } from '../db.js';
 import * as schema from '../schema.js';
@@ -8,6 +9,7 @@ export interface CloudEdgeRecord {
   tenantId: string;
   locationId: string;
   credentialHash: string;
+  credentialHashes?: Array<{ hash: string; status: 'ACTIVE' | 'RETIRING'; retireAfter: Date | null }>;
   status: string;
 }
 
@@ -29,7 +31,17 @@ export class CloudSyncSequenceConflictError extends Error {
 export class CloudSyncRepository {
   constructor(private readonly db: CloudDatabase) {}
 
-  getEdge(edgeId: string): Promise<CloudEdgeRecord | null> {
+  async getEdge(edgeId: string): Promise<CloudEdgeRecord | null> {
+    const now = new Date();
+    await this.db
+      .update(schema.edgeCredentials)
+      .set({ status: 'REVOKED', revokedAt: now })
+      .where(
+        and(
+          eq(schema.edgeCredentials.status, 'RETIRING'),
+          lte(schema.edgeCredentials.retireAfter, now),
+        ),
+      );
     return this.db
       .select({
         edgeId: schema.cloudEdges.edgeId,
@@ -40,7 +52,32 @@ export class CloudSyncRepository {
       })
       .from(schema.cloudEdges)
       .where(eq(schema.cloudEdges.edgeId, edgeId))
-      .then((rows) => rows[0] ?? null);
+      .then(async (rows) => {
+        const edge = rows[0];
+        if (!edge) return null;
+        const credentials = await this.db
+          .select({
+            hash: schema.edgeCredentials.credentialHash,
+            status: schema.edgeCredentials.status,
+            retireAfter: schema.edgeCredentials.retireAfter,
+          })
+          .from(schema.edgeCredentials)
+          .where(
+            and(
+              eq(schema.edgeCredentials.edgeId, edgeId),
+              inArray(schema.edgeCredentials.status, ['ACTIVE', 'RETIRING']),
+            ),
+          );
+        return {
+          ...edge,
+          credentialHash: edge.credentialHash ?? '',
+          credentialHashes: credentials.map((credential) => ({
+            hash: credential.hash,
+            status: credential.status as 'ACTIVE' | 'RETIRING',
+            retireAfter: credential.retireAfter,
+          })),
+        };
+      });
   }
 
   async provisionEdge(input: {
@@ -50,6 +87,11 @@ export class CloudSyncRepository {
     credentialHash: string;
   }): Promise<void> {
     await this.db.transaction(async (tx) => {
+      await tx.insert(schema.cloudTenants).values({ tenantId: input.tenantId, status: 'ACTIVE' })
+        .onConflictDoNothing({ target: schema.cloudTenants.tenantId });
+      await tx.insert(schema.cloudLocations).values({ locationId: input.locationId,
+        tenantId: input.tenantId, status: 'ACTIVE', configurationStatus: 'PENDING_CONFIGURATION' })
+        .onConflictDoNothing({ target: schema.cloudLocations.locationId });
       const existing = await tx
         .select({ tenantId: schema.cloudEdges.tenantId, locationId: schema.cloudEdges.locationId })
         .from(schema.cloudEdges)
@@ -72,6 +114,25 @@ export class CloudSyncRepository {
             updatedAt: new Date(),
           },
         });
+      const edge = await tx
+        .select({ edgeId: schema.cloudEdges.edgeId })
+        .from(schema.cloudEdges)
+        .where(eq(schema.cloudEdges.edgeId, input.edgeId))
+        .then((rows) => rows[0]);
+      if (edge) {
+        const credentialId = randomUUID();
+        await tx
+          .insert(schema.edgeCredentials)
+          .values({
+            credentialId,
+            edgeId: input.edgeId,
+            credentialHash: input.credentialHash,
+            status: 'ACTIVE',
+            issuedAt: new Date(),
+            activatedAt: new Date(),
+          })
+          .onConflictDoNothing({ target: schema.edgeCredentials.credentialHash });
+      }
     });
   }
 

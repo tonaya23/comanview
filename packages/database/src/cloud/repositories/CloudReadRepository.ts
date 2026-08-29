@@ -3,7 +3,7 @@ import type { Pool, QueryResultRow } from 'pg';
 interface ReadRow extends QueryResultRow {
   tenant_id: string;
   location_id: string;
-  edge_id: string;
+  edge_id: string | null;
   heartbeat_status: string | null;
   last_seen_at: Date | null;
   reported_at: Date | null;
@@ -78,7 +78,10 @@ export interface CloudReadPage<T> {
   hasMore: boolean;
 }
 
-export interface LocationOperationalRecord extends ScopedLocation {
+export interface LocationOperationalRecord {
+  tenantId: string;
+  locationId: string;
+  edgeId: string | null;
   heartbeatStatus: string | null;
   lastSeenAt: Date | null;
   reportedAt: Date | null;
@@ -181,7 +184,7 @@ export class CloudReadRepository {
     lagCutoff: Date;
   }): Promise<CloudReadPage<LocationOperationalRecord>> {
     const result = await this.pool.query<ReadRow>(
-      `SELECT e.tenant_id, e.location_id, e.edge_id,
+      `SELECT l.tenant_id, l.location_id, e.edge_id,
               hb.status AS heartbeat_status, hb.last_seen_at, hb.reported_at,
               hb.edge_version, hb.schema_version, hb.pending_event_count,
               (SELECT count(*)::int FROM cloud_projection_event_receipts r
@@ -197,8 +200,8 @@ export class CloudReadRepository {
                      AND r.projection_version = $3 AND r.event_id = i.event_id
                  )) AS stalled_event_count,
               (SELECT count(*)::int FROM cloud_closed_sale_summaries s
-               WHERE s.projection_version = $3 AND s.tenant_id = e.tenant_id
-                 AND s.location_id = e.location_id AND s.completeness_status = 'INCOMPLETE')
+               WHERE s.projection_version = $3 AND s.tenant_id = l.tenant_id
+                 AND s.location_id = l.location_id AND s.completeness_status = 'INCOMPLETE')
                 AS incomplete_sale_count,
               EXISTS (
                 SELECT 1 FROM cloud_projection_checkpoints c
@@ -211,12 +214,16 @@ export class CloudReadRepository {
                WHERE r.projection_name = 'operational_summaries'
                  AND r.projection_version = $3 AND r.edge_id = e.edge_id)
                 AS last_projection_processed_at
-       FROM edges e
+       FROM cloud_locations l
+       LEFT JOIN LATERAL (
+         SELECT edge_id, tenant_id, location_id FROM edges
+         WHERE location_id = l.location_id AND status = 'ACTIVE'
+         ORDER BY activated_at DESC NULLS LAST LIMIT 1
+       ) e ON true
        LEFT JOIN edge_heartbeats hb ON hb.edge_id = e.edge_id
-       WHERE e.status = 'ACTIVE'
-         AND ($1::boolean OR e.tenant_id = ANY($2::uuid[]))
-         AND ($5::uuid IS NULL OR e.location_id < $5)
-       ORDER BY e.location_id DESC
+       WHERE ($1::boolean OR l.tenant_id = ANY($2::uuid[]))
+         AND ($5::uuid IS NULL OR l.location_id < $5)
+       ORDER BY l.location_id DESC
        LIMIT $6`,
       [
         input.scope.global,
@@ -236,7 +243,7 @@ export class CloudReadRepository {
     lagCutoff: Date,
   ): Promise<LocationOperationalRecord | null> {
     const pageResult = await this.pool.query<ReadRow>(
-      `SELECT e.tenant_id, e.location_id, e.edge_id,
+      `SELECT l.tenant_id, l.location_id, e.edge_id,
               hb.status AS heartbeat_status, hb.last_seen_at, hb.reported_at,
               hb.edge_version, hb.schema_version, hb.pending_event_count,
               (SELECT count(*)::int FROM cloud_projection_event_receipts r
@@ -249,8 +256,8 @@ export class CloudReadRepository {
                    WHERE r.projection_name = 'operational_summaries'
                      AND r.projection_version = $4 AND r.event_id = i.event_id)) AS stalled_event_count,
               (SELECT count(*)::int FROM cloud_closed_sale_summaries s
-               WHERE s.projection_version = $4 AND s.tenant_id = e.tenant_id
-                 AND s.location_id = e.location_id AND s.completeness_status = 'INCOMPLETE')
+               WHERE s.projection_version = $4 AND s.tenant_id = l.tenant_id
+                 AND s.location_id = l.location_id AND s.completeness_status = 'INCOMPLETE')
                 AS incomplete_sale_count,
               EXISTS (SELECT 1 FROM cloud_projection_checkpoints c
                WHERE c.projection_name = 'operational_summaries' AND c.projection_version = $4
@@ -260,9 +267,14 @@ export class CloudReadRepository {
               (SELECT max(r.processed_at) FROM cloud_projection_event_receipts r
                WHERE r.projection_name = 'operational_summaries' AND r.projection_version = $4
                  AND r.edge_id = e.edge_id) AS last_projection_processed_at
-       FROM edges e LEFT JOIN edge_heartbeats hb ON hb.edge_id = e.edge_id
-       WHERE e.status = 'ACTIVE' AND e.location_id = $1
-         AND ($2::boolean OR e.tenant_id = ANY($3::uuid[]))`,
+       FROM cloud_locations l
+       LEFT JOIN LATERAL (
+         SELECT edge_id FROM edges WHERE location_id = l.location_id AND status = 'ACTIVE'
+         ORDER BY activated_at DESC NULLS LAST LIMIT 1
+       ) e ON true
+       LEFT JOIN edge_heartbeats hb ON hb.edge_id = e.edge_id
+       WHERE l.location_id = $1
+         AND ($2::boolean OR l.tenant_id = ANY($3::uuid[]))`,
       [locationId, scope.global, scope.tenantIds, this.projectionVersion, lagCutoff],
     );
     return pageResult.rows[0] ? mapLocation(pageResult.rows[0]) : null;
@@ -569,7 +581,7 @@ function mapLocation(row: ReadRow): LocationOperationalRecord {
 }
 
 function scope(row: ReadRow): ScopedLocation {
-  return { tenantId: row.tenant_id, locationId: row.location_id, edgeId: row.edge_id };
+  return { tenantId: row.tenant_id, locationId: row.location_id, edgeId: requiredString(row.edge_id) };
 }
 
 function mapOrder(row: ReadRow): OrderReadRecord {

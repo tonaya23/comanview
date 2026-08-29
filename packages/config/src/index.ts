@@ -32,11 +32,15 @@ export function loadEdgeSyncConfig(environment: NodeJS.ProcessEnv = process.env)
     .parse(environment['COMANVIEW_SYNC_ENABLED']);
   const cloudUrl = environment['COMANVIEW_CLOUD_URL']?.trim() || null;
   const rawToken = environment['COMANVIEW_EDGE_SYNC_TOKEN']?.trim() || null;
+  if (environment['NODE_ENV'] === 'production' && rawToken) {
+    throw new Error('COMANVIEW_EDGE_SYNC_TOKEN is a legacy development bootstrap and is forbidden in production.');
+  }
+  if (environment['NODE_ENV'] === 'production' && environment['COMANVIEW_EDGE_ID']) {
+    throw new Error('COMANVIEW_EDGE_ID bootstrap is forbidden in production; use durable provisioning.');
+  }
   const enabled = explicitlyEnabled ?? Boolean(cloudUrl && rawToken);
-  if (enabled && (!cloudUrl || !rawToken)) {
-    throw new Error(
-      'COMANVIEW_CLOUD_URL and COMANVIEW_EDGE_SYNC_TOKEN are required when sync is enabled.',
-    );
+  if (enabled && !cloudUrl) {
+    throw new Error('COMANVIEW_CLOUD_URL is required when sync is enabled.');
   }
   const token = enabled && rawToken ? z.string().min(16).parse(rawToken) : rawToken;
   return {
@@ -78,6 +82,12 @@ export interface CloudConfig {
   maxBatchSize: number;
   edgeCredentials: CloudEdgeCredential[];
   admin: CloudAdminConfig;
+  provisioning: CloudProvisioningConfig;
+}
+
+export interface CloudProvisioningConfig {
+  codeTtlMs: number;
+  credentialRotationOverlapMs: number;
 }
 
 export interface CloudAdminConfig {
@@ -94,7 +104,7 @@ export interface CloudAdminConfig {
     email: string;
     password: string;
     displayName: string;
-    role: 'PLATFORM_ADMIN_READ' | 'SUPPORT_READ';
+    role: 'PLATFORM_ADMIN' | 'PLATFORM_ADMIN_READ' | 'SUPPORT_READ';
     tenantIds: string[];
   } | null;
 }
@@ -139,10 +149,14 @@ export function loadCloudConfig(environment: NodeJS.ProcessEnv = process.env): C
   } catch {
     throw new Error('COMANVIEW_CLOUD_EDGE_CREDENTIALS must be valid JSON.');
   }
+  const edgeCredentials = z.array(CloudEdgeCredentialSchema).parse(credentials);
   const nodeEnvironment = z
     .enum(['development', 'test', 'production'])
     .default('development')
     .parse(environment['NODE_ENV']);
+  if (nodeEnvironment === 'production' && edgeCredentials.length > 0) {
+    throw new Error('COMANVIEW_CLOUD_EDGE_CREDENTIALS is forbidden in production.');
+  }
   const bootstrapEmail = environment['COMANVIEW_CLOUD_DEV_ADMIN_EMAIL']?.trim();
   const bootstrapPassword = environment['COMANVIEW_CLOUD_DEV_ADMIN_PASSWORD'];
   if (nodeEnvironment === 'production' && (bootstrapEmail || bootstrapPassword)) {
@@ -164,8 +178,8 @@ export function loadCloudConfig(environment: NodeJS.ProcessEnv = process.env): C
     }
   }
   const role = z
-    .enum(['PLATFORM_ADMIN_READ', 'SUPPORT_READ'])
-    .default('PLATFORM_ADMIN_READ')
+    .enum(['PLATFORM_ADMIN', 'PLATFORM_ADMIN_READ', 'SUPPORT_READ'])
+    .default('PLATFORM_ADMIN')
     .parse(environment['COMANVIEW_CLOUD_DEV_ADMIN_ROLE']);
   return {
     databaseUrl: z.string().url().parse(environment['DATABASE_URL']),
@@ -177,7 +191,15 @@ export function loadCloudConfig(environment: NodeJS.ProcessEnv = process.env): C
     maxBatchSize: optionalPositiveInteger(100, 100).parse(
       environment['COMANVIEW_CLOUD_SYNC_MAX_BATCH_SIZE'],
     ),
-    edgeCredentials: z.array(CloudEdgeCredentialSchema).parse(credentials),
+    edgeCredentials,
+    provisioning: {
+      codeTtlMs: optionalPositiveInteger(1_800_000, 86_400_000).parse(
+        environment['COMANVIEW_CLOUD_PROVISIONING_CODE_TTL_MS'],
+      ),
+      credentialRotationOverlapMs: optionalPositiveInteger(300_000, 86_400_000).parse(
+        environment['COMANVIEW_CLOUD_CREDENTIAL_ROTATION_OVERLAP_MS'],
+      ),
+    },
     admin: {
       environment: nodeEnvironment,
       sessionTtlMs: optionalPositiveInteger(28_800_000, 604_800_000).parse(

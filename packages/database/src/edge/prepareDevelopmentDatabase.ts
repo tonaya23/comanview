@@ -35,6 +35,9 @@ const operationalRealtimeMigrationPath = fileURLToPath(
 const syncFoundationMigrationPath = fileURLToPath(
   new URL('../../../../migrations/edge/0010_sync_foundation.sql', import.meta.url),
 );
+const edgeProvisioningMigrationPath = fileURLToPath(
+  new URL('../../../../migrations/edge/0011_edge_provisioning.sql', import.meta.url),
+);
 const defaultDatabasePath = fileURLToPath(
   new URL('../../../../apps/edge/edge-dev.db', import.meta.url),
 );
@@ -80,6 +83,10 @@ export function prepareDevelopmentDatabase(targetPath = databasePath): void {
       .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'edge_installations'")
       .get();
     if (!hasEdgeInstallation) sqlite.exec(readFileSync(syncFoundationMigrationPath, 'utf8'));
+    const hasProvisioningState = sqlite
+      .prepare("SELECT 1 FROM pragma_table_info('edge_installations') WHERE name = 'provisioning_state'")
+      .get();
+    if (!hasProvisioningState) sqlite.exec(readFileSync(edgeProvisioningMigrationPath, 'utf8'));
 
     const seed = sqlite.transaction(() => {
       const insertCategory = sqlite.prepare(

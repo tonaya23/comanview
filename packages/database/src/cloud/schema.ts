@@ -13,14 +13,43 @@ import {
   uuid,
 } from 'drizzle-orm/pg-core';
 
+export const cloudTenants = pgTable('cloud_tenants', {
+  tenantId: uuid('tenant_id').primaryKey(),
+  displayName: text('display_name'),
+  status: text('status').notNull().default('ACTIVE'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const cloudLocations = pgTable(
+  'cloud_locations',
+  {
+    locationId: uuid('location_id').primaryKey(),
+    tenantId: uuid('tenant_id').notNull(),
+    displayName: text('display_name'),
+    timezone: text('timezone'),
+    status: text('status').notNull().default('ACTIVE'),
+    configurationStatus: text('configuration_status').notNull().default('COMPLETE'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({ tenantLocation: uniqueIndex('unq_cloud_location_tenant').on(table.tenantId, table.locationId) }),
+);
+
 export const cloudEdges = pgTable(
   'edges',
   {
     edgeId: uuid('edge_id').primaryKey(),
     tenantId: uuid('tenant_id').notNull(),
     locationId: uuid('location_id').notNull(),
-    credentialHash: text('credential_hash').notNull(),
+    credentialHash: text('credential_hash'),
     status: text('status').notNull().default('ACTIVE'),
+    provisionedAt: timestamp('provisioned_at', { withTimezone: true }),
+    activatedAt: timestamp('activated_at', { withTimezone: true }),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    replacedAt: timestamp('replaced_at', { withTimezone: true }),
+    replacedByEdgeId: uuid('replaced_by_edge_id'),
+    provisioningAttemptId: uuid('provisioning_attempt_id'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -287,3 +316,83 @@ export const cloudAdminTenantGrants = pgTable(
   },
   (table) => ({ pk: primaryKey({ columns: [table.userId, table.tenantId] }) }),
 );
+
+export const edgeCredentials = pgTable(
+  'edge_credentials',
+  {
+    credentialId: uuid('credential_id').primaryKey(),
+    edgeId: uuid('edge_id').notNull(),
+    credentialHash: text('credential_hash').notNull(),
+    status: text('status').notNull(),
+    rotationId: uuid('rotation_id'),
+    issuedAt: timestamp('issued_at', { withTimezone: true }).notNull(),
+    activatedAt: timestamp('activated_at', { withTimezone: true }),
+    retireAfter: timestamp('retire_after', { withTimezone: true }),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  },
+  (table) => ({
+    credentialHash: uniqueIndex('unq_edge_credential_hash').on(table.credentialHash),
+  }),
+);
+
+export const edgeProvisioningCodes = pgTable('edge_provisioning_codes', {
+  provisioningCodeId: uuid('provisioning_code_id').primaryKey(),
+  tenantId: uuid('tenant_id').notNull(),
+  locationId: uuid('location_id').notNull(),
+  codeHash: text('code_hash').notNull(),
+  status: text('status').notNull().default('ISSUED'),
+  createdByAdminUserId: uuid('created_by_admin_user_id').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  consumedAt: timestamp('consumed_at', { withTimezone: true }),
+  consumedByEdgeId: uuid('consumed_by_edge_id'),
+  revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  revokedByAdminUserId: uuid('revoked_by_admin_user_id'),
+});
+
+export const edgeProvisioningAttempts = pgTable('edge_provisioning_attempts', {
+  attemptId: uuid('attempt_id').primaryKey(),
+  provisioningCodeId: uuid('provisioning_code_id').notNull(),
+  edgeId: uuid('edge_id').notNull(),
+  credentialId: uuid('credential_id').notNull(),
+  credentialHash: text('credential_hash').notNull(),
+  status: text('status').notNull().default('EXCHANGED'),
+  exchangedAt: timestamp('exchanged_at', { withTimezone: true }).notNull(),
+  activatedAt: timestamp('activated_at', { withTimezone: true }),
+  lastRetryAt: timestamp('last_retry_at', { withTimezone: true }),
+});
+
+export const edgeReplacements = pgTable('edge_replacements', {
+  replacementId: uuid('replacement_id').primaryKey(),
+  tenantId: uuid('tenant_id').notNull(),
+  locationId: uuid('location_id').notNull(),
+  oldEdgeId: uuid('old_edge_id').notNull(),
+  newEdgeId: uuid('new_edge_id'),
+  provisioningCodeId: uuid('provisioning_code_id').notNull(),
+  status: text('status').notNull().default('PENDING'),
+  reason: text('reason').notNull(),
+  initiatedByAdminUserId: uuid('initiated_by_admin_user_id').notNull(),
+  initiatedAt: timestamp('initiated_at', { withTimezone: true }).notNull(),
+  completedAt: timestamp('completed_at', { withTimezone: true }),
+  cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
+});
+
+export const cloudAdminAuditLog = pgTable('cloud_admin_audit_log', {
+  auditId: uuid('audit_id').primaryKey(),
+  scopeKey: text('scope_key').notNull(),
+  actorAdminUserId: uuid('actor_admin_user_id'),
+  sessionId: uuid('session_id'),
+  action: text('action').notNull(),
+  entityType: text('entity_type').notNull(),
+  entityId: uuid('entity_id').notNull(),
+  tenantId: uuid('tenant_id'),
+  locationId: uuid('location_id'),
+  edgeId: uuid('edge_id'),
+  commandId: uuid('command_id').notNull(),
+  reason: text('reason'),
+  beforeState: jsonb('before_state'),
+  afterState: jsonb('after_state'),
+  occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull(),
+  previousHash: text('previous_hash'),
+  entryHash: text('entry_hash').notNull(),
+});

@@ -11,6 +11,17 @@ export interface EdgeInstallationIdentity {
   locationId: string;
 }
 
+export interface DurableEdgeIdentity extends EdgeInstallationIdentity {
+  provisioningState: string;
+  credentialId: string | null;
+  provisioningAttemptId: string | null;
+}
+
+export interface EdgeProvisioningJournalRecord {
+  edgeId: string; attemptId: string; credentialId: string;
+  state: 'CREDENTIAL_STORED' | 'EXCHANGED' | 'ACTIVE';
+}
+
 export interface SyncOutboxEvent {
   id: string;
   eventType: string;
@@ -72,6 +83,56 @@ export class SyncOutboxRepository {
     const row = this.db.select().from(schema.edgeInstallations).get();
     if (!row) throw new Error('Edge identity has not been initialized.');
     return row;
+  }
+
+  findIdentity(): DurableEdgeIdentity | null {
+    const row = this.db.select().from(schema.edgeInstallations).get();
+    return row ? { edgeId: row.edgeId, tenantId: row.tenantId, locationId: row.locationId,
+      provisioningState: row.provisioningState, credentialId: row.credentialId,
+      provisioningAttemptId: row.provisioningAttemptId } : null;
+  }
+
+  beginProvisioning(input: { edgeId: string; attemptId: string; credentialId: string }, now = new Date()): EdgeProvisioningJournalRecord {
+    const existing = this.getProvisioningJournal();
+    if (existing) {
+      if (existing.edgeId !== input.edgeId || existing.attemptId !== input.attemptId || existing.credentialId !== input.credentialId) {
+        throw new Error('A different Edge provisioning attempt is already in progress.');
+      }
+      return existing;
+    }
+    this.db.insert(schema.edgeProvisioningJournal).values({ singletonKey: 'PRIMARY', ...input,
+      state: 'CREDENTIAL_STORED', createdAt: now, updatedAt: now }).run();
+    return { ...input, state: 'CREDENTIAL_STORED' };
+  }
+
+  getProvisioningJournal(): EdgeProvisioningJournalRecord | null {
+    const row = this.db.select().from(schema.edgeProvisioningJournal).get();
+    return row ? { edgeId: row.edgeId, attemptId: row.attemptId, credentialId: row.credentialId,
+      state: row.state as EdgeProvisioningJournalRecord['state'] } : null;
+  }
+
+  recordProvisioningExchange(input: { tenantId: string; locationId: string }, now = new Date()): DurableEdgeIdentity {
+    return this.db.transaction((tx) => {
+      const journal = tx.select().from(schema.edgeProvisioningJournal).get();
+      if (!journal) throw new Error('Edge provisioning has not been initialized.');
+      tx.insert(schema.edgeInstallations).values({ singletonKey: 'PRIMARY', edgeId: journal.edgeId,
+        tenantId: input.tenantId, locationId: input.locationId, provisioningState: 'PROVISIONING',
+        credentialId: journal.credentialId, provisioningAttemptId: journal.attemptId,
+        createdAt: now, provisionedAt: now }).onConflictDoUpdate({ target: schema.edgeInstallations.singletonKey,
+          set: { tenantId: input.tenantId, locationId: input.locationId, provisioningState: 'PROVISIONING',
+            credentialId: journal.credentialId, provisioningAttemptId: journal.attemptId, provisionedAt: now } }).run();
+      tx.update(schema.edgeProvisioningJournal).set({ state: 'EXCHANGED', updatedAt: now }).run();
+      return { edgeId: journal.edgeId, tenantId: input.tenantId, locationId: input.locationId,
+        provisioningState: 'PROVISIONING', credentialId: journal.credentialId,
+        provisioningAttemptId: journal.attemptId };
+    });
+  }
+
+  markProvisioningActive(now = new Date()): void {
+    this.db.transaction((tx) => {
+      tx.update(schema.edgeInstallations).set({ provisioningState: 'ACTIVE', activatedAt: now }).run();
+      tx.update(schema.edgeProvisioningJournal).set({ state: 'ACTIVE', updatedAt: now }).run();
+    });
   }
 
   claimBatch(limit: number, leaseDurationMs: number, now = new Date()): SyncOutboxEvent[] {

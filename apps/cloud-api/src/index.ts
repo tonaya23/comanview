@@ -5,6 +5,7 @@ import { z, ZodError } from 'zod';
 import { loadCloudConfig } from '@comanview/config';
 import {
   CloudAdminAuthRepository,
+  CloudControlPlaneRepository,
   CloudReadRepository,
   CloudSyncRepository,
   createCloudDatabase,
@@ -23,6 +24,14 @@ import {
   type RawSyncBatch,
 } from './sync/CloudSyncService.js';
 import { CloudAdminAuthService } from './admin/CloudAdminAuthService.js';
+import { CloudControlPlaneService } from './provisioning/CloudControlPlaneService.js';
+import { registerProvisioningRoutes } from './provisioning/routes.js';
+import { registerCloudControlPlaneRoutes } from './admin/controlPlaneRoutes.js';
+import {
+  ControlPlaneConflictError,
+  ControlPlaneInvalidCodeError,
+  ControlPlaneNotFoundError,
+} from '@comanview/database';
 import {
   registerCloudAdminRoutes,
   type CloudAdminRouteDependencies,
@@ -46,6 +55,7 @@ export interface BuildCloudAppOptions {
   bodyLimit?: number;
   maxBatchSize?: number;
   admin?: CloudAdminRouteDependencies;
+  controlPlane?: CloudControlPlaneService;
 }
 
 export function buildCloudApp(options: BuildCloudAppOptions) {
@@ -63,6 +73,20 @@ export function buildCloudApp(options: BuildCloudAppOptions) {
         error: 'VALIDATION_ERROR',
         message: error.issues[0]?.message ?? 'Invalid request.',
       });
+    }
+    if (error instanceof ControlPlaneInvalidCodeError) {
+      return reply.status(401).send({ error: 'PROVISIONING_CODE_INVALID', message: 'Provisioning code is invalid, expired, revoked, or consumed.' });
+    }
+    if (error instanceof ControlPlaneNotFoundError) {
+      return reply.status(404).send({ error: 'CLOUD_RESOURCE_NOT_FOUND', message: 'Resource was not found.' });
+    }
+    if (error instanceof ControlPlaneConflictError) {
+      const message = error.code === 'EDGE_REPLACEMENT_PENDING'
+        ? 'Cancel the pending Replacement before revoking this Edge.'
+        : error.code === 'EDGE_REPLACEMENT_OLD_EDGE_NOT_ACTIVE'
+          ? 'Replacement cutover requires the old Edge to remain ACTIVE.'
+          : 'Control plane state does not allow this operation.';
+      return reply.status(409).send({ error: error.code, message });
     }
     const requestError = error as Error & { statusCode?: number };
     if (typeof requestError.statusCode === 'number' && requestError.statusCode < 500) {
@@ -108,7 +132,11 @@ export function buildCloudApp(options: BuildCloudAppOptions) {
     );
   });
 
-  if (options.admin) registerCloudAdminRoutes(app, options.admin);
+  if (options.controlPlane) registerProvisioningRoutes(app, options.controlPlane, authenticator);
+  if (options.admin) {
+    registerCloudAdminRoutes(app, options.admin);
+    if (options.controlPlane) registerCloudControlPlaneRoutes(app, { auth: options.admin.auth, service: options.controlPlane });
+  }
 
   return app;
 }
@@ -120,11 +148,15 @@ async function start(): Promise<void> {
   const adminRepository = new CloudAdminAuthRepository(database.pool);
   const adminAuth = new CloudAdminAuthService(adminRepository, config.admin);
   const cloudRead = new CloudReadRepository(database.pool, config.admin.projectionVersion);
+  const controlPlane = new CloudControlPlaneService(
+    new CloudControlPlaneRepository(database.pool), config.provisioning,
+  );
   const app = buildCloudApp({
     repository,
     bodyLimit: config.bodyLimit,
     maxBatchSize: config.maxBatchSize,
     admin: { auth: adminAuth, read: cloudRead, config: config.admin },
+    controlPlane,
   });
   app.addHook('onClose', () => database.close());
   try {

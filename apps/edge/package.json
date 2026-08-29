@@ -6,6 +6,7 @@
   "description": "ComanView Edge — Offline-first local API server (Fastify + SQLite WAL)",
   "scripts": {
     "dev": "tsx watch src/index.ts",
+    "provision": "tsx src/provisioningCli.ts",
     "build": "tsc --project tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",

@@ -21,6 +21,7 @@ describe.skipIf(!databaseUrl)('Cloud PostgreSQL Inbox integration', () => {
     await migrateCloudDatabase(databaseUrl!);
     await database.pool.query('DELETE FROM edge_heartbeats WHERE edge_id = $1', [edgeId]);
     await database.pool.query('DELETE FROM cloud_sync_inbox WHERE edge_id = $1', [edgeId]);
+    await database.pool.query('DELETE FROM edge_credentials WHERE edge_id = $1', [edgeId]);
     await database.pool.query('DELETE FROM edges WHERE edge_id = $1', [edgeId]);
     await repository.provisionEdge({ edgeId, tenantId, locationId, credentialHash: 'test-hash' });
   });
@@ -28,7 +29,10 @@ describe.skipIf(!databaseUrl)('Cloud PostgreSQL Inbox integration', () => {
   afterAll(async () => {
     await database.pool.query('DELETE FROM edge_heartbeats WHERE edge_id = $1', [edgeId]);
     await database.pool.query('DELETE FROM cloud_sync_inbox WHERE edge_id = $1', [edgeId]);
+    await database.pool.query('DELETE FROM edge_credentials WHERE edge_id = $1', [edgeId]);
     await database.pool.query('DELETE FROM edges WHERE edge_id = $1', [edgeId]);
+    await database.pool.query('DELETE FROM cloud_locations WHERE location_id = $1', [locationId]);
+    await database.pool.query('DELETE FROM cloud_tenants WHERE tenant_id = $1', [tenantId]);
     await database.close();
   });
 

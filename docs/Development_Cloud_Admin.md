@@ -1,11 +1,11 @@
-# Cloud Read API y Super Admin — Desarrollo (Fase 1R)
+# Cloud Read API y Super Admin — Desarrollo (Fases 1R–1S)
 
 Super Admin es el Control Plane privado de ComanView. Su autenticación humana es independiente de
 las credenciales Edge usadas por `/sync/v1/*`; una credencial Edge nunca autoriza `/admin/v1/*`.
 
 ## Preparación local
 
-Inicie PostgreSQL y aplique las migrations incrementales `0000 → 0001 → 0002` siguiendo
+Inicie PostgreSQL y aplique las migrations incrementales `0000 → 0001 → 0002 → 0003` siguiendo
 `Development_Cloud_Sync.md`:
 
 ```powershell
@@ -23,15 +23,20 @@ $env:NODE_ENV = "development"
 $env:COMANVIEW_CLOUD_DEV_ADMIN_EMAIL = "admin@your-development.invalid"
 $env:COMANVIEW_CLOUD_DEV_ADMIN_PASSWORD = "choose-a-unique-local-password"
 $env:COMANVIEW_CLOUD_DEV_ADMIN_DISPLAY_NAME = "Cloud Admin Local"
-$env:COMANVIEW_CLOUD_DEV_ADMIN_ROLE = "PLATFORM_ADMIN_READ"
+$env:COMANVIEW_CLOUD_DEV_ADMIN_ROLE = "PLATFORM_ADMIN"
 $env:COMANVIEW_CLOUD_DEV_ADMIN_TENANT_IDS = "[]"
 pnpm dev:cloud
 ```
 
-`PLATFORM_ADMIN_READ` posee scope global explícito. Para probar `SUPPORT_READ`, use ese rol y
+`PLATFORM_ADMIN` posee scope global y los permisos de escritura del Control Plane. Para probar una
+sesión global de solo lectura use `PLATFORM_ADMIN_READ`; para `SUPPORT_READ`, use ese rol y
 proporcione en `COMANVIEW_CLOUD_DEV_ADMIN_TENANT_IDS` un array JSON con los Tenant UUID permitidos.
 El bootstrap se ejecuta únicamente cuando ambas variables email/password están presentes y el
 arranque falla si se intentan configurar bajo `NODE_ENV=production`.
+
+Una Location canónica puede existir sin Edge `ACTIVE`. En ese estado la API de Overview conserva
+`CLOUD_LOCATION_UNPROVISIONED` como precondición estructurada y Super Admin muestra un estado vacío
+con acceso al Control Plane, sin dejar la vista cargando indefinidamente.
 
 En otra terminal:
 

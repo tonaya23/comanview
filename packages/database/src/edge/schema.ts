@@ -28,6 +28,21 @@ export const edgeInstallations = sqliteTable('edge_installations', {
   tenantId: text('tenant_id').notNull(),
   locationId: text('location_id').notNull(),
   createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  provisioningState: text('provisioning_state').notNull().default('ACTIVE'),
+  credentialId: text('credential_id'),
+  provisioningAttemptId: text('provisioning_attempt_id'),
+  provisionedAt: integer('provisioned_at', { mode: 'timestamp_ms' }),
+  activatedAt: integer('activated_at', { mode: 'timestamp_ms' }),
+});
+
+export const edgeProvisioningJournal = sqliteTable('edge_provisioning_journal', {
+  singletonKey: text('singleton_key').primaryKey(),
+  edgeId: text('edge_id').notNull(),
+  attemptId: text('attempt_id').notNull(),
+  credentialId: text('credential_id').notNull(),
+  state: text('state').notNull(),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
 });
 
 export const syncRuntimeState = sqliteTable('sync_runtime_state', {

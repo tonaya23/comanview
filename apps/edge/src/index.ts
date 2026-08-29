@@ -60,6 +60,7 @@ import {
 } from './modules/sync/HttpCloudSyncTransport.js';
 import { SyncWorker } from './modules/sync/SyncWorker.js';
 import { syncRoutes } from './modules/sync/routes.js';
+import { createEdgeSecretStore, type EdgeSecretStore } from './modules/provisioning/EdgeSecretStore.js';
 
 export interface BuildAppOptions {
   printerAdapter?: PrinterAdapter;
@@ -69,6 +70,7 @@ export interface BuildAppOptions {
   syncConfig?: EdgeSyncConfig;
   syncTransport?: CloudSyncTransport;
   startSyncWorker?: boolean;
+  edgeSecretStore?: EdgeSecretStore;
 }
 
 export async function buildApp(dbPath: string = ':memory:', options: BuildAppOptions = {}) {
@@ -97,6 +99,21 @@ export async function buildApp(dbPath: string = ':memory:', options: BuildAppOpt
   const auditRepo = new AuditRepository(db);
   const tableRepo = new TableRepository(db);
   const syncRepo = new SyncOutboxRepository(db);
+  const syncConfig = options.syncConfig ?? loadEdgeSyncConfig();
+  const persistedIdentity = syncRepo.findIdentity();
+  if (process.env['NODE_ENV'] === 'production' && !persistedIdentity) {
+    throw new Error('Edge is UNPROVISIONED. Complete durable provisioning before starting the service.');
+  }
+  const edgeIdentity = persistedIdentity ?? syncRepo.ensureIdentity({
+    configuredEdgeId: syncConfig.configuredEdgeId,
+    tenantId: defaultOperationalContext.tenantId,
+    locationId: defaultOperationalContext.locationId,
+  });
+  if ('provisioningState' in edgeIdentity && edgeIdentity.provisioningState !== 'ACTIVE') {
+    throw new Error('Edge provisioning has not completed activation.');
+  }
+  const operationalContext = { ...defaultOperationalContext,
+    tenantId: edgeIdentity.tenantId, locationId: edgeIdentity.locationId };
 
   // Setup Services
   const catalogService = new CatalogService(catalogRepo);
@@ -106,41 +123,40 @@ export async function buildApp(dbPath: string = ':memory:', options: BuildAppOpt
   const orderService = new OrderService(
     orderRepo,
     catalogRepo,
-    defaultOperationalContext,
+    operationalContext,
     printService,
     kdsService,
     tableRepo,
     realtimeHub,
   );
-  const cashService = new CashService(cashRepo, printRepo, defaultOperationalContext);
+  const cashService = new CashService(cashRepo, printRepo, operationalContext);
   const paymentService = new PaymentService(
     orderRepo,
     cashRepo,
     auditRepo,
-    defaultOperationalContext,
+    operationalContext,
     realtimeHub,
   );
   const authService = new AuthService(
     authRepo,
-    defaultOperationalContext.tenantId,
-    defaultOperationalContext.locationId,
+    operationalContext.tenantId,
+    operationalContext.locationId,
   );
   const authGuard = new AuthGuard(authService, options.authMode ?? 'enforced');
   const auditService = new AuditService(auditRepo);
-  const tableService = new TableService(tableRepo, orderRepo, defaultOperationalContext);
-  const syncConfig = options.syncConfig ?? loadEdgeSyncConfig();
-  const edgeIdentity = syncRepo.ensureIdentity({
-    configuredEdgeId: syncConfig.configuredEdgeId,
-    tenantId: defaultOperationalContext.tenantId,
-    locationId: defaultOperationalContext.locationId,
-  });
+  const tableService = new TableService(tableRepo, orderRepo, operationalContext);
+  const storedSecrets = syncConfig.enabled && !syncConfig.token
+    ? await (options.edgeSecretStore ?? createEdgeSecretStore()).load()
+    : null;
+  const syncToken = syncConfig.token ?? storedSecrets?.active?.credential ?? null;
+  if (syncConfig.enabled && !syncToken) throw new Error('Active provisioned Edge credential is unavailable.');
   const syncTransport =
     options.syncTransport ??
-    (syncConfig.enabled && syncConfig.cloudUrl && syncConfig.token
+    (syncConfig.enabled && syncConfig.cloudUrl && syncToken
       ? new HttpCloudSyncTransport(
           syncConfig.cloudUrl,
           edgeIdentity.edgeId,
-          syncConfig.token,
+          syncToken,
           syncConfig.requestTimeoutMs,
         )
       : null);

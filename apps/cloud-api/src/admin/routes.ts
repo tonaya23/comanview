@@ -68,7 +68,7 @@ export function registerCloudAdminRoutes(
   const now = dependencies.now ?? (() => new Date());
 
   app.post('/admin/v1/auth/login', async (request, reply) => {
-    assertSameOrigin(request);
+    assertCloudAdminSameOrigin(request);
     const input = CloudAdminLoginRequestSchema.parse(request.body);
     const result = await dependencies.auth.login(input.email, input.password);
     reply.header('set-cookie', sessionCookie(result.token, dependencies.config));
@@ -76,19 +76,19 @@ export function registerCloudAdminRoutes(
   });
 
   app.get('/admin/v1/auth/session', async (request) => {
-    const principal = await authenticate(request, dependencies.auth);
+    const principal = await authenticateCloudAdmin(request, dependencies.auth);
     return CloudAdminSessionResponseSchema.parse(principalResponse(principal));
   });
 
   app.post('/admin/v1/auth/logout', async (request, reply) => {
-    assertSameOrigin(request);
-    await dependencies.auth.logout(readCookie(request));
+    assertCloudAdminSameOrigin(request);
+    await dependencies.auth.logout(readCloudAdminCookie(request));
     reply.header('set-cookie', clearSessionCookie(dependencies.config));
     return CloudAdminLogoutResponseSchema.parse({ revoked: true });
   });
 
   app.get('/admin/v1/locations', async (request) => {
-    const principal = await authenticate(request, dependencies.auth);
+    const principal = await authenticateCloudAdmin(request, dependencies.auth);
     requireCloudPermission(principal, CLOUD_PERMISSIONS.CLOUD_LOCATION_VIEW);
     const query = BaseListQuerySchema.extend({ status: z.enum(['ONLINE', 'OFFLINE', 'DEGRADED']).optional() })
       .parse(request.query);
@@ -123,7 +123,7 @@ export function registerCloudAdminRoutes(
   });
 
   app.get('/admin/v1/locations/:locationId/overview', async (request) => {
-    const principal = await authenticate(request, dependencies.auth);
+    const principal = await authenticateCloudAdmin(request, dependencies.auth);
     requireCloudPermission(principal, CLOUD_PERMISSIONS.CLOUD_OPERATIONAL_VIEW);
     const { locationId } = UuidParamsSchema.parse(request.params);
     const query = UtcRangeSchema.parse(request.query);
@@ -164,7 +164,7 @@ export function registerCloudAdminRoutes(
   });
 
   app.get('/admin/v1/locations/:locationId/orders', async (request) => {
-    const principal = await authenticate(request, dependencies.auth);
+    const principal = await authenticateCloudAdmin(request, dependencies.auth);
     requireCloudPermission(principal, CLOUD_PERMISSIONS.CLOUD_OPERATIONAL_VIEW);
     const { locationId } = UuidParamsSchema.parse(request.params);
     const query = BaseListQuerySchema.merge(UtcRangeSchema).extend({
@@ -182,7 +182,7 @@ export function registerCloudAdminRoutes(
   });
 
   app.get('/admin/v1/locations/:locationId/orders/:orderId', async (request) => {
-    const principal = await authenticate(request, dependencies.auth);
+    const principal = await authenticateCloudAdmin(request, dependencies.auth);
     requireCloudPermission(principal, CLOUD_PERMISSIONS.CLOUD_OPERATIONAL_VIEW);
     const { locationId, orderId } = OrderParamsSchema.parse(request.params);
     const location = asScope(await scopedLocation(dependencies, principal, locationId, now()));
@@ -265,12 +265,12 @@ export function registerCloudAdminRoutes(
   });
 }
 
-async function authenticate(request: FastifyRequest, auth: CloudAdminAuthService) {
-  return auth.authenticateToken(readCookie(request));
+export async function authenticateCloudAdmin(request: FastifyRequest, auth: CloudAdminAuthService) {
+  return auth.authenticateToken(readCloudAdminCookie(request));
 }
 
 async function authenticateFinancial(request: FastifyRequest, auth: CloudAdminAuthService) {
-  const principal = await authenticate(request, auth);
+  const principal = await authenticateCloudAdmin(request, auth);
   requireCloudPermission(principal, CLOUD_PERMISSIONS.CLOUD_FINANCIAL_VIEW);
   return principal;
 }
@@ -293,7 +293,7 @@ async function scopedLocation(
 function locationResponse(record: LocationOperationalRecord, now: Date, config: CloudAdminConfig) {
   return {
     tenantId: record.tenantId, locationId: record.locationId, edgeId: record.edgeId,
-    edgeStatus: evaluateEdgeStatus(record, now, config.heartbeatStaleThresholdMs),
+    edgeStatus: record.edgeId ? evaluateEdgeStatus(record, now, config.heartbeatStaleThresholdMs) : 'UNPROVISIONED',
     lastSeenAt: iso(record.lastSeenAt), reportedAt: iso(record.reportedAt),
     edgeVersion: record.edgeVersion, schemaVersion: record.schemaVersion,
     pendingEventCount: record.pendingEventCount,
@@ -362,7 +362,7 @@ function principalResponse(principal: CloudAdminPrincipal) {
   };
 }
 
-function readCookie(request: FastifyRequest): string | null {
+export function readCloudAdminCookie(request: FastifyRequest): string | null {
   const header = request.headers.cookie;
   if (!header) return null;
   for (const item of header.split(';')) {
@@ -382,7 +382,7 @@ function clearSessionCookie(config: CloudAdminConfig): string {
   return `${COOKIE_NAME}=; Path=/admin/v1; HttpOnly; SameSite=Strict; Max-Age=0${config.secureCookie ? '; Secure' : ''}`;
 }
 
-function assertSameOrigin(request: FastifyRequest): void {
+export function assertCloudAdminSameOrigin(request: FastifyRequest): void {
   const origin = request.headers.origin;
   const fetchSite = request.headers['sec-fetch-site'];
   if (!origin) {
@@ -419,6 +419,7 @@ function assertRange(from: Date, to: Date): void {
   if (from >= to) throw new CloudError('INVALID_TIME_RANGE', 422, 'UTC range must have from before to.');
 }
 function asScope(record: LocationOperationalRecord): ScopedLocation {
+  if (!record.edgeId) throw new CloudError('CLOUD_LOCATION_UNPROVISIONED', 409, 'Location does not have an ACTIVE Edge yet.');
   return { tenantId: record.tenantId, locationId: record.locationId, edgeId: record.edgeId };
 }
 function iso(value: Date | null): string | null { return value?.toISOString() ?? null; }

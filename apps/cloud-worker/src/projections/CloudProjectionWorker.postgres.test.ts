@@ -55,6 +55,7 @@ describe.skipIf(!databaseUrl)('Cloud projection worker with PostgreSQL', () => {
   }
 
   async function deleteEdgeData(edgeId: string) {
+    const binding = await database.pool.query<{ tenant_id: string; location_id: string }>('SELECT tenant_id,location_id FROM edges WHERE edge_id=$1', [edgeId]);
     await database.pool.query('DELETE FROM cloud_projection_event_receipts WHERE edge_id = $1', [
       edgeId,
     ]);
@@ -72,7 +73,12 @@ describe.skipIf(!databaseUrl)('Cloud projection worker with PostgreSQL', () => {
     }
     await database.pool.query('DELETE FROM edge_heartbeats WHERE edge_id = $1', [edgeId]);
     await database.pool.query('DELETE FROM cloud_sync_inbox WHERE edge_id = $1', [edgeId]);
+    await database.pool.query('DELETE FROM edge_credentials WHERE edge_id = $1', [edgeId]);
     await database.pool.query('DELETE FROM edges WHERE edge_id = $1', [edgeId]);
+    if (binding.rows[0]) {
+      await database.pool.query('DELETE FROM cloud_locations WHERE location_id=$1', [binding.rows[0].location_id]);
+      await database.pool.query('DELETE FROM cloud_tenants WHERE tenant_id=$1', [binding.rows[0].tenant_id]);
+    }
   }
 
   function event(
@@ -159,7 +165,14 @@ describe.skipIf(!databaseUrl)('Cloud projection worker with PostgreSQL', () => {
       randomUUID(),
       logger,
     );
-    expect(await worker.drain()).toBe(5);
+    expect(await worker.drain()).toBeGreaterThanOrEqual(5);
+    const receipts = await database.pool.query<{ count: number }>(
+      `SELECT count(*)::int AS count
+       FROM cloud_projection_event_receipts
+       WHERE projection_version = 1 AND edge_id = $1`,
+      [edge.edgeId],
+    );
+    expect(receipts.rows[0]?.count).toBe(5);
 
     const order = await database.pool.query(
       `SELECT status, item_count, sent_item_count, paid_amount::int, tip_amount::int

@@ -1,4 +1,4 @@
-# Desarrollo local de Cloud Sync, Projections y Read API (Fases 1P–1R)
+# Desarrollo local de Cloud Sync, Projections, Read API y Provisioning (Fases 1P–1S)
 
 ## Arquitectura
 
@@ -14,7 +14,7 @@ Cloud no participa en el command path de POS, Waiter, KDS, Printing, Payments ni
 
 ## Preparación (PowerShell)
 
-Los siguientes valores son identificadores y credenciales efímeras de desarrollo. No deben reutilizarse en una instalación real.
+Los siguientes valores son el bootstrap legacy de desarrollo. No deben reutilizarse en una instalación real. El provisioning durable 1S se documenta en `Development_Edge_Provisioning.md`.
 
 ```powershell
 $env:COMANVIEW_DEV_POSTGRES_PASSWORD = "choose-a-local-password"

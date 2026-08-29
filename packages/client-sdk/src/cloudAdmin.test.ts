@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createCloudAdminClient, type CloudAdminFetch } from './cloudAdmin.js';
+import { CloudAdminClientError, createCloudAdminClient, type CloudAdminFetch } from './cloudAdmin.js';
 
 const session = {
   user: {
@@ -38,5 +38,21 @@ describe('Cloud Admin client', () => {
     };
     await expect(createCloudAdminClient({ fetch }).getLocations({ status: 'ONLINE', limit: 25 }))
       .resolves.toEqual({ data: [], page: { nextCursor: null } });
+  });
+
+  it('preserves the structured unprovisioned Location error', async () => {
+    const fetch: CloudAdminFetch = async () => ({
+      ok: false, status: 409,
+      async json() {
+        return {
+          error: 'CLOUD_LOCATION_UNPROVISIONED',
+          message: 'Location does not have an ACTIVE Edge yet.',
+        };
+      },
+    });
+    const error = await createCloudAdminClient({ fetch }).getOverview('01991a00-0000-7000-8000-000000000303')
+      .catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(CloudAdminClientError);
+    expect(error).toMatchObject({ code: 'CLOUD_LOCATION_UNPROVISIONED', status: 409 });
   });
 });

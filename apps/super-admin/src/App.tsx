@@ -13,9 +13,13 @@ import type {
   CloudOrderDetail,
   CloudOrderSummary,
   CloudSaleSummary,
+  CloudTenant,
+  CanonicalCloudLocation,
+  EdgeReplacement,
+  ProvisionedEdge,
 } from '@comanview/contracts';
 
-type View = 'locations' | 'overview' | 'orders' | 'sales' | 'cash';
+type View = 'control-plane' | 'locations' | 'overview' | 'orders' | 'sales' | 'cash';
 const client = createCloudAdminClient();
 
 export function App() {
@@ -30,6 +34,7 @@ export function App() {
   }, []);
 
   const canViewFinancial = session?.user.permissions.includes('CLOUD_FINANCIAL_VIEW') ?? false;
+  const canManageControlPlane = session?.user.permissions.includes('CLOUD_TENANT_CREATE') ?? false;
   if (restoring) return <CenteredState text="Restaurando sesión Cloud…" />;
   if (!session) return <Login onAuthenticated={setSession} />;
 
@@ -52,6 +57,7 @@ export function App() {
       </header>
       <div className="workspace">
         <aside className="sidebar">
+          {canManageControlPlane && <button className={view === 'control-plane' ? 'active' : ''} onClick={() => setView('control-plane')}>Control Plane</button>}
           <button className={view === 'locations' ? 'active' : ''} onClick={() => setView('locations')}>Locations</button>
           {location && <>
             <div className="scope-label"><span>Location activa</span><code>{shortId(location.locationId)}</code></div>
@@ -63,8 +69,9 @@ export function App() {
         </aside>
         <main className="content">
           {error && <div className="global-error">{error}</div>}
+          {view === 'control-plane' && canManageControlPlane && <ControlPlane onError={setError} />}
           {view === 'locations' && <Locations onSelect={selectLocation} onError={setError} />}
-          {location && view === 'overview' && <Overview location={location} canViewFinancial={canViewFinancial} onOpenOrder={() => setView('orders')} onError={setError} />}
+          {location && view === 'overview' && <Overview location={location} canViewFinancial={canViewFinancial} canManageControlPlane={canManageControlPlane} onOpenControlPlane={() => setView('control-plane')} onOpenOrder={() => setView('orders')} onError={setError} />}
           {location && view === 'orders' && <Orders location={location} canViewFinancial={canViewFinancial} onError={setError} />}
           {location && view === 'sales' && canViewFinancial && <Sales location={location} onError={setError} />}
           {location && view === 'cash' && canViewFinancial && <CashSessions location={location} onError={setError} />}
@@ -108,10 +115,21 @@ function Locations({ onSelect, onError }: { onSelect(value: CloudLocationSummary
   </section>;
 }
 
-function Overview({ location, canViewFinancial, onOpenOrder, onError }: { location: CloudLocationSummary; canViewFinancial: boolean; onOpenOrder(): void; onError(value: string | null): void }) {
+function Overview({ location, canViewFinancial, canManageControlPlane, onOpenControlPlane, onOpenOrder, onError }: { location: CloudLocationSummary; canViewFinancial: boolean; canManageControlPlane: boolean; onOpenControlPlane(): void; onOpenOrder(): void; onError(value: string | null): void }) {
   const [data, setData] = useState<CloudLocationOverview | null>(null);
-  useEffect(() => { client.getOverview(location.locationId).then(setData).catch((error) => onError(message(error))); }, [location.locationId]);
-  if (!data) return <CenteredState text="Cargando overview…" />;
+  const [state, setState] = useState<'loading' | 'ready' | 'unprovisioned' | 'error'>('loading');
+  useEffect(() => {
+    setData(null); setState('loading'); onError(null);
+    client.getOverview(location.locationId).then((result) => { setData(result); setState('ready'); }).catch((error) => {
+      if (error instanceof CloudAdminClientError && error.code === 'CLOUD_LOCATION_UNPROVISIONED') {
+        setState('unprovisioned'); return;
+      }
+      setState('error'); onError(message(error));
+    });
+  }, [location.locationId]);
+  if (state === 'loading') return <CenteredState text="Cargando overview…" />;
+  if (state === 'unprovisioned') return <section><PageTitle title="Location Overview" subtitle={location.locationId} /><article className="panel empty-state"><h2>Esta Location aún no tiene un Edge ACTIVE</h2><p>Provisiona un Edge desde Control Plane para habilitar el estado operacional.</p>{canManageControlPlane && <button className="secondary" onClick={onOpenControlPlane}>Ir a Control Plane</button>}</article></section>;
+  if (state === 'error' || !data) return <section><PageTitle title="Location Overview" subtitle={location.locationId} /><Empty text="No fue posible cargar el overview." /></section>;
   return <section><PageTitle title="Location Overview" subtitle={location.locationId} />
     <div className="cards"><Metric label="Edge" value={data.location.edgeStatus} tone={data.location.edgeStatus.toLowerCase()} /><Metric label="Orders OPEN" value={data.orderCounts.open} /><Metric label="Orders CLOSED" value={data.orderCounts.closed} /><Metric label="Orders CANCELLED" value={data.orderCounts.cancelled} /></div>
     <div className="info-grid"><article className="panel"><h2>Operación</h2><Info label="Último heartbeat" value={date(data.location.lastSeenAt)} /><Info label="Último evento recibido" value={date(data.location.projectionHealth.lastEventReceivedAt)} /><Info label="Última projection procesada" value={date(data.location.projectionHealth.lastProjectionProcessedAt)} /><Info label="Eventos reportados pendientes" value={String(data.location.pendingEventCount ?? '—')} /></article>
@@ -146,6 +164,34 @@ function CashSessions({ location, onError }: { location: CloudLocationSummary; o
   return <section><PageTitle title="CashSessions" subtitle="Expected y difference sólo aparecen después del cierre Edge" /><div className="toolbar"><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">Todas</option><option>OPEN</option><option>CLOSED</option></select></div><div className="table-card"><table><thead><tr><th>Session</th><th>Business date</th><th>Estado</th><th>Opening float</th><th>Expected</th><th>Difference</th></tr></thead><tbody>{page?.data.map((session) => <tr className="clickable" key={session.cashSessionId} onClick={() => client.getCashMovements(location.locationId, session.cashSessionId).then((result) => setMovements(result.data)).catch((error) => onError(message(error)))}><td><code>{shortId(session.cashSessionId)}</code><small>{date(session.openedAt)}</small></td><td>{session.businessDate}</td><td><Status value={session.status} /></td><td>{money(session.openingFloatAmount, session.currency)}</td><td>{session.expectedCashAmount === null ? 'Disponible al cerrar' : money(session.expectedCashAmount, session.currency)}</td><td>{session.differenceAmount === null ? '—' : money(session.differenceAmount, session.currency)}</td></tr>)}</tbody></table></div>{movements && <article className="panel"><h2>Movimientos</h2>{movements.map((movement) => <p key={movement.cashMovementId}><strong>{movement.movementType}</strong> {money(movement.amount, movement.currency)} · {movement.reason} · {date(movement.occurredAt)}</p>)}{movements.length === 0 && <Empty text="Sin movimientos para esta sesión." />}</article>}</section>;
 }
 
+function ControlPlane({ onError }: { onError(value: string | null): void }) {
+  const [tenants, setTenants] = useState<CloudTenant[]>([]); const [tenant, setTenant] = useState<CloudTenant | null>(null);
+  const [locations, setLocations] = useState<CanonicalCloudLocation[]>([]); const [edges, setEdges] = useState<Record<string, ProvisionedEdge[]>>({});
+  const [pendingReplacements, setPendingReplacements] = useState<Record<string, EdgeReplacement | null>>({});
+  const [tenantName, setTenantName] = useState(''); const [locationName, setLocationName] = useState(''); const [timezone, setTimezone] = useState('America/Matamoros');
+  const [issued, setIssued] = useState<{ provisioningCodeId: string; code: string; expiresAt: string } | null>(null);
+  const loadTenants = () => client.getTenants().then((result) => setTenants(result.data)).catch((error) => onError(message(error)));
+  const loadLocations = (selected: CloudTenant) => client.getCanonicalLocations(selected.tenantId).then(async (result) => {
+    setLocations(result.data); setTenant(selected);
+    const states = await Promise.all(result.data.map(async (location) => {
+      const [edgeResult, replacementResult] = await Promise.all([
+        client.getEdges(location.locationId), client.getPendingReplacement(location.locationId),
+      ]);
+      return [location.locationId, edgeResult.data, replacementResult.replacement] as const;
+    }));
+    setEdges(Object.fromEntries(states.map(([locationId, locationEdges]) => [locationId, locationEdges])));
+    setPendingReplacements(Object.fromEntries(states.map(([locationId, , replacement]) => [locationId, replacement])));
+  }).catch((error) => onError(message(error)));
+  useEffect(() => { void loadTenants(); }, []);
+  return <section><PageTitle title="Tenant & Edge Control Plane" subtitle="Provisioning seguro; el código se muestra una sola vez" />
+    <div className="control-grid"><article className="panel"><h2>Nuevo Tenant</h2><label>Nombre<input value={tenantName} onChange={(event) => setTenantName(event.target.value)} /></label><button className="primary" onClick={() => client.createTenant({ commandId: crypto.randomUUID(), displayName: tenantName }).then((created) => { setTenantName(''); void loadTenants(); void loadLocations(created); }).catch((error) => onError(message(error)))}>Crear Tenant</button></article>
+      <article className="panel"><h2>Nueva Location</h2><label>Tenant<select value={tenant?.tenantId ?? ''} onChange={(event) => { const selected = tenants.find((item) => item.tenantId === event.target.value); if (selected) void loadLocations(selected); }}><option value="">Selecciona</option>{tenants.map((item) => <option key={item.tenantId} value={item.tenantId}>{item.displayName ?? item.tenantId}</option>)}</select></label><label>Nombre<input value={locationName} onChange={(event) => setLocationName(event.target.value)} /></label><label>Timezone IANA<input value={timezone} onChange={(event) => setTimezone(event.target.value)} /></label><button className="primary" disabled={!tenant} onClick={() => tenant && client.createLocation(tenant.tenantId, { commandId: crypto.randomUUID(), displayName: locationName, timezone }).then(() => { setLocationName(''); void loadLocations(tenant); }).catch((error) => onError(message(error)))}>Crear Location</button></article></div>
+    <div className="table-card"><table><thead><tr><th>Tenant</th><th>Estado</th></tr></thead><tbody>{tenants.map((item) => <tr className="clickable" key={item.tenantId} onClick={() => void loadLocations(item)}><td>{item.displayName ?? 'Legacy sin configurar'}<small>{item.tenantId}</small></td><td><Status value={item.status} /></td></tr>)}</tbody></table></div>
+    {tenant && <article className="panel"><h2>Locations de {tenant.displayName}</h2>{locations.map((location) => { const active = edges[location.locationId]?.find((edge) => edge.status === 'ACTIVE'); const pending = pendingReplacements[location.locationId]; return <div className="location-control" key={location.locationId}><div><strong>{location.displayName ?? 'Pendiente de configuración'}</strong><small>{location.locationId} · {location.timezone ?? 'Timezone pendiente'}</small>{(edges[location.locationId] ?? []).map((edge) => <small key={edge.edgeId}>{shortId(edge.edgeId)} · {edge.status}</small>)}{pending && <small className="pending-replacement">Replacement PENDING · código {pending.provisioningCode.status} · expira {date(pending.provisioningCode.expiresAt)}</small>}</div><Status value={location.configurationStatus} /><span>{active ? 'Edge ACTIVE' : 'Sin Edge ACTIVE'}</span>{pending ? <button className="secondary danger" onClick={() => { const reason = window.prompt('Motivo de cancelación del Replacement'); if (reason) void client.cancelReplacement(pending.replacementId, { commandId: crypto.randomUUID(), reason }).then(() => loadLocations(tenant)).catch((error) => onError(message(error))); }}>Cancelar Replacement</button> : active ? <div className="edge-actions"><button className="secondary" onClick={() => { const reason = window.prompt('Motivo de revocación'); if (reason) void client.revokeEdge(active.edgeId, { commandId: crypto.randomUUID(), reason }).then(() => loadLocations(tenant)).catch((error) => onError(message(error))); }}>Revocar</button><button className="secondary" onClick={() => { const reason = window.prompt('Motivo del replacement'); if (reason) void client.initiateReplacement(location.locationId, { commandId: crypto.randomUUID(), oldEdgeId: active.edgeId, reason }).then((result) => { setIssued(result.provisioningCode); void loadLocations(tenant); }).catch((error) => onError(message(error))); }}>Replacement</button></div> : <button className="secondary" onClick={() => client.generateProvisioningCode(location.locationId, crypto.randomUUID()).then(setIssued).catch((error) => onError(message(error)))}>Generar código</button>}</div>; })}</article>}
+    {issued && <div className="secret-once" role="alert"><strong>Código de provisioning (cópialo ahora)</strong><code>{issued.code}</code><span>Expira {date(issued.expiresAt)}</span><div className="edge-actions"><button onClick={() => client.revokeProvisioningCode(issued.provisioningCodeId, crypto.randomUUID()).then(() => setIssued(null)).catch((error) => onError(message(error)))}>Revocar código</button><button onClick={() => setIssued(null)}>Ya lo guardé</button></div></div>}
+  </section>;
+}
+
 function OrdersTable({ rows, onSelect }: { rows: CloudOrderSummary[]; onSelect?: (value: CloudOrderSummary) => void }) { return <div className="table-card"><table><thead><tr><th>Order</th><th>Creada UTC</th><th>Tipo / canal</th><th>Estado</th><th>Items / SENT</th><th>Mesas</th></tr></thead><tbody>{rows.map((order) => <tr key={order.orderId} className={onSelect ? 'clickable' : ''} onClick={() => onSelect?.(order)}><td><code>{shortId(order.orderId)}</code></td><td>{date(order.createdAt)}</td><td>{order.orderType} / {order.orderChannel}</td><td><Status value={order.status} /></td><td>{order.itemCount} / {order.sentItemCount}</td><td>{order.tableIds.map(shortId).join(', ') || '—'}</td></tr>)}</tbody></table>{rows.length === 0 && <Empty text="No hay Orders para estos filtros." />}</div>; }
 function PageTitle({ title, subtitle }: { title: string; subtitle: string }) { return <div className="page-title"><div><h1>{title}</h1><p>{subtitle}</p></div></div>; }
 function Metric({ label, value, tone }: { label: string; value: string | number; tone?: string }) { return <article className={`metric ${tone ?? ''}`}><span>{label}</span><strong>{value}</strong></article>; }
@@ -153,7 +199,7 @@ function Info({ label, value }: { label: string; value: string }) { return <div 
 function Status({ value }: { value: string }) { return <span className={`status status-${value.toLowerCase()}`}>{value}</span>; }
 function Empty({ text }: { text: string }) { return <div className="empty">{text}</div>; }
 function CenteredState({ text }: { text: string }) { return <div className="centered-state">{text}</div>; }
-function shortId(value: string) { return value.slice(0, 8); }
+function shortId(value: string | null) { return value ? value.slice(0, 8) : 'Sin Edge'; }
 function date(value: string | null) { return value ? new Intl.DateTimeFormat('es-MX', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'UTC' }).format(new Date(value)) + ' UTC' : 'Nunca'; }
 function money(amount: number, currency: string | null) { return currency ? new Intl.NumberFormat('es-MX', { style: 'currency', currency }).format(amount / 100) : `${amount} minor units`; }
 function message(error: unknown) { return error instanceof CloudAdminClientError ? error.message : error instanceof Error ? error.message : 'Ocurrió un error inesperado.'; }
