@@ -19,6 +19,7 @@ import { ConcurrencyError, ObjectNotFoundError } from '../../../app/errors.js';
 import type { EdgeOperationalContext } from '../../../app/operationalContext.js';
 import { mapOrderToResponse } from '../../orders/application/orderMapper.js';
 import type { RealtimeHub } from '../../../infrastructure/realtime/RealtimeHub.js';
+import type { EdgeLicenseManager } from '../../licensing/EdgeLicenseManager.js';
 
 export class PaymentService {
   constructor(
@@ -27,12 +28,14 @@ export class PaymentService {
     private readonly auditRepo: AuditRepository,
     private readonly context: EdgeOperationalContext,
     private readonly realtime: RealtimeHub,
+    private readonly licensing?: EdgeLicenseManager,
   ) {}
 
   getConfig(): PaymentConfigResponse {
+    const config = this.licensing?.currentConfiguration().payment;
     return {
-      tipsEnabled: this.context.tipsEnabled,
-      percentageOptionsBasisPoints: this.context.tipPercentageOptionsBasisPoints,
+      tipsEnabled: config?.tipsEnabled ?? this.context.tipsEnabled,
+      percentageOptionsBasisPoints: config?.tipPercentageOptionsBasisPoints ?? this.context.tipPercentageOptionsBasisPoints,
     };
   }
 
@@ -56,7 +59,8 @@ export class PaymentService {
         request.cashTendered === undefined || request.cashTendered === null
           ? null
           : Money.fromMinorUnits(request.cashTendered, previousOrder.currency);
-      const requestedTip = calculateTip(requestedAmount, request.tip, this.context.tipsEnabled, {
+      const requestedTip = calculateTip(requestedAmount, request.tip,
+        this.licensing?.currentConfiguration().payment.tipsEnabled ?? this.context.tipsEnabled, {
         method: request.method,
         cashTendered: requestedCashTendered,
         // A persisted REMAINDER Payment proves that this amount settled the balance at creation.
@@ -78,6 +82,7 @@ export class PaymentService {
 
     const order = this.orderRepo.getOrderById(EntityId.fromString(orderId));
     if (!order) throw new ObjectNotFoundError(`Order ${orderId} not found`);
+    this.licensing?.assertAllowed('PAYMENT_CREATE', 'CORE_POS', orderId);
     if (order.version !== request.expectedVersion) {
       throw new ConcurrencyError(
         `Expected version ${request.expectedVersion}, but got ${order.version}`,
@@ -112,7 +117,8 @@ export class PaymentService {
       request.cashTendered === undefined || request.cashTendered === null
         ? null
         : Money.fromMinorUnits(request.cashTendered, order.currency);
-    const tipAmount = calculateTip(amountApplied, request.tip, this.context.tipsEnabled, {
+    const tipAmount = calculateTip(amountApplied, request.tip,
+      this.licensing?.currentConfiguration().payment.tipsEnabled ?? this.context.tipsEnabled, {
       method: request.method,
       cashTendered,
       authoritativeBalanceDue: order.getBalanceDue(),
@@ -160,6 +166,7 @@ export class PaymentService {
       }
       throw this.commandConflict();
     }
+    this.licensing?.assertAllowed('PAYMENT_VOID', 'CORE_POS');
     if (order.version !== request.expectedVersion) {
       throw new ConcurrencyError(
         `Expected version ${request.expectedVersion}, but got ${order.version}`,

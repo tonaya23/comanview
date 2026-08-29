@@ -19,3 +19,4 @@ export * from './tables.js';
 export * from './realtime.js';
 export * from './cloudAdmin.js';
 export * from './provisioning.js';
+export * from './licensing.js';

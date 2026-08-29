@@ -23,6 +23,7 @@ import type { PrintService } from '../../printing/application/PrintService.js';
 import type { KdsService } from '../../kds/application/KdsService.js';
 import type { RealtimeHub } from '../../../infrastructure/realtime/RealtimeHub.js';
 import type { AuthorizedOperation } from '../../../app/authContext.js';
+import type { EdgeLicenseManager } from '../../licensing/EdgeLicenseManager.js';
 import {
   CreateOrderRequest,
   AddOrderItemRequest,
@@ -49,6 +50,7 @@ export class OrderService {
     private readonly kdsService: KdsService,
     private readonly tableRepo: TableRepository,
     private readonly realtime: RealtimeHub,
+    private readonly licensing?: EdgeLicenseManager,
   ) {}
 
   async createOrder(
@@ -64,6 +66,7 @@ export class OrderService {
       }
       throw new AppError('COMMAND_ID_CONFLICT', 409, 'commandId was already used.');
     }
+    this.licensing?.assertAllowed('ORDER_CREATE', request.orderType === 'TABLE' ? 'TABLE_SERVICE' : 'CORE_POS');
     const tenantId = EntityId.fromString(this.context.tenantId);
     const locationId = EntityId.fromString(this.context.locationId);
     const requestedTableIds = request.tableIds ?? [];
@@ -110,6 +113,7 @@ export class OrderService {
     if (this.orderRepo.hasProcessedCommand(request.commandId)) {
       return mapOrderToResponse(order);
     }
+    this.licensing?.assertAllowed('ORDER_ADD_ITEM', 'CORE_POS', orderId);
 
     const product = this.catalogRepo.getProductById(EntityId.fromString(request.productId));
     if (!product) throw new ObjectNotFoundError(`Product ${request.productId} not found`);
@@ -165,6 +169,7 @@ export class OrderService {
         `Expected version ${request.expectedVersion}, but got ${order.version}`,
       );
     }
+    this.licensing?.assertAllowed('ORDER_ADD_ITEM', 'CORE_POS', orderId);
 
     const item = order.items.find((candidate) => candidate.id.toString() === itemId);
     if (!item) throw new OrderItemNotFoundError(itemId);
@@ -223,6 +228,7 @@ export class OrderService {
         `Expected version ${request.expectedVersion}, but got ${order.version}`,
       );
     }
+    this.licensing?.assertAllowed('ORDER_ADD_ITEM', 'CORE_POS', orderId);
 
     order.updateItemSpecialInstructions(
       EntityId.fromString(itemId),
@@ -243,6 +249,7 @@ export class OrderService {
     void operation;
     const order = this.orderRepo.getOrderById(EntityId.fromString(orderId));
     if (!order) throw new ObjectNotFoundError(`Order ${orderId} not found`);
+    this.licensing?.assertAllowed('ORDER_ADD_ITEM', 'CORE_POS', orderId);
 
     if (order.version !== request.expectedVersion) {
       throw new ConcurrencyError(
@@ -282,6 +289,7 @@ export class OrderService {
         `Expected version ${request.expectedVersion}, but got ${order.version}`,
       );
     }
+    this.licensing?.assertAllowed('ORDER_SEND', 'CORE_POS', orderId);
 
     const round = order.sendDraftItems(request.commandId);
     const jobs = this.printService.createStationJobs(order, round);
@@ -317,6 +325,7 @@ export class OrderService {
         `Expected version ${request.expectedVersion}, but got ${order.version}`,
       );
     }
+    this.licensing?.assertAllowed('ORDER_CLOSE', 'CORE_POS', orderId);
 
     order.close(request.commandId);
     const releasedTableIds = order.tableIds.map((tableId) => tableId.toString());
@@ -333,6 +342,7 @@ export class OrderService {
     void operation;
     const order = this.orderRepo.getOrderById(EntityId.fromString(orderId));
     if (!order) throw new ObjectNotFoundError(`Order ${orderId} not found`);
+    this.licensing?.assertAllowed('ORDER_CANCEL', 'CORE_POS', orderId);
 
     if (order.version !== request.expectedVersion) {
       throw new ConcurrencyError(
@@ -354,6 +364,7 @@ export class OrderService {
   ): Promise<OrderResponse> {
     const order = this.orderRepo.getOrderById(EntityId.fromString(orderId));
     if (!order) throw new ObjectNotFoundError(`Order ${orderId} not found`);
+    this.licensing?.assertAllowed('ORDER_CANCEL', 'TABLE_SERVICE', orderId);
 
     if (this.orderRepo.hasProcessedCommand(request.commandId)) {
       const event = this.orderRepo.getProcessedCommandEvent(request.commandId);
@@ -443,6 +454,8 @@ export class OrderService {
       );
     }
 
+    this.licensing?.assertAllowed('ORDER_ADD_ITEM', 'TABLE_SERVICE', orderId);
+
     this.assertTablesAssignable(request.tableIds, orderId);
     const previousTableIds = order.tableIds.map((tableId) => tableId.toString());
     const tableIds = request.tableIds.map((t) => EntityId.fromString(t));
@@ -479,6 +492,7 @@ export class OrderService {
         `Expected version ${request.expectedVersion}, but got ${order.version}`,
       );
     }
+    this.licensing?.assertAllowed('ORDER_SEND', 'CORE_POS', orderId);
     if (order.paymentRequestedAt) return mapOrderToResponse(order);
 
     order.requestPayment(request.commandId);

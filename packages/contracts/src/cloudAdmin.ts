@@ -11,6 +11,9 @@ export const CloudPermissionSchema = z.enum([
   'CLOUD_EDGE_REVOKE',
   'CLOUD_EDGE_REPLACE',
   'CLOUD_ADMIN_AUDIT_VIEW',
+  'CLOUD_PLAN_MANAGE',
+  'CLOUD_LICENSE_MANAGE',
+  'CLOUD_CONFIGURATION_MANAGE',
 ]);
 export const CloudAdminRoleSchema = z.enum(['PLATFORM_ADMIN', 'PLATFORM_ADMIN_READ', 'SUPPORT_READ']);
 export const CloudEdgeStatusSchema = z.enum(['ONLINE', 'OFFLINE', 'DEGRADED', 'UNPROVISIONED']);

@@ -16,4 +16,5 @@ export * from './edge/repositories/AuthRepository.js';
 export * from './edge/repositories/AuditRepository.js';
 export * from './edge/repositories/TableRepository.js';
 export * from './edge/repositories/SyncOutboxRepository.js';
+export * from './edge/repositories/EdgeControlRepository.js';
 export * from './cloud/index.js';

@@ -16,6 +16,7 @@ export const CashSessionSchema = z.object({
   countedCash: MoneySchema.nullable(),
   expectedCashAtClose: MoneySchema.nullable(),
   difference: MoneySchema.nullable(),
+  purpose: z.enum(['NORMAL', 'LICENSE_RECOVERY']),
 });
 export type CashSessionResponse = z.infer<typeof CashSessionSchema>;
 
@@ -28,6 +29,7 @@ export const OpenCashSessionRequestSchema = z.object({
   commandId: z.string().min(1),
   openingFloatAmount: z.number().int().nonnegative(),
   businessDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  purpose: z.enum(['NORMAL', 'LICENSE_RECOVERY']).optional(),
 });
 export type OpenCashSessionRequest = z.infer<typeof OpenCashSessionRequestSchema>;
 

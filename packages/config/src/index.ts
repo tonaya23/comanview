@@ -24,6 +24,15 @@ export interface EdgeSyncConfig {
   heartbeatIntervalMs: number;
   edgeVersion: string;
   schemaVersion: string;
+  licensing: EdgeLicensingConfig;
+}
+
+export interface EdgeLicensingConfig {
+  enforcementEnabled: boolean;
+  publicKeyring: Record<string, string>;
+  pullIntervalMs: number;
+  maxBackoffMs: number;
+  checkpointIntervalMs: number;
 }
 
 export function loadEdgeSyncConfig(environment: NodeJS.ProcessEnv = process.env): EdgeSyncConfig {
@@ -43,6 +52,22 @@ export function loadEdgeSyncConfig(environment: NodeJS.ProcessEnv = process.env)
     throw new Error('COMANVIEW_CLOUD_URL is required when sync is enabled.');
   }
   const token = enabled && rawToken ? z.string().min(16).parse(rawToken) : rawToken;
+  let publicKeyring: Record<string, string> = {};
+  if (environment['COMANVIEW_LICENSE_PUBLIC_KEYRING']) {
+    try {
+      publicKeyring = z.record(z.string().min(1), z.string().min(40)).parse(
+        JSON.parse(environment['COMANVIEW_LICENSE_PUBLIC_KEYRING']),
+      );
+    } catch {
+      throw new Error('COMANVIEW_LICENSE_PUBLIC_KEYRING must be a JSON object of kid to PEM public key.');
+    }
+  }
+  const enforcementEnabled = booleanFromEnvironment.default(
+    environment['NODE_ENV'] === 'production' ? 'true' : 'false',
+  ).parse(environment['COMANVIEW_LICENSE_ENFORCEMENT_ENABLED']);
+  if (enforcementEnabled && Object.keys(publicKeyring).length === 0) {
+    throw new Error('COMANVIEW_LICENSE_PUBLIC_KEYRING is required when licensing enforcement is enabled.');
+  }
   return {
     enabled,
     cloudUrl: cloudUrl ? z.string().url().parse(cloudUrl).replace(/\/$/, '') : null,
@@ -62,7 +87,20 @@ export function loadEdgeSyncConfig(environment: NodeJS.ProcessEnv = process.env)
       environment['COMANVIEW_HEARTBEAT_INTERVAL_MS'],
     ),
     edgeVersion: environment['COMANVIEW_EDGE_VERSION']?.trim() || '0.0.0-dev',
-    schemaVersion: environment['COMANVIEW_EDGE_SCHEMA_VERSION']?.trim() || '10',
+    schemaVersion: environment['COMANVIEW_EDGE_SCHEMA_VERSION']?.trim() || '12',
+    licensing: {
+      enforcementEnabled,
+      publicKeyring,
+      pullIntervalMs: optionalPositiveInteger(300_000, 3_600_000).parse(
+        environment['COMANVIEW_CONTROL_PULL_INTERVAL_MS'],
+      ),
+      maxBackoffMs: optionalPositiveInteger(3_600_000, 86_400_000).parse(
+        environment['COMANVIEW_CONTROL_PULL_MAX_BACKOFF_MS'],
+      ),
+      checkpointIntervalMs: optionalPositiveInteger(60_000, 300_000).parse(
+        environment['COMANVIEW_LICENSE_CHECKPOINT_INTERVAL_MS'],
+      ),
+    },
   };
 }
 
@@ -83,6 +121,12 @@ export interface CloudConfig {
   edgeCredentials: CloudEdgeCredential[];
   admin: CloudAdminConfig;
   provisioning: CloudProvisioningConfig;
+  licensing: CloudLicensingConfig | null;
+}
+
+export interface CloudLicensingConfig {
+  signingKid: string;
+  privateKeyPem: string;
 }
 
 export interface CloudProvisioningConfig {
@@ -181,6 +225,14 @@ export function loadCloudConfig(environment: NodeJS.ProcessEnv = process.env): C
     .enum(['PLATFORM_ADMIN', 'PLATFORM_ADMIN_READ', 'SUPPORT_READ'])
     .default('PLATFORM_ADMIN')
     .parse(environment['COMANVIEW_CLOUD_DEV_ADMIN_ROLE']);
+  const signingKid = environment['COMANVIEW_CLOUD_SIGNING_KID']?.trim();
+  const privateKeyPem = environment['COMANVIEW_CLOUD_SIGNING_PRIVATE_KEY_PEM']?.replace(/\\n/g, '\n');
+  if (Boolean(signingKid) !== Boolean(privateKeyPem)) {
+    throw new Error('COMANVIEW_CLOUD_SIGNING_KID and COMANVIEW_CLOUD_SIGNING_PRIVATE_KEY_PEM must be configured together.');
+  }
+  if (nodeEnvironment === 'production' && (!signingKid || !privateKeyPem)) {
+    throw new Error('Cloud signing key deployment secrets are required in production.');
+  }
   return {
     databaseUrl: z.string().url().parse(environment['DATABASE_URL']),
     port: optionalPositiveInteger(4000, 65_535).parse(environment['COMANVIEW_CLOUD_PORT']),
@@ -192,6 +244,7 @@ export function loadCloudConfig(environment: NodeJS.ProcessEnv = process.env): C
       environment['COMANVIEW_CLOUD_SYNC_MAX_BATCH_SIZE'],
     ),
     edgeCredentials,
+    licensing: signingKid && privateKeyPem ? { signingKid, privateKeyPem } : null,
     provisioning: {
       codeTtlMs: optionalPositiveInteger(1_800_000, 86_400_000).parse(
         environment['COMANVIEW_CLOUD_PROVISIONING_CODE_TTL_MS'],

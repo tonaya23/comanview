@@ -433,6 +433,9 @@ export const cashSessions = sqliteTable('cash_sessions', {
   countedCashAmount: integer('counted_cash_amount'),
   differenceAmount: integer('difference_amount'),
   openCommandId: text('open_command_id').notNull().unique(),
+  purpose: text('purpose').notNull().default('NORMAL'),
+  openedLicenseRevision: integer('opened_license_revision'),
+  openedLicenseMode: text('opened_license_mode'),
 });
 
 export const cashMovements = sqliteTable('cash_movements', {
@@ -484,3 +487,66 @@ export const payments = sqliteTable('payments', {
   completedAt: integer('completed_at', { mode: 'timestamp_ms' }),
   voidedAt: integer('voided_at', { mode: 'timestamp_ms' }),
 });
+
+export const edgeControlDocuments = sqliteTable(
+  'edge_control_documents',
+  {
+    documentId: text('document_id').primaryKey(),
+    documentType: text('document_type').notNull(),
+    revision: integer('revision').notNull(),
+    documentHash: text('document_hash').notNull(),
+    envelopeJson: text('envelope_json').notNull(),
+    payloadJson: text('payload_json').notNull(),
+    issuedAt: integer('issued_at', { mode: 'timestamp_ms' }).notNull(),
+    expiresAt: integer('expires_at', { mode: 'timestamp_ms' }),
+    graceUntil: integer('grace_until', { mode: 'timestamp_ms' }),
+    receivedAt: integer('received_at', { mode: 'timestamp_ms' }).notNull(),
+    isCurrent: integer('is_current', { mode: 'boolean' }).notNull().default(false),
+  },
+  (table) => ({ streamRevision: uniqueIndex('unq_edge_control_stream_revision').on(table.documentType, table.revision) }),
+);
+
+export const edgeControlRuntime = sqliteTable('edge_control_runtime', {
+  singletonKey: text('singleton_key').primaryKey(),
+  desiredControlRevision: integer('desired_control_revision').notNull().default(0),
+  lastSuccessfulPullAt: integer('last_successful_pull_at', { mode: 'timestamp_ms' }),
+  lastCloudTime: integer('last_cloud_time', { mode: 'timestamp_ms' }),
+  effectiveTimeFloor: integer('effective_time_floor', { mode: 'timestamp_ms' }),
+  lastWallTime: integer('last_wall_time', { mode: 'timestamp_ms' }),
+  lastCheckpointAt: integer('last_checkpoint_at', { mode: 'timestamp_ms' }),
+  clockStatus: text('clock_status').notNull().default('TRUSTED'),
+  cloudReachable: integer('cloud_reachable', { mode: 'boolean' }).notNull().default(false),
+  lastError: text('last_error'),
+  stickyDeclaredState: text('sticky_declared_state'),
+  protectedCapabilitiesJson: text('protected_capabilities_json').notNull().default('[]'),
+  restrictionStartedAt: integer('restriction_started_at', { mode: 'timestamp_ms' }),
+  recoverySessionConsumed: integer('recovery_session_consumed', { mode: 'boolean' }).notNull().default(false),
+});
+
+export const edgeControlAckOutbox = sqliteTable('edge_control_ack_outbox', {
+  commandId: text('command_id').primaryKey(),
+  documentType: text('document_type').notNull(),
+  revision: integer('revision').notNull(),
+  documentHash: text('document_hash').notNull(),
+  appliedAt: integer('applied_at', { mode: 'timestamp_ms' }).notNull(),
+  attemptCount: integer('attempt_count').notNull().default(0),
+  nextAttemptAt: integer('next_attempt_at', { mode: 'timestamp_ms' }),
+  ackedAt: integer('acked_at', { mode: 'timestamp_ms' }),
+  lastError: text('last_error'),
+});
+
+export const edgeProtectedOrders = sqliteTable('edge_protected_orders', {
+  orderId: text('order_id').primaryKey().references(() => orders.id),
+  capturedAt: integer('captured_at', { mode: 'timestamp_ms' }).notNull(),
+  licenseRevision: integer('license_revision'),
+  resolvedAt: integer('resolved_at', { mode: 'timestamp_ms' }),
+});
+
+export const cashSessionProtectedOrders = sqliteTable(
+  'cash_session_protected_orders',
+  {
+    cashSessionId: text('cash_session_id').notNull().references(() => cashSessions.id),
+    orderId: text('order_id').notNull().references(() => orders.id),
+  },
+  (table) => ({ unique: uniqueIndex('unq_cash_session_protected_order').on(table.cashSessionId, table.orderId) }),
+);

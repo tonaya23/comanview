@@ -6,6 +6,7 @@ import type { PrintJobResponse, RequestPrintJob } from '@comanview/contracts';
 import { ObjectNotFoundError } from '../../../app/errors.js';
 import { AppError } from '../../../app/errorHandler.js';
 import type { AuthorizedOperation } from '../../../app/authContext.js';
+import type { EdgeLicenseManager } from '../../licensing/EdgeLicenseManager.js';
 
 export function mapPrintJob(job: PrintJob): PrintJobResponse {
   return {
@@ -28,9 +29,11 @@ export class PrintService {
   constructor(
     private readonly printRepo: PrintJobRepository,
     private readonly orderRepo: OrderRepository,
+    private readonly licensing?: EdgeLicenseManager,
   ) {}
 
   createStationJobs(order: Order, round: Round): NewPrintJob[] {
+    if (this.licensing && !this.licensing.hasCapability('PRINTING')) return [];
     const stationGroups = new Map<string, typeof order.items>();
     for (const item of order.items) {
       if (!item.roundId?.equals(round.id) || !item.snapshot.stationId) continue;
@@ -80,6 +83,7 @@ export class PrintService {
     if (existing) return mapPrintJob(existing);
     if (this.orderRepo.hasProcessedCommand(request.commandId)) throw this.commandConflict();
     const order = this.requireOrder(orderId);
+    this.licensing?.assertAllowed('PRINT', 'PRINTING', orderId);
     if (order.status !== 'OPEN') {
       throw new AppError(
         'PRECHECK_REQUIRES_OPEN_ORDER',
@@ -124,6 +128,7 @@ export class PrintService {
     if (existing) return mapPrintJob(existing);
     if (this.orderRepo.hasProcessedCommand(request.commandId)) throw this.commandConflict();
     const order = this.requireOrder(orderId);
+    this.licensing?.assertAllowed('PRINT', 'PRINTING', orderId);
     if (order.status !== 'CLOSED') {
       throw new AppError(
         'RECEIPT_REQUIRES_CLOSED_ORDER',
@@ -172,6 +177,7 @@ export class PrintService {
   }
 
   listRecent(): PrintJobResponse[] {
+    this.licensing?.assertCapabilityAvailable('PRINTING');
     return this.printRepo.listRecent().map(mapPrintJob);
   }
 

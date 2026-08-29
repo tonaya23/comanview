@@ -690,6 +690,28 @@ Limitada en tiempo.
 
 Ligada a Tenant/Location.
 
+## 3.6 Política temporal y operación protegida V1
+
+Un `LicenseDocument` firmado tendrá vigencia de 7 días y un `graceUntil` firmado e inmutable 21 días posterior a `expiresAt`. La ventana offline normal máxima es, por tanto, 28 días. Cloud inaccesible es una observación de conectividad y MUST NOT cambiar por sí misma el estado comercial declarado.
+
+Edge MUST calcular el tiempo efectivo con reloj monotónico durante el proceso y un `effectiveTimeFloor` durable. Debe detectar rollback superior a 5 minutos y, tras restart, saltos hacia adelante superiores a 7 días. Cambiar el reloj local MUST NOT extender indefinidamente una licencia. Edge conservará al menos las tres últimas revisiones válidas, sin permitir rollback de revisión ni aceptar dos documentos distintos con la misma revisión.
+
+Si `graceUntil` vence, o llega un estado `SUSPENDED`/`TERMINATED`, con una `CashSession` legítimamente abierta bajo una política válida, Edge aplicará Guaranteed Shift hasta cerrar esa sesión. Las reducciones de capabilities necesarias para completar ese turno se difieren y persisten únicamente durante la sesión protegida. Después del cierre MUST bloquearse una nueva sesión mientras la política restrictiva continúe.
+
+Si no hay `CashSession` abierta pero existen Orders OPEN creadas antes del bloqueo, Edge las capturará durablemente como Protected Orders. Solo podrán completarse preparación, KDS, impresión necesaria, Payment y cierre de esas Orders; no podrán agregarse items, crearse Orders/mesas nuevas ni iniciar operación administrativa normal.
+
+Para liquidar Protected Orders MAY abrirse una única `CashSession` explícita con propósito `LICENSE_RECOVERY`, ligada al conjunto capturado y auditada. Esta sesión no habilita consumo nuevo, permite la operación financiera y Corte Z necesarios, y no puede encadenarse con otra sesión de recuperación bajo la misma restricción.
+
+Guaranteed Shift Recovery sin un documento actualmente utilizable solo es válido cuando el estado durable demuestra que la `CashSession` OPEN fue abierta bajo una revisión y modo autorizados. Una DB nueva, estado corrupto o una sesión sin esa prueba MUST NOT obtener operación completa.
+
+## 3.7 Documentos y entrega Cloud → Edge V1
+
+License, Feature Flags y Configuration son streams firmados y versionados separados, aunque compartan transporte. Cloud firmará con Ed25519 y `kid`; la private key MUST existir solo como secret de deployment. Edge usará un keyring público capaz de contener al menos `current` y `next` durante rotación.
+
+Heartbeat comunicará `desiredControlRevision` únicamente como hint. La convergencia durable depende de pull autenticado independiente cada 5 minutos, renovación cuando resten 48 horas y backoff máximo de 1 hora. Perder el hint MUST NOT impedir convergencia. V1 no usa Sync Inbox, SSE ni WebSocket como canal Cloud → Edge.
+
+Configuration V1 incluye únicamente `payment.tipsEnabled` y `payment.tipPercentageOptionsBasisPoints`. El código operacional consulta EffectiveCapabilities y nunca `planCode`; plan comercial, Entitlements y Feature Flags permanecen conceptos separados.
+
 Auditada.
 
 ## 3.6 Restricciones en suspensión

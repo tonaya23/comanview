@@ -77,6 +77,7 @@ describe('createEdgeClient', () => {
           id: '01991a00-0000-7000-8000-000000000731',
           cashRegisterId: '01991a00-0000-7000-8000-000000000601',
           status: 'OPEN',
+          purpose: 'NORMAL',
           openingFloat: { amount: 1000, currency: 'MXN' },
           expectedCash: { amount: 1000, currency: 'MXN' },
           blindCashCount: false,

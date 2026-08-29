@@ -1894,3 +1894,24 @@ button:focus-visible {
   color: #9a352c;
   font-size: 0.82rem;
 }
+
+.license-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 18px;
+  background: #fff3cd;
+  color: #674b00;
+  border-bottom: 1px solid #e6c45f;
+}
+
+.license-banner span { font-size: 0.86rem; }
+.license-banner--suspended_blocked,
+.license-banner--terminated_blocked,
+.license-banner--post_grace_blocked,
+.license-banner--no_valid_license,
+.license-banner--clock_suspect {
+  background: #f8dddd;
+  color: #7e2525;
+  border-color: #e5a3a3;
+}

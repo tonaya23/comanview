@@ -14,6 +14,7 @@ import type {
   AuthUserResponse,
   PermissionCode,
   RestaurantTableResponse,
+  EffectiveCapabilitiesResponse,
 } from '@comanview/contracts';
 import { OperationalRealtimeMessageSchema, PermissionCodes } from '@comanview/contracts';
 import {
@@ -76,6 +77,7 @@ export function App() {
   const [order, setOrder] = useState<OrderResponse | null>(null);
   const [cashSession, setCashSession] = useState<CashSessionResponse | null>(null);
   const [paymentConfig, setPaymentConfig] = useState<PaymentConfigResponse | null>(null);
+  const [licensing, setLicensing] = useState<EffectiveCapabilitiesResponse | null>(null);
   const [loadingCatalog, setLoadingCatalog] = useState(true);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -124,6 +126,7 @@ export function App() {
     setOrder(null);
     setCashSession(null);
     setPaymentConfig(null);
+    setLicensing(null);
     setPrintJobs([]);
     setShowOpenCash(false);
     setOpenCashError(null);
@@ -174,7 +177,7 @@ export function App() {
   const refreshOperationalState = useCallback(async () => {
     if (!authUser) return;
     try {
-      const [nextCategories, nextProducts, nextTables, currentCash, config] = await Promise.all([
+      const [nextCategories, nextProducts, nextTables, currentCash, config, licenseStatus] = await Promise.all([
         authUser.permissions.includes(PermissionCodes.CATALOG_VIEW)
           ? edge.getCategories()
           : Promise.resolve([]),
@@ -190,12 +193,14 @@ export function App() {
         authUser.permissions.includes(PermissionCodes.PAYMENT_CONFIG_VIEW)
           ? edge.getPaymentConfig()
           : Promise.resolve(null),
+        edge.getLicensingStatus(),
       ]);
       setCategories(nextCategories);
       setProducts(nextProducts);
       setTables(nextTables);
       setCashSession(currentCash.session);
       setPaymentConfig(config);
+      setLicensing(licenseStatus);
       setConnection('CONNECTED');
     } catch (stateError) {
       if (stateError instanceof EdgeClientError && stateError.code === 'EDGE_UNREACHABLE')
@@ -369,7 +374,10 @@ export function App() {
       )
     : null;
   const isBusy = pendingAction !== null;
-  const canOperateOrder = order?.status === 'OPEN' && connection === 'CONNECTED' && !isBusy;
+  const licenseAllowsNewOrders = licensing !== null &&
+    ['FULL','FULL_WITH_WARNING','GRACE_OPERATING','GUARANTEED_SHIFT'].includes(licensing.mode);
+  const canOperateOrder = order?.status === 'OPEN' && connection === 'CONNECTED' && !isBusy &&
+    (licenseAllowsNewOrders || Boolean(order && licensing?.mode === 'PROTECTED_OPERATIONS'));
 
   function clearFeedback() {
     setError(null);
@@ -659,6 +667,7 @@ export function App() {
         commandId: crypto.randomUUID(),
         openingFloatAmount: amount,
         businessDate: getLocalBusinessDate(),
+        purpose: licensing?.mode === 'PROTECTED_OPERATIONS' ? 'LICENSE_RECOVERY' : 'NORMAL',
       });
       setCashSession(session);
       setShowOpenCash(false);
@@ -1088,6 +1097,18 @@ export function App() {
           autoridad local.
         </div>
       )}
+      {licensing && !['FULL','FULL_WITH_WARNING'].includes(licensing.mode) && (
+        <div className={`license-banner license-banner--${licensing.mode.toLowerCase()}`} role="status">
+          <strong>{licensing.mode}</strong>
+          <span>{licensing.mode === 'GRACE_OPERATING'
+            ? `Licencia en grace hasta ${licensing.graceUntil ? new Date(licensing.graceUntil).toLocaleString('es-MX') : 'fecha no disponible'}.`
+            : licensing.mode === 'GUARANTEED_SHIFT'
+              ? 'Turno actual protegido. Cierra la caja para aplicar la política pendiente.'
+              : licensing.mode === 'PROTECTED_OPERATIONS' || licensing.mode === 'GUARANTEED_SHIFT_RECOVERY'
+                ? 'Modo de recuperación: solo pueden liquidarse Orders protegidas existentes.'
+                : 'La licencia bloquea nueva operación. Contacta administración.'}</span>
+        </div>
+      )}
       {(error || notice) && (
         <div
           className={`feedback ${error ? 'feedback--error' : 'feedback--success'}`}
@@ -1249,6 +1270,7 @@ export function App() {
                 disabled={
                   isBusy ||
                   connection !== 'CONNECTED' ||
+                  !licenseAllowsNewOrders ||
                   !hasPermission(PermissionCodes.ORDER_CREATE)
                 }
                 onClick={() => void createOrder()}
@@ -1268,6 +1290,7 @@ export function App() {
                 disabled={
                   isBusy ||
                   connection !== 'CONNECTED' ||
+                  !licenseAllowsNewOrders ||
                   !hasPermission(PermissionCodes.ORDER_CREATE)
                 }
                 onClick={() => void createOrder()}
@@ -1818,8 +1841,12 @@ export function App() {
           >
             <div className="modal-heading">
               <div>
-                <span className="eyebrow">Inicio de turno</span>
-                <h2 id="cash-title">Abrir caja</h2>
+                <span className="eyebrow">
+                  {licensing?.mode === 'PROTECTED_OPERATIONS' ? 'Recuperación restringida' : 'Inicio de turno'}
+                </span>
+                <h2 id="cash-title">
+                  {licensing?.mode === 'PROTECTED_OPERATIONS' ? 'Abrir caja de recuperación' : 'Abrir caja'}
+                </h2>
               </div>
               <button
                 type="button"
@@ -1849,7 +1876,9 @@ export function App() {
                 />
               </label>
               <p className="field-help">
-                Se guarda en minor units exactos. El efectivo esperado parte de este fondo.
+                {licensing?.mode === 'PROTECTED_OPERATIONS'
+                  ? 'Esta sesión solo permite cobrar y cerrar las Orders protegidas existentes.'
+                  : 'Se guarda en minor units exactos. El efectivo esperado parte de este fondo.'}
               </p>
               <div
                 className={`modal-form-feedback${openCashError ? ' modal-form-feedback--error' : ''}`}

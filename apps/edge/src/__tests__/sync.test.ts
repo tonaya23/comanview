@@ -39,6 +39,10 @@ const config: EdgeSyncConfig = {
   heartbeatIntervalMs: 30_000,
   edgeVersion: 'test',
   schemaVersion: '10',
+  licensing: {
+    enforcementEnabled: false, publicKeyring: {}, pullIntervalMs: 300_000,
+    maxBackoffMs: 3_600_000, checkpointIntervalMs: 60_000,
+  },
 };
 
 class FakeTransport implements CloudSyncTransport {

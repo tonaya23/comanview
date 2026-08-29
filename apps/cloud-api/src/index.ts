@@ -6,6 +6,7 @@ import { loadCloudConfig } from '@comanview/config';
 import {
   CloudAdminAuthRepository,
   CloudControlPlaneRepository,
+  CloudLicensingRepository,
   CloudReadRepository,
   CloudSyncRepository,
   createCloudDatabase,
@@ -36,6 +37,9 @@ import {
   registerCloudAdminRoutes,
   type CloudAdminRouteDependencies,
 } from './admin/routes.js';
+import { CloudLicensingService } from './licensing/CloudLicensingService.js';
+import { registerCloudLicensingRoutes } from './licensing/routes.js';
+import { LicensingConflictError } from '@comanview/database';
 
 const RawSyncBatchSchema = z.object({
   protocolVersion: z.string(),
@@ -56,6 +60,7 @@ export interface BuildCloudAppOptions {
   maxBatchSize?: number;
   admin?: CloudAdminRouteDependencies;
   controlPlane?: CloudControlPlaneService;
+  licensing?: CloudLicensingService;
 }
 
 export function buildCloudApp(options: BuildCloudAppOptions) {
@@ -87,6 +92,9 @@ export function buildCloudApp(options: BuildCloudAppOptions) {
           ? 'Replacement cutover requires the old Edge to remain ACTIVE.'
           : 'Control plane state does not allow this operation.';
       return reply.status(409).send({ error: error.code, message });
+    }
+    if (error instanceof LicensingConflictError) {
+      return reply.status(409).send({ error: error.code, message: 'Licensing state changed or does not allow this operation.' });
     }
     const requestError = error as Error & { statusCode?: number };
     if (typeof requestError.statusCode === 'number' && requestError.statusCode < 500) {
@@ -127,15 +135,20 @@ export function buildCloudApp(options: BuildCloudAppOptions) {
       request.headers.authorization,
     );
     const receivedAt = await service.heartbeat(edge, request.body as EdgeHeartbeat);
-    reply.send(
-      HeartbeatAckSchema.parse({ edgeId: edge.edgeId, receivedAt: receivedAt.toISOString() }),
-    );
+    const desiredControlRevision = options.licensing
+      ? await options.licensing.desiredRevision(edge.edgeId)
+      : undefined;
+    reply.send(HeartbeatAckSchema.parse({ edgeId: edge.edgeId,
+      receivedAt: receivedAt.toISOString(), desiredControlRevision }));
   });
 
   if (options.controlPlane) registerProvisioningRoutes(app, options.controlPlane, authenticator);
   if (options.admin) {
     registerCloudAdminRoutes(app, options.admin);
     if (options.controlPlane) registerCloudControlPlaneRoutes(app, { auth: options.admin.auth, service: options.controlPlane });
+    if (options.licensing) registerCloudLicensingRoutes(app, {
+      auth: options.admin.auth, authenticator, service: options.licensing,
+    });
   }
 
   return app;
@@ -148,8 +161,18 @@ async function start(): Promise<void> {
   const adminRepository = new CloudAdminAuthRepository(database.pool);
   const adminAuth = new CloudAdminAuthService(adminRepository, config.admin);
   const cloudRead = new CloudReadRepository(database.pool, config.admin.projectionVersion);
+  const licensingRepository = new CloudLicensingRepository(database.pool);
+  const licensing = config.licensing
+    ? new CloudLicensingService(licensingRepository, config.licensing)
+    : undefined;
   const controlPlane = new CloudControlPlaneService(
-    new CloudControlPlaneRepository(database.pool), config.provisioning,
+    new CloudControlPlaneRepository(database.pool), config.provisioning, () => new Date(),
+    licensing ? async (locationId) => {
+      if (!(await licensingRepository.getLocationAssignment(locationId))) {
+        throw new CloudError('LOCATION_LICENSE_REQUIRED', 409,
+          'Assign a commercial license before provisioning an Edge.');
+      }
+    } : undefined,
   );
   const app = buildCloudApp({
     repository,
@@ -157,6 +180,7 @@ async function start(): Promise<void> {
     maxBatchSize: config.maxBatchSize,
     admin: { auth: adminAuth, read: cloudRead, config: config.admin },
     controlPlane,
+    ...(licensing ? { licensing } : {}),
   });
   app.addHook('onClose', () => database.close());
   try {

@@ -22,6 +22,7 @@
     "@comanview/money": "workspace:*",
     "@comanview/printing": "workspace:*",
     "@comanview/sync": "workspace:*",
+    "@comanview/licensing": "workspace:*",
     "@fastify/websocket": "^11.3.0",
     "fastify": "^5.12.0",
     "fastify-plugin": "^6.0.0",

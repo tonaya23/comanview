@@ -17,6 +17,10 @@ import type {
   CanonicalCloudLocation,
   EdgeReplacement,
   ProvisionedEdge,
+  CloudPlan,
+  LocationLicenseAssignment,
+  CapabilityCode,
+  LicenseDeclaredState,
 } from '@comanview/contracts';
 
 type View = 'control-plane' | 'locations' | 'overview' | 'orders' | 'sales' | 'cash';
@@ -165,31 +169,521 @@ function CashSessions({ location, onError }: { location: CloudLocationSummary; o
 }
 
 function ControlPlane({ onError }: { onError(value: string | null): void }) {
-  const [tenants, setTenants] = useState<CloudTenant[]>([]); const [tenant, setTenant] = useState<CloudTenant | null>(null);
-  const [locations, setLocations] = useState<CanonicalCloudLocation[]>([]); const [edges, setEdges] = useState<Record<string, ProvisionedEdge[]>>({});
-  const [pendingReplacements, setPendingReplacements] = useState<Record<string, EdgeReplacement | null>>({});
-  const [tenantName, setTenantName] = useState(''); const [locationName, setLocationName] = useState(''); const [timezone, setTimezone] = useState('America/Matamoros');
-  const [issued, setIssued] = useState<{ provisioningCodeId: string; code: string; expiresAt: string } | null>(null);
-  const loadTenants = () => client.getTenants().then((result) => setTenants(result.data)).catch((error) => onError(message(error)));
-  const loadLocations = (selected: CloudTenant) => client.getCanonicalLocations(selected.tenantId).then(async (result) => {
-    setLocations(result.data); setTenant(selected);
-    const states = await Promise.all(result.data.map(async (location) => {
-      const [edgeResult, replacementResult] = await Promise.all([
-        client.getEdges(location.locationId), client.getPendingReplacement(location.locationId),
-      ]);
-      return [location.locationId, edgeResult.data, replacementResult.replacement] as const;
-    }));
-    setEdges(Object.fromEntries(states.map(([locationId, locationEdges]) => [locationId, locationEdges])));
-    setPendingReplacements(Object.fromEntries(states.map(([locationId, , replacement]) => [locationId, replacement])));
-  }).catch((error) => onError(message(error)));
-  useEffect(() => { void loadTenants(); }, []);
-  return <section><PageTitle title="Tenant & Edge Control Plane" subtitle="Provisioning seguro; el código se muestra una sola vez" />
-    <div className="control-grid"><article className="panel"><h2>Nuevo Tenant</h2><label>Nombre<input value={tenantName} onChange={(event) => setTenantName(event.target.value)} /></label><button className="primary" onClick={() => client.createTenant({ commandId: crypto.randomUUID(), displayName: tenantName }).then((created) => { setTenantName(''); void loadTenants(); void loadLocations(created); }).catch((error) => onError(message(error)))}>Crear Tenant</button></article>
-      <article className="panel"><h2>Nueva Location</h2><label>Tenant<select value={tenant?.tenantId ?? ''} onChange={(event) => { const selected = tenants.find((item) => item.tenantId === event.target.value); if (selected) void loadLocations(selected); }}><option value="">Selecciona</option>{tenants.map((item) => <option key={item.tenantId} value={item.tenantId}>{item.displayName ?? item.tenantId}</option>)}</select></label><label>Nombre<input value={locationName} onChange={(event) => setLocationName(event.target.value)} /></label><label>Timezone IANA<input value={timezone} onChange={(event) => setTimezone(event.target.value)} /></label><button className="primary" disabled={!tenant} onClick={() => tenant && client.createLocation(tenant.tenantId, { commandId: crypto.randomUUID(), displayName: locationName, timezone }).then(() => { setLocationName(''); void loadLocations(tenant); }).catch((error) => onError(message(error)))}>Crear Location</button></article></div>
-    <div className="table-card"><table><thead><tr><th>Tenant</th><th>Estado</th></tr></thead><tbody>{tenants.map((item) => <tr className="clickable" key={item.tenantId} onClick={() => void loadLocations(item)}><td>{item.displayName ?? 'Legacy sin configurar'}<small>{item.tenantId}</small></td><td><Status value={item.status} /></td></tr>)}</tbody></table></div>
-    {tenant && <article className="panel"><h2>Locations de {tenant.displayName}</h2>{locations.map((location) => { const active = edges[location.locationId]?.find((edge) => edge.status === 'ACTIVE'); const pending = pendingReplacements[location.locationId]; return <div className="location-control" key={location.locationId}><div><strong>{location.displayName ?? 'Pendiente de configuración'}</strong><small>{location.locationId} · {location.timezone ?? 'Timezone pendiente'}</small>{(edges[location.locationId] ?? []).map((edge) => <small key={edge.edgeId}>{shortId(edge.edgeId)} · {edge.status}</small>)}{pending && <small className="pending-replacement">Replacement PENDING · código {pending.provisioningCode.status} · expira {date(pending.provisioningCode.expiresAt)}</small>}</div><Status value={location.configurationStatus} /><span>{active ? 'Edge ACTIVE' : 'Sin Edge ACTIVE'}</span>{pending ? <button className="secondary danger" onClick={() => { const reason = window.prompt('Motivo de cancelación del Replacement'); if (reason) void client.cancelReplacement(pending.replacementId, { commandId: crypto.randomUUID(), reason }).then(() => loadLocations(tenant)).catch((error) => onError(message(error))); }}>Cancelar Replacement</button> : active ? <div className="edge-actions"><button className="secondary" onClick={() => { const reason = window.prompt('Motivo de revocación'); if (reason) void client.revokeEdge(active.edgeId, { commandId: crypto.randomUUID(), reason }).then(() => loadLocations(tenant)).catch((error) => onError(message(error))); }}>Revocar</button><button className="secondary" onClick={() => { const reason = window.prompt('Motivo del replacement'); if (reason) void client.initiateReplacement(location.locationId, { commandId: crypto.randomUUID(), oldEdgeId: active.edgeId, reason }).then((result) => { setIssued(result.provisioningCode); void loadLocations(tenant); }).catch((error) => onError(message(error))); }}>Replacement</button></div> : <button className="secondary" onClick={() => client.generateProvisioningCode(location.locationId, crypto.randomUUID()).then(setIssued).catch((error) => onError(message(error)))}>Generar código</button>}</div>; })}</article>}
-    {issued && <div className="secret-once" role="alert"><strong>Código de provisioning (cópialo ahora)</strong><code>{issued.code}</code><span>Expira {date(issued.expiresAt)}</span><div className="edge-actions"><button onClick={() => client.revokeProvisioningCode(issued.provisioningCodeId, crypto.randomUUID()).then(() => setIssued(null)).catch((error) => onError(message(error)))}>Revocar código</button><button onClick={() => setIssued(null)}>Ya lo guardé</button></div></div>}
-  </section>;
+  const [tenants, setTenants] = useState<CloudTenant[]>([]);
+  const [tenant, setTenant] = useState<CloudTenant | null>(null);
+  const [locations, setLocations] = useState<CanonicalCloudLocation[]>([]);
+  const [edges, setEdges] = useState<Record<string, ProvisionedEdge[]>>({});
+  const [pendingReplacements, setPendingReplacements] = useState<
+    Record<string, EdgeReplacement | null>
+  >({});
+  const [plans, setPlans] = useState<CloudPlan[]>([]);
+  const [licenses, setLicenses] = useState<Record<string, LocationLicenseAssignment | null>>({});
+  const [selectedPlans, setSelectedPlans] = useState<Record<string, string>>({});
+  const [planCode, setPlanCode] = useState('');
+  const [planName, setPlanName] = useState('');
+  const [planCapabilities, setPlanCapabilities] = useState<CapabilityCode[]>(['CORE_POS']);
+  const [tenantName, setTenantName] = useState('');
+  const [locationName, setLocationName] = useState('');
+  const [timezone, setTimezone] = useState('America/Matamoros');
+  const [issued, setIssued] = useState<{
+    provisioningCodeId: string;
+    code: string;
+    expiresAt: string;
+  } | null>(null);
+  const loadTenants = () =>
+    Promise.all([client.getTenants(), client.getPlans()])
+      .then(([tenantResult, planResult]) => {
+        setTenants(tenantResult.data);
+        setPlans(planResult.data);
+      })
+      .catch((error) => onError(message(error)));
+  const loadLocations = (selected: CloudTenant) =>
+    client
+      .getCanonicalLocations(selected.tenantId)
+      .then(async (result) => {
+        setLocations(result.data);
+        setTenant(selected);
+        const states = await Promise.all(
+          result.data.map(async (location) => {
+            const [edgeResult, replacementResult, license] = await Promise.all([
+              client.getEdges(location.locationId),
+              client.getPendingReplacement(location.locationId),
+              client.getLocationLicense(location.locationId).catch((error) => {
+                if (error instanceof CloudAdminClientError && error.status === 404) return null;
+                throw error;
+              }),
+            ]);
+            return [
+              location.locationId,
+              edgeResult.data,
+              replacementResult.replacement,
+              license,
+            ] as const;
+          }),
+        );
+        setEdges(
+          Object.fromEntries(
+            states.map(([locationId, locationEdges]) => [locationId, locationEdges]),
+          ),
+        );
+        setPendingReplacements(
+          Object.fromEntries(
+            states.map(([locationId, , replacement]) => [locationId, replacement]),
+          ),
+        );
+        setLicenses(
+          Object.fromEntries(states.map(([locationId, , , license]) => [locationId, license])),
+        );
+      })
+      .catch((error) => onError(message(error)));
+  useEffect(() => {
+    void loadTenants();
+  }, []);
+  return (
+    <section>
+      <PageTitle
+        title="Tenant & Edge Control Plane"
+        subtitle="Provisioning seguro; el código se muestra una sola vez"
+      />
+      <div className="control-grid">
+        <article className="panel">
+          <h2>Nuevo Tenant</h2>
+          <label>
+            Nombre
+            <input value={tenantName} onChange={(event) => setTenantName(event.target.value)} />
+          </label>
+          <button
+            className="primary"
+            onClick={() =>
+              client
+                .createTenant({ commandId: crypto.randomUUID(), displayName: tenantName })
+                .then((created) => {
+                  setTenantName('');
+                  void loadTenants();
+                  void loadLocations(created);
+                })
+                .catch((error) => onError(message(error)))
+            }
+          >
+            Crear Tenant
+          </button>
+        </article>
+        <article className="panel">
+          <h2>Nueva Location</h2>
+          <label>
+            Tenant
+            <select
+              value={tenant?.tenantId ?? ''}
+              onChange={(event) => {
+                const selected = tenants.find((item) => item.tenantId === event.target.value);
+                if (selected) void loadLocations(selected);
+              }}
+            >
+              <option value="">Selecciona</option>
+              {tenants.map((item) => (
+                <option key={item.tenantId} value={item.tenantId}>
+                  {item.displayName ?? item.tenantId}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Nombre
+            <input value={locationName} onChange={(event) => setLocationName(event.target.value)} />
+          </label>
+          <label>
+            Timezone IANA
+            <input value={timezone} onChange={(event) => setTimezone(event.target.value)} />
+          </label>
+          <button
+            className="primary"
+            disabled={!tenant}
+            onClick={() =>
+              tenant &&
+              client
+                .createLocation(tenant.tenantId, {
+                  commandId: crypto.randomUUID(),
+                  displayName: locationName,
+                  timezone,
+                })
+                .then(() => {
+                  setLocationName('');
+                  void loadLocations(tenant);
+                })
+                .catch((error) => onError(message(error)))
+            }
+          >
+            Crear Location
+          </button>
+        </article>
+      </div>
+      <article className="panel">
+        <h2>Planes técnicos/comerciales</h2>
+        <div className="control-grid compact">
+          <label>
+            Código
+            <input
+              value={planCode}
+              onChange={(event) => setPlanCode(event.target.value.toUpperCase())}
+              placeholder="Código definido por negocio"
+            />
+          </label>
+          <label>
+            Nombre
+            <input value={planName} onChange={(event) => setPlanName(event.target.value)} />
+          </label>
+        </div>
+        <div className="capability-grid">
+          {(
+            [
+              'CORE_POS',
+              'TABLE_SERVICE',
+              'KDS',
+              'PRINTING',
+              'PUBLIC_STOREFRONT',
+              'INVENTORY',
+              'MULTI_LOCATION',
+            ] as CapabilityCode[]
+          ).map((capability) => (
+            <label key={capability}>
+              <input
+                type="checkbox"
+                checked={planCapabilities.includes(capability)}
+                onChange={(event) =>
+                  setPlanCapabilities(
+                    event.target.checked
+                      ? [...planCapabilities, capability]
+                      : planCapabilities.filter((item) => item !== capability),
+                  )
+                }
+              />
+              {capability}
+            </label>
+          ))}
+        </div>
+        <button
+          className="secondary"
+          onClick={() =>
+            client
+              .createPlan({
+                commandId: crypto.randomUUID(),
+                code: planCode,
+                displayName: planName,
+                capabilities: planCapabilities,
+                reason: 'Plan configuration from Super Admin',
+              })
+              .then(() => {
+                setPlanCode('');
+                setPlanName('');
+                void loadTenants();
+              })
+              .catch((error) => onError(message(error)))
+          }
+        >
+          Crear plan
+        </button>
+        {plans.map((plan) => (
+          <small className="plan-row" key={plan.planId}>
+            {plan.code} · {plan.capabilities.join(', ') || 'Sin capabilities'}
+          </small>
+        ))}
+      </article>
+      <div className="table-card">
+        <table>
+          <thead>
+            <tr>
+              <th>Tenant</th>
+              <th>Estado</th>
+            </tr>
+          </thead>
+          <tbody>
+            {tenants.map((item) => (
+              <tr
+                className="clickable"
+                key={item.tenantId}
+                onClick={() => void loadLocations(item)}
+              >
+                <td>
+                  {item.displayName ?? 'Legacy sin configurar'}
+                  <small>{item.tenantId}</small>
+                </td>
+                <td>
+                  <Status value={item.status} />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {tenant && (
+        <article className="panel">
+          <h2>Locations de {tenant.displayName}</h2>
+          {locations.map((location) => {
+            const active = edges[location.locationId]?.find((edge) => edge.status === 'ACTIVE');
+            const pending = pendingReplacements[location.locationId];
+            const license = licenses[location.locationId];
+            return (
+              <div className="location-control" key={location.locationId}>
+                <div>
+                  <strong>{location.displayName ?? 'Pendiente de configuración'}</strong>
+                  <small>
+                    {location.locationId} · {location.timezone ?? 'Timezone pendiente'}
+                  </small>
+                  {(edges[location.locationId] ?? []).map((edge) => (
+                    <small key={edge.edgeId}>
+                      {shortId(edge.edgeId)} · {edge.status}
+                    </small>
+                  ))}
+                  {license ? (
+                    <small>
+                      License {license.declaredState} · {license.planCode} · rev {license.revision}
+                    </small>
+                  ) : (
+                    <small className="pending-replacement">Licencia no asignada</small>
+                  )}
+                  {pending && (
+                    <small className="pending-replacement">
+                      Replacement PENDING · código {pending.provisioningCode.status} · expira{' '}
+                      {date(pending.provisioningCode.expiresAt)}
+                    </small>
+                  )}
+                </div>
+                <Status value={location.configurationStatus} />
+                <div>
+                  {license ? (
+                    <div className="license-actions">
+                      <select
+                        value={license.declaredState}
+                        onChange={(event) =>
+                          client
+                            .updateLocationLicenseState(location.locationId, {
+                              commandId: crypto.randomUUID(),
+                              expectedRevision: license.revision,
+                              declaredState: event.target.value as LicenseDeclaredState,
+                              reason: 'License state changed from Super Admin',
+                            })
+                            .then(() => loadLocations(tenant))
+                            .catch((error) => onError(message(error)))
+                        }
+                      >
+                        {['ACTIVE', 'PAST_DUE', 'GRACE_PERIOD', 'SUSPENDED', 'TERMINATED'].map(
+                          (state) => (
+                            <option key={state}>{state}</option>
+                          ),
+                        )}
+                      </select>
+                      <select
+                        value={selectedPlans[location.locationId] ?? license.planId}
+                        onChange={(event) =>
+                          setSelectedPlans({
+                            ...selectedPlans,
+                            [location.locationId]: event.target.value,
+                          })
+                        }
+                      >
+                        {plans.map((plan) => (
+                          <option key={plan.planId} value={plan.planId}>
+                            {plan.code}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        className="secondary"
+                        onClick={() =>
+                          client
+                            .assignLocationLicense(location.locationId, {
+                              commandId: crypto.randomUUID(),
+                              expectedRevision: license.revision,
+                              planId: selectedPlans[location.locationId] ?? license.planId,
+                              declaredState: license.declaredState,
+                              configuration: license.configuration,
+                              reason: 'Plan assignment changed from Super Admin',
+                            })
+                            .then(() => loadLocations(tenant))
+                            .catch((error) => onError(message(error)))
+                        }
+                      >
+                        Aplicar plan
+                      </button>
+                      <button
+                        className="secondary"
+                        onClick={() => {
+                          const values = window.prompt(
+                            'Porcentajes de propina separados por coma (ej. 10,15,20). Vacío desactiva propinas.',
+                            license.configuration.payment.tipPercentageOptionsBasisPoints
+                              .map((value) => value / 100)
+                              .join(','),
+                          );
+                          if (values === null) return;
+                          const percentages = values.trim() === ''
+                            ? []
+                            : values.split(',').map((value) => Number(value.trim()));
+                          if (percentages.some((value) => !Number.isFinite(value) || value < 0 || value > 100)) {
+                            onError('Los porcentajes de propina deben estar entre 0 y 100.');
+                            return;
+                          }
+                          void client
+                            .updateLocationConfiguration(location.locationId, {
+                              commandId: crypto.randomUUID(),
+                              expectedRevision: license.configurationRevision,
+                              configuration: {
+                                payment: {
+                                  tipsEnabled: percentages.length > 0,
+                                  tipPercentageOptionsBasisPoints: percentages.map((value) =>
+                                    Math.round(value * 100),
+                                  ),
+                                },
+                              },
+                              reason: 'Payment tip configuration changed from Super Admin',
+                            })
+                            .then(() => loadLocations(tenant))
+                            .catch((error) => onError(message(error)));
+                        }}
+                      >
+                        Configurar propinas
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <select
+                        value={selectedPlans[location.locationId] ?? ''}
+                        onChange={(event) =>
+                          setSelectedPlans({
+                            ...selectedPlans,
+                            [location.locationId]: event.target.value,
+                          })
+                        }
+                      >
+                        <option value="">Asignar plan…</option>
+                        {plans.map((plan) => (
+                          <option key={plan.planId} value={plan.planId}>
+                            {plan.code}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        className="secondary"
+                        disabled={!selectedPlans[location.locationId]}
+                        onClick={() =>
+                          client
+                            .assignLocationLicense(location.locationId, {
+                              commandId: crypto.randomUUID(),
+                              expectedRevision: 0,
+                              planId: selectedPlans[location.locationId]!,
+                              declaredState: 'ACTIVE',
+                              configuration: {
+                                payment: {
+                                  tipsEnabled: true,
+                                  tipPercentageOptionsBasisPoints: [1000, 1500, 2000],
+                                },
+                              },
+                              reason: 'Initial license assignment from Super Admin',
+                            })
+                            .then(() => loadLocations(tenant))
+                            .catch((error) => onError(message(error)))
+                        }
+                      >
+                        Asignar licencia
+                      </button>
+                    </>
+                  )}
+                </div>
+                <span>{active ? 'Edge ACTIVE' : 'Sin Edge ACTIVE'}</span>
+                {pending ? (
+                  <button
+                    className="secondary danger"
+                    onClick={() => {
+                      const reason = window.prompt('Motivo de cancelación del Replacement');
+                      if (reason)
+                        void client
+                          .cancelReplacement(pending.replacementId, {
+                            commandId: crypto.randomUUID(),
+                            reason,
+                          })
+                          .then(() => loadLocations(tenant))
+                          .catch((error) => onError(message(error)));
+                    }}
+                  >
+                    Cancelar Replacement
+                  </button>
+                ) : active ? (
+                  <div className="edge-actions">
+                    <button
+                      className="secondary"
+                      onClick={() => {
+                        const reason = window.prompt('Motivo de revocación');
+                        if (reason)
+                          void client
+                            .revokeEdge(active.edgeId, { commandId: crypto.randomUUID(), reason })
+                            .then(() => loadLocations(tenant))
+                            .catch((error) => onError(message(error)));
+                      }}
+                    >
+                      Revocar
+                    </button>
+                    <button
+                      className="secondary"
+                      onClick={() => {
+                        const reason = window.prompt('Motivo del replacement');
+                        if (reason)
+                          void client
+                            .initiateReplacement(location.locationId, {
+                              commandId: crypto.randomUUID(),
+                              oldEdgeId: active.edgeId,
+                              reason,
+                            })
+                            .then((result) => {
+                              setIssued(result.provisioningCode);
+                              void loadLocations(tenant);
+                            })
+                            .catch((error) => onError(message(error)));
+                      }}
+                    >
+                      Replacement
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    className="secondary"
+                    disabled={!license}
+                    title={!license ? 'Asigna una licencia antes de provisionar' : undefined}
+                    onClick={() =>
+                      client
+                        .generateProvisioningCode(location.locationId, crypto.randomUUID())
+                        .then(setIssued)
+                        .catch((error) => onError(message(error)))
+                    }
+                  >
+                    Generar código
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </article>
+      )}
+      {issued && (
+        <div className="secret-once" role="alert">
+          <strong>Código de provisioning (cópialo ahora)</strong>
+          <code>{issued.code}</code>
+          <span>Expira {date(issued.expiresAt)}</span>
+          <div className="edge-actions">
+            <button
+              onClick={() =>
+                client
+                  .revokeProvisioningCode(issued.provisioningCodeId, crypto.randomUUID())
+                  .then(() => setIssued(null))
+                  .catch((error) => onError(message(error)))
+              }
+            >
+              Revocar código
+            </button>
+            <button onClick={() => setIssued(null)}>Ya lo guardé</button>
+          </div>
+        </div>
+      )}
+    </section>
+  );
 }
 
 function OrdersTable({ rows, onSelect }: { rows: CloudOrderSummary[]; onSelect?: (value: CloudOrderSummary) => void }) { return <div className="table-card"><table><thead><tr><th>Order</th><th>Creada UTC</th><th>Tipo / canal</th><th>Estado</th><th>Items / SENT</th><th>Mesas</th></tr></thead><tbody>{rows.map((order) => <tr key={order.orderId} className={onSelect ? 'clickable' : ''} onClick={() => onSelect?.(order)}><td><code>{shortId(order.orderId)}</code></td><td>{date(order.createdAt)}</td><td>{order.orderType} / {order.orderChannel}</td><td><Status value={order.status} /></td><td>{order.itemCount} / {order.sentItemCount}</td><td>{order.tableIds.map(shortId).join(', ') || '—'}</td></tr>)}</tbody></table>{rows.length === 0 && <Empty text="No hay Orders para estos filtros." />}</div>; }

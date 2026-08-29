@@ -16,6 +16,7 @@ export class CloudControlPlaneService {
     private readonly repository: CloudControlPlaneRepository,
     private readonly config: CloudProvisioningConfig,
     private readonly now: () => Date = () => new Date(),
+    private readonly assertLicensedBeforeProvisioning?: (locationId: string) => Promise<void>,
   ) {}
 
   listTenants(global: boolean, tenantIds: string[]) { return this.repository.listTenants(global, tenantIds); }
@@ -42,6 +43,7 @@ export class CloudControlPlaneService {
   }
 
   async generateCode(locationId: string, commandId: string, actor: CloudAdminMutationActor) {
+    await this.assertLicensedBeforeProvisioning?.(locationId);
     const prior = await this.repository.findIdempotentResult(commandId);
     if (prior) throw new CloudError('PROVISIONING_CODE_ALREADY_DELIVERED', 409,
       'This command already generated a code; create a new command because plaintext secrets are never persisted.');
@@ -76,6 +78,7 @@ export class CloudControlPlaneService {
   }
 
   async initiateReplacement(locationId: string, input: { commandId: string; oldEdgeId: string; reason: string }, actor: CloudAdminMutationActor) {
+    await this.assertLicensedBeforeProvisioning?.(locationId);
     const location = await this.repository.getLocation(locationId);
     if (!location) throw new CloudError('CLOUD_RESOURCE_NOT_FOUND', 404, 'Resource was not found.');
     const prior = await this.repository.findIdempotentResult(input.commandId);

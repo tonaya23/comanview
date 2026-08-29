@@ -6,6 +6,7 @@ export const AuditActionSchema = z.enum([
   'CASH_X_REPORT_GENERATED',
   'CASH_SESSION_CLOSED',
   'ORDER_EMPTY_CANCELLED',
+  'LICENSE_RECOVERY_CASH_SESSION_OPENED',
 ]);
 export const AuditOutcomeSchema = z.enum(['SUCCESS']);
 export const AuditEntityTypeSchema = z.enum([

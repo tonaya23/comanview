@@ -36,6 +36,8 @@ function openDb() {
     '0008_tables_waiter.sql',
     '0009_operational_realtime.sql',
     '0010_sync_foundation.sql',
+    '0011_edge_provisioning.sql',
+    '0012_signed_licensing_configuration.sql',
   ]) {
     sqlite.exec(readFileSync(join(process.cwd(), '../../migrations/edge', migration), 'utf8'));
   }

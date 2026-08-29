@@ -29,6 +29,7 @@ import {
   AuditRepository,
   TableRepository,
   SyncOutboxRepository,
+  EdgeControlRepository,
 } from '@comanview/database';
 import { loadEdgeSyncConfig, type EdgeSyncConfig } from '@comanview/config';
 import { DebugPrinterAdapter, PrintWorker, type PrinterAdapter } from '@comanview/printing';
@@ -61,6 +62,10 @@ import {
 import { SyncWorker } from './modules/sync/SyncWorker.js';
 import { syncRoutes } from './modules/sync/routes.js';
 import { createEdgeSecretStore, type EdgeSecretStore } from './modules/provisioning/EdgeSecretStore.js';
+import { HttpControlTransport } from './modules/licensing/HttpControlTransport.js';
+import { EdgeLicenseManager } from './modules/licensing/EdgeLicenseManager.js';
+import { ControlStateWorker } from './modules/licensing/ControlStateWorker.js';
+import { licensingRoutes } from './modules/licensing/routes.js';
 
 export interface BuildAppOptions {
   printerAdapter?: PrinterAdapter;
@@ -71,6 +76,8 @@ export interface BuildAppOptions {
   syncTransport?: CloudSyncTransport;
   startSyncWorker?: boolean;
   edgeSecretStore?: EdgeSecretStore;
+  controlTransport?: HttpControlTransport;
+  startControlWorker?: boolean;
 }
 
 export async function buildApp(dbPath: string = ':memory:', options: BuildAppOptions = {}) {
@@ -99,6 +106,7 @@ export async function buildApp(dbPath: string = ':memory:', options: BuildAppOpt
   const auditRepo = new AuditRepository(db);
   const tableRepo = new TableRepository(db);
   const syncRepo = new SyncOutboxRepository(db);
+  const controlRepo = new EdgeControlRepository(db);
   const syncConfig = options.syncConfig ?? loadEdgeSyncConfig();
   const persistedIdentity = syncRepo.findIdentity();
   if (process.env['NODE_ENV'] === 'production' && !persistedIdentity) {
@@ -115,36 +123,6 @@ export async function buildApp(dbPath: string = ':memory:', options: BuildAppOpt
   const operationalContext = { ...defaultOperationalContext,
     tenantId: edgeIdentity.tenantId, locationId: edgeIdentity.locationId };
 
-  // Setup Services
-  const catalogService = new CatalogService(catalogRepo);
-  const printService = new PrintService(printRepo, orderRepo);
-  const realtimeHub = new RealtimeHub();
-  const kdsService = new KdsService(kdsRepo, tableRepo, realtimeHub);
-  const orderService = new OrderService(
-    orderRepo,
-    catalogRepo,
-    operationalContext,
-    printService,
-    kdsService,
-    tableRepo,
-    realtimeHub,
-  );
-  const cashService = new CashService(cashRepo, printRepo, operationalContext);
-  const paymentService = new PaymentService(
-    orderRepo,
-    cashRepo,
-    auditRepo,
-    operationalContext,
-    realtimeHub,
-  );
-  const authService = new AuthService(
-    authRepo,
-    operationalContext.tenantId,
-    operationalContext.locationId,
-  );
-  const authGuard = new AuthGuard(authService, options.authMode ?? 'enforced');
-  const auditService = new AuditService(auditRepo);
-  const tableService = new TableService(tableRepo, orderRepo, operationalContext);
   const storedSecrets = syncConfig.enabled && !syncConfig.token
     ? await (options.edgeSecretStore ?? createEdgeSecretStore()).load()
     : null;
@@ -160,7 +138,32 @@ export async function buildApp(dbPath: string = ':memory:', options: BuildAppOpt
           syncConfig.requestTimeoutMs,
         )
       : null);
-  const syncWorker = new SyncWorker(syncRepo, syncTransport, syncConfig, app.log);
+  const controlTransport = options.controlTransport ??
+    (syncConfig.licensing.enforcementEnabled && syncConfig.cloudUrl && syncToken
+      ? new HttpControlTransport(syncConfig.cloudUrl, edgeIdentity.edgeId, syncToken,
+          syncConfig.requestTimeoutMs) : null);
+  const licenseManager = new EdgeLicenseManager(controlRepo, controlTransport,
+    syncConfig.licensing, { tenantId: edgeIdentity.tenantId, locationId: edgeIdentity.locationId,
+      edgeId: edgeIdentity.edgeId }, app.log);
+  const controlWorker = new ControlStateWorker(licenseManager, syncConfig.licensing);
+  const syncWorker = new SyncWorker(syncRepo, syncTransport, syncConfig, app.log,
+    (revision) => licenseManager.noteDesiredRevision(revision));
+
+  // Setup Services
+  const catalogService = new CatalogService(catalogRepo);
+  const realtimeHub = new RealtimeHub();
+  const printService = new PrintService(printRepo, orderRepo, licenseManager);
+  const kdsService = new KdsService(kdsRepo, tableRepo, realtimeHub, licenseManager);
+  const orderService = new OrderService(orderRepo, catalogRepo, operationalContext,
+    printService, kdsService, tableRepo, realtimeHub, licenseManager);
+  const cashService = new CashService(cashRepo, printRepo, operationalContext, licenseManager);
+  const paymentService = new PaymentService(orderRepo, cashRepo, auditRepo,
+    operationalContext, realtimeHub, licenseManager);
+  const authService = new AuthService(authRepo, operationalContext.tenantId,
+    operationalContext.locationId);
+  const authGuard = new AuthGuard(authService, options.authMode ?? 'enforced');
+  const auditService = new AuditService(auditRepo);
+  const tableService = new TableService(tableRepo, orderRepo, operationalContext);
   cashService.ensureDefaultRegister();
   const failingTargets = new Set(
     (process.env['COMANVIEW_DEBUG_PRINTER_FAIL_TARGETS'] ?? '').split(',').filter(Boolean),
@@ -177,6 +180,7 @@ export async function buildApp(dbPath: string = ':memory:', options: BuildAppOpt
   const printWorker = new PrintWorker(printRepo, printerAdapter);
   if (options.startPrintWorker !== false) printWorker.start();
   if (options.startSyncWorker !== false) syncWorker.start();
+  if (options.startControlWorker !== false) controlWorker.start();
 
   // Setup Routes
   app.register(authRoutes(authService, authGuard), { prefix: '/auth' });
@@ -189,6 +193,7 @@ export async function buildApp(dbPath: string = ':memory:', options: BuildAppOpt
   app.register(kdsRoutes(kdsService, realtimeHub, authGuard));
   app.register(tableRoutes(tableService, authGuard));
   app.register(syncRoutes(syncWorker, authGuard));
+  app.register(licensingRoutes(licenseManager, authGuard));
 
   // Health route
   app.get(
@@ -228,6 +233,7 @@ export async function buildApp(dbPath: string = ':memory:', options: BuildAppOpt
   app.addHook('onClose', async () => {
     printWorker.stop();
     syncWorker.stop();
+    controlWorker.stop();
     closeDatabase();
   });
 

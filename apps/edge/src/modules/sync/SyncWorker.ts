@@ -28,6 +28,7 @@ export class SyncWorker {
     private readonly transport: CloudSyncTransport | null,
     private readonly config: EdgeSyncConfig,
     private readonly logger: SyncLogger,
+    private readonly onDesiredControlRevision?: (revision: number) => void,
   ) {}
 
   start(): void {
@@ -170,7 +171,10 @@ export class SyncWorker {
       pendingEventCount: counts.pendingCount + counts.failedCount + counts.syncingCount,
     };
     try {
-      await this.transport.sendHeartbeat(heartbeat);
+      const acknowledgement = await this.transport.sendHeartbeat(heartbeat);
+      if (acknowledgement.desiredControlRevision !== undefined) {
+        this.onDesiredControlRevision?.(acknowledgement.desiredControlRevision);
+      }
       this.repository.recordHeartbeatSuccess(now);
     } catch (error) {
       this.repository.recordCloudFailure(this.errorMessage(error));

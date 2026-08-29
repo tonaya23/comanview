@@ -10,6 +10,7 @@ import { KdsRepository, TableRepository, type KdsTicketView } from '@comanview/d
 import { AppError } from '../../../app/errorHandler.js';
 import type { RealtimeHub } from '../../../infrastructure/realtime/RealtimeHub.js';
 import type { AuthorizedOperation } from '../../../app/authContext.js';
+import type { EdgeLicenseManager } from '../../licensing/EdgeLicenseManager.js';
 
 function mapTicket(ticket: KdsTicketView): KdsTicketResponse {
   const { locationId: _locationId, orderVersion: _orderVersion, ...response } = ticket;
@@ -26,13 +27,16 @@ export class KdsService {
     private readonly repository: KdsRepository,
     private readonly tableRepository: TableRepository,
     private readonly realtime: RealtimeHub,
+    private readonly licensing?: EdgeLicenseManager,
   ) {}
 
   listStations(): KdsStationResponse[] {
+    this.licensing?.assertCapabilityAvailable('KDS');
     return this.repository.listStations();
   }
 
   listTickets(stationId: string, status?: KdsPreparationStatus): KdsTicketResponse[] {
+    this.licensing?.assertCapabilityAvailable('KDS');
     return this.repository.listTickets(stationId, status).map(mapTicket);
   }
 
@@ -61,7 +65,8 @@ export class KdsService {
       );
     }
 
-    this.requireTicket(roundId, stationId);
+    const existingTicket = this.requireTicket(roundId, stationId);
+    this.licensing?.assertAllowed('KDS_UPDATE', 'KDS', existingTicket.orderId);
     const changed = this.repository.transitionTicket(roundId, stationId, target, request.commandId);
     const ticket = this.requireTicket(roundId, stationId);
     if (changed) {

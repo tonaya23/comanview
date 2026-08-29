@@ -20,6 +20,9 @@ import {
   CanonicalCloudLocationSchema,
   EdgeReplacementSchema,
   PendingEdgeReplacementResponseSchema,
+  CloudPlanListResponseSchema,
+  CloudPlanSchema,
+  LocationLicenseAssignmentSchema,
   ErrorResponseSchema,
   type CloudAdminLoginRequest,
   type CloudAdminSessionResponse,
@@ -35,6 +38,11 @@ import {
   type CanonicalCloudLocation,
   type ProvisionedEdge,
   type EdgeReplacement,
+  type CloudPlan,
+  type LocationLicenseAssignment,
+  type CapabilityCode,
+  type LicenseDeclaredState,
+  type EdgeConfiguration,
 } from '@comanview/contracts';
 
 interface Schema<T> { parse(value: unknown): T }
@@ -80,6 +88,12 @@ export interface CloudAdminClient {
   initiateReplacement(locationId: string, input: { commandId: string; oldEdgeId: string; reason: string }): Promise<{ replacementId: string; provisioningCode: { provisioningCodeId: string; code: string; expiresAt: string } }>;
   getPendingReplacement(locationId: string): Promise<{ replacement: EdgeReplacement | null }>;
   cancelReplacement(replacementId: string, input: { commandId: string; reason: string }): Promise<EdgeReplacement>;
+  getPlans(): Promise<{ data: CloudPlan[] }>;
+  createPlan(input: { commandId: string; code: string; displayName: string; capabilities: CapabilityCode[]; reason: string }): Promise<CloudPlan>;
+  getLocationLicense(locationId: string): Promise<LocationLicenseAssignment>;
+  assignLocationLicense(locationId: string, input: { commandId: string; expectedRevision: number; planId: string; declaredState: LicenseDeclaredState; configuration: EdgeConfiguration; reason: string }): Promise<LocationLicenseAssignment>;
+  updateLocationLicenseState(locationId: string, input: { commandId: string; expectedRevision: number; declaredState: LicenseDeclaredState; reason: string }): Promise<LocationLicenseAssignment>;
+  updateLocationConfiguration(locationId: string, input: { commandId: string; expectedRevision: number; configuration: EdgeConfiguration; reason: string }): Promise<LocationLicenseAssignment>;
   getLocations(query?: Record<string, string | number | undefined>): Promise<CloudAdminPage<CloudLocationSummary>>;
   getOverview(locationId: string, query?: Record<string, string | undefined>): Promise<CloudLocationOverview>;
   getOrders(locationId: string, query?: Record<string, string | number | undefined>): Promise<CloudAdminPage<CloudOrderSummary>>;
@@ -132,6 +146,12 @@ export function createCloudAdminClient(options: CloudAdminClientOptions = {}): C
     initiateReplacement: (locationId, input) => request(`/admin/v1/locations/${locationId}/replacements`, InitiateEdgeReplacementResponseSchema, { method: 'POST', body: JSON.stringify(input) }),
     getPendingReplacement: (locationId) => request(`/admin/v1/locations/${locationId}/replacements/pending`, PendingEdgeReplacementResponseSchema),
     cancelReplacement: (replacementId, input) => request(`/admin/v1/replacements/${replacementId}/cancel`, EdgeReplacementSchema, { method: 'POST', body: JSON.stringify(input) }),
+    getPlans: () => request('/admin/v1/plans', CloudPlanListResponseSchema),
+    createPlan: (input) => request('/admin/v1/plans', CloudPlanSchema, { method: 'POST', body: JSON.stringify(input) }),
+    getLocationLicense: (locationId) => request(`/admin/v1/locations/${locationId}/license`, LocationLicenseAssignmentSchema),
+    assignLocationLicense: (locationId, input) => request(`/admin/v1/locations/${locationId}/license`, LocationLicenseAssignmentSchema, { method: 'PUT', body: JSON.stringify(input) }),
+    updateLocationLicenseState: (locationId, input) => request(`/admin/v1/locations/${locationId}/license/state`, LocationLicenseAssignmentSchema, { method: 'PATCH', body: JSON.stringify(input) }),
+    updateLocationConfiguration: (locationId, input) => request(`/admin/v1/locations/${locationId}/configuration`, LocationLicenseAssignmentSchema, { method: 'PATCH', body: JSON.stringify(input) }),
     getLocations: (query) => request(`/admin/v1/locations${queryString(query)}`, CloudLocationListResponseSchema),
     getOverview: (locationId, query) => request(`/admin/v1/locations/${locationId}/overview${queryString(query)}`, CloudLocationOverviewSchema),
     getOrders: (locationId, query) => request(`/admin/v1/locations/${locationId}/orders${queryString(query)}`, CloudOrderListResponseSchema),

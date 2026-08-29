@@ -791,7 +791,7 @@ function mapReplacement(row: ReplacementJoinRow): EdgeReplacementRecord {
   };
 }
 
-async function appendAudit(client: PoolClient, input: {
+export async function appendCloudAdminAudit(client: PoolClient, input: {
   actor: CloudAdminMutationActor | null; action: string; entityType: string; entityId: string;
   tenantId?: string; locationId?: string; edgeId?: string; commandId: string; reason?: string;
   before?: unknown; after?: unknown; now: Date; allowExistingCommand?: boolean;
@@ -834,6 +834,8 @@ async function appendAudit(client: PoolClient, input: {
     [scopeKey, entryHash, input.now],
   );
 }
+
+const appendAudit = appendCloudAdminAudit;
 
 function canonicalJson(value: unknown): string {
   if (value instanceof Date) return JSON.stringify(value.toISOString());

@@ -35,6 +35,9 @@ importers:
       '@comanview/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@comanview/licensing':
+        specifier: workspace:*
+        version: link:../../packages/licensing
       '@comanview/money':
         specifier: workspace:*
         version: link:../../packages/money
@@ -115,6 +118,9 @@ importers:
       '@comanview/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@comanview/licensing':
+        specifier: workspace:*
+        version: link:../../packages/licensing
       '@comanview/money':
         specifier: workspace:*
         version: link:../../packages/money
@@ -373,6 +379,9 @@ importers:
       '@comanview/auth':
         specifier: workspace:*
         version: link:../auth
+      '@comanview/contracts':
+        specifier: workspace:*
+        version: link:../contracts
       '@comanview/domain':
         specifier: workspace:*
         version: link:../domain
@@ -425,6 +434,19 @@ importers:
       uuid:
         specifier: ^14.0.1
         version: 14.0.1
+    devDependencies:
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.7(@types/node@26.2.0)(tsx@4.23.12)(yaml@2.9.0)
+
+  packages/licensing:
+    dependencies:
+      '@comanview/contracts':
+        specifier: workspace:*
+        version: link:../contracts
     devDependencies:
       typescript:
         specifier: ^5.8.3

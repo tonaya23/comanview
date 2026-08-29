@@ -950,6 +950,30 @@ Limitada en tiempo.
 
 Ligada a Tenant/Location.
 
+## 3.6 Signed Licensing y tiempo efectivo V1
+
+Cloud emite streams independientes `LICENSE`, `FEATURE_FLAGS` y `CONFIGURATION`, cada uno ligado a `tenantId`, `locationId` y `edgeId`, con revisión monotónica, `kid`, envelope Ed25519 y hash SHA-256. La private key se obtiene exclusivamente de secrets de deployment; PostgreSQL, repositorio, respuestas y logs MUST NOT contenerla. El keyring público de Edge soporta overlap `current` + `next`.
+
+`LICENSE` dura 7 días y contiene un `graceUntil` 21 días posterior. Edge hace pull autenticado cada 5 minutos, renueva al restar 48 horas y limita backoff a 1 hora. `desiredControlRevision` en heartbeat es un hint; el pull periódico es la fuente durable de convergencia. Los ACK se almacenan en un outbox local y son idempotentes en Cloud.
+
+SQLite conserva los documentos actuales y al menos las tres revisiones válidas más recientes, ACK pendientes, `effectiveTimeFloor`, última observación Cloud, checkpoints de reloj, sticky state, capabilities protegidas, Protected Orders y prueba de autorización de CashSession. Una revisión inferior se ignora; misma revisión con hash distinto se rechaza; documento inválido nunca sustituye last-known-good.
+
+El tiempo efectivo es `max(monotonicWallEstimate, effectiveTimeFloor)`. Se persiste cada 60 segundos. Rollback mayor a 5 minutos y forward jump mayor a 5 minutos durante el proceso se marcan; después de restart un salto hacia adelante mayor a 7 días exige revalidación Cloud. Una respuesta Cloud autenticada actualiza el floor sin hacerlo retroceder.
+
+`SUSPENDED` y `TERMINATED` son sticky offline. Una revisión firmada posterior MAY cambiar el estado; desconectar Cloud nunca revierte el último estado restrictivo conocido.
+
+## 3.7 EffectiveCapabilities, Guaranteed Shift y recovery
+
+Routes y componentes nunca autorizan con `planCode`. Application Services consultan `EffectiveCapabilities` antes de Orders, Payments, Cash, KDS y Printing. La UI solo refleja esa decisión; Edge sigue siendo autoridad.
+
+Una reducción recibida durante una `CashSession` OPEN conserva durablemente para ese turno las capabilities que estaban autorizadas al abrirlo. Al cerrar la sesión se elimina esa protección. Si expira `graceUntil` o el estado es `SUSPENDED`/`TERMINATED`, la sesión demostrablemente autorizada entra en Guaranteed Shift y puede terminar Orders, KDS, impresión, Payments, Corte X/Z y cierre seguro; no puede abrir otra sesión.
+
+Sin CashSession OPEN, las Orders OPEN preexistentes se capturan en `edge_protected_orders`. En modo Protected Operations solo pueden enviarse pendientes existentes, prepararse, imprimirse, cobrarse y cerrarse. Crear Orders/mesas, agregar items y utilizar administración general se rechaza en Edge.
+
+Cuando sea necesario cobrar esas obligaciones puede abrirse una única CashSession `purpose=LICENSE_RECOVERY`, ligada mediante `cash_session_protected_orders`, auditada y sin capacidad de originar consumo nuevo. Su uso queda marcado durablemente para impedir encadenamiento. Si no existe documento utilizable, Guaranteed Shift Recovery requiere `opened_license_revision` y `opened_license_mode` persistidos por una apertura previamente autorizada; no se infiere autorización de estado incompleto o corrupto.
+
+Configuration V1 está limitada a `payment.tipsEnabled` y `payment.tipPercentageOptionsBasisPoints`. Feature Flags no conceden Entitlements ausentes; solo pueden restringir una capability ya licenciada.
+
 Auditada.
 
 ## 3.6 Restricciones en suspensión

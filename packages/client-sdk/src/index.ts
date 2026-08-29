@@ -19,6 +19,8 @@ import {
   LogoutResponseSchema,
   AuditListResponseSchema,
   RestaurantTableSchema,
+  EffectiveCapabilitiesResponseSchema,
+  EdgeConfigurationPayloadSchema,
   type AddOrderItemRequest,
   type CategoryResponse,
   type CreateOrderRequest,
@@ -60,6 +62,8 @@ import {
   type UpdateOrderTablesRequest,
   type CancelEmptyTableOrderRequest,
   type RequestOrderPaymentRequest,
+  type EffectiveCapabilitiesResponse,
+  type EdgeConfiguration,
 } from '@comanview/contracts';
 
 export * from './cloudAdmin.js';
@@ -154,6 +158,8 @@ export interface EdgeClient {
   requestCustomerReceipt(orderId: string, request: RequestPrintJob): Promise<PrintJobResponse>;
   getRecentPrintJobs(): Promise<PrintJobResponse[]>;
   getKdsStations(): Promise<KdsStationResponse[]>;
+  getLicensingStatus(): Promise<EffectiveCapabilitiesResponse>;
+  getEdgeConfiguration(): Promise<EdgeConfiguration>;
   getKdsTickets(stationId: string, status?: KdsPreparationStatus): Promise<KdsTicketResponse[]>;
   startKdsTicket(
     roundId: string,
@@ -364,6 +370,8 @@ export function createEdgeClient(options: EdgeClientOptions = {}): EdgeClient {
       }),
     getRecentPrintJobs: () => request('/printing/jobs', PrintJobSchema.array()),
     getKdsStations: () => request('/kds/stations', KdsStationSchema.array()),
+    getLicensingStatus: () => request('/licensing/status', EffectiveCapabilitiesResponseSchema),
+    getEdgeConfiguration: () => request('/licensing/configuration', EdgeConfigurationPayloadSchema),
     getKdsTickets: (stationId, status) => {
       const query = `stationId=${encodeURIComponent(stationId)}${status ? `&status=${status}` : ''}`;
       return request(`/kds/tickets?${query}`, KdsTicketSchema.array());

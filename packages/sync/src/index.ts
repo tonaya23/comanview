@@ -77,6 +77,7 @@ export type EdgeHeartbeat = z.infer<typeof EdgeHeartbeatSchema>;
 export const HeartbeatAckSchema = z.object({
   edgeId: z.string().uuid(),
   receivedAt: z.string().datetime(),
+  desiredControlRevision: z.number().int().nonnegative().optional(),
 });
 export type HeartbeatAck = z.infer<typeof HeartbeatAckSchema>;
 

@@ -5,6 +5,7 @@ import type { CloudAdminConfig } from '@comanview/config';
 import type {
   CloudAdminSessionRecord,
   CloudAdminUserRecord,
+  CloudEdgeRecord,
   CloudReadRepository,
   EdgeReplacementRecord,
   LocationOperationalRecord,
@@ -14,6 +15,9 @@ import type { CloudRepository } from '../index.js';
 import { buildCloudApp } from '../index.js';
 import { CloudAdminAuthService, type CloudAdminAuthPersistence } from './CloudAdminAuthService.js';
 import type { CloudControlPlaneService } from '../provisioning/CloudControlPlaneService.js';
+import type { CloudLicensingService } from '../licensing/CloudLicensingService.js';
+import { hashEdgeToken } from '../auth/EdgeAuthenticator.js';
+import { SYNC_PROTOCOL_VERSION } from '@comanview/sync';
 
 const tenantId = '01991a00-0000-7000-8000-000000000201';
 const foreignTenantId = '01991a00-0000-7000-8000-000000000202';
@@ -91,7 +95,9 @@ const syncRepository: CloudRepository = {
 const apps: ReturnType<typeof buildCloudApp>[] = [];
 afterEach(async () => Promise.all(apps.splice(0).map((app) => app.close())));
 
-async function setup(role: 'PLATFORM_ADMIN' | 'PLATFORM_ADMIN_READ' | 'SUPPORT_READ', controlPlane?: CloudControlPlaneService) {
+async function setup(role: 'PLATFORM_ADMIN' | 'PLATFORM_ADMIN_READ' | 'SUPPORT_READ',
+  controlPlane?: CloudControlPlaneService, licensing?: CloudLicensingService,
+  repository: CloudRepository = syncRepository) {
   const persistence = new AuthMemory();
   persistence.user = {
     userId: '01991a00-0000-7000-8000-000000000211', email: 'admin@example.test',
@@ -99,7 +105,9 @@ async function setup(role: 'PLATFORM_ADMIN' | 'PLATFORM_ADMIN_READ' | 'SUPPORT_R
     role, status: 'ACTIVE', failedLoginCount: 0, lockedUntil: null,
   };
   const auth = new CloudAdminAuthService(persistence, adminConfig, () => now);
-  const app = buildCloudApp({ repository: syncRepository, admin: { auth, read: readPort(), config: adminConfig, now: () => now }, ...(controlPlane ? { controlPlane } : {}) });
+  const app = buildCloudApp({ repository,
+    admin: { auth, read: readPort(), config: adminConfig, now: () => now },
+    ...(controlPlane ? { controlPlane } : {}), ...(licensing ? { licensing } : {}) });
   apps.push(app);
   return { app };
 }
@@ -183,6 +191,81 @@ describe('Cloud Admin HTTP security', () => {
     expect(response.json()).toMatchObject({ replacementId: record.replacementId, status: 'CANCELLED',
       provisioningCode: { status: 'REVOKED' } });
     expect(cancelReplacement).toHaveBeenCalledWith(record.replacementId, payload, expect.any(Object));
+  });
+
+  it('protects licensing mutations with RBAC and tenant scope before mutation', async () => {
+    const assignment = {
+      tenantId, locationId, planId: '01991a00-0000-7000-8000-000000000231',
+      planCode: 'TEST_DATA', declaredState: 'ACTIVE' as const, revision: 1,
+      capabilities: ['CORE_POS' as const],
+      configuration: { payment: { tipsEnabled: true, tipPercentageOptionsBasisPoints: [1000] } },
+      configurationRevision: 1, featureFlags: {}, featureFlagsRevision: 1,
+      desiredControlRevision: 1, activeEdgeId: null, updatedAt: now,
+    };
+    const assignLocation = vi.fn().mockResolvedValue(assignment);
+    const licensing = {
+      getAssignmentTenant: vi.fn().mockResolvedValue(tenantId),
+      assignLocation,
+    } as unknown as CloudLicensingService;
+    const payload = {
+      commandId: '01991a00-0000-7000-8000-000000000232', expectedRevision: 0,
+      planId: assignment.planId, declaredState: 'ACTIVE', configuration: assignment.configuration,
+      reason: 'Initial test assignment',
+    };
+
+    const restricted = await setup('SUPPORT_READ', undefined, licensing);
+    const restrictedCookie = await login(restricted.app);
+    expect((await restricted.app.inject({ method: 'PUT',
+      url: `/admin/v1/locations/${locationId}/license`,
+      headers: { cookie: restrictedCookie, origin: 'http://localhost:80' }, payload })).statusCode)
+      .toBe(403);
+
+    const allowed = await setup('PLATFORM_ADMIN', undefined, licensing);
+    const allowedCookie = await login(allowed.app);
+    const response = await allowed.app.inject({ method: 'PUT',
+      url: `/admin/v1/locations/${locationId}/license`,
+      headers: { cookie: allowedCookie, origin: 'http://localhost:80' }, payload });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ locationId, planCode: 'TEST_DATA', revision: 1 });
+    expect(assignLocation).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses the same existing Edge credential for heartbeat, control pull and ACK', async () => {
+    const edgeToken = 'licensing-edge-credential-at-least-32-characters';
+    const edge: CloudEdgeRecord = {
+      edgeId: '01991a00-0000-7000-8000-000000000241', tenantId, locationId,
+      credentialHash: hashEdgeToken(edgeToken), status: 'ACTIVE',
+    };
+    const controlState = vi.fn().mockResolvedValue({
+      desiredControlRevision: 3, cloudTime: now.toISOString(),
+      license: null, featureFlags: null, configuration: null,
+    });
+    const acknowledge = vi.fn().mockResolvedValue(undefined);
+    const desiredRevision = vi.fn().mockResolvedValue(3);
+    const licensing = { controlState, acknowledge, desiredRevision } as unknown as CloudLicensingService;
+    const saveHeartbeat = vi.fn().mockResolvedValue(undefined);
+    const repository: CloudRepository = {
+      ...syncRepository, saveHeartbeat,
+      async getEdge(id) { return id === edge.edgeId ? edge : null; },
+    };
+    const { app } = await setup('PLATFORM_ADMIN', undefined, licensing, repository);
+
+    expect((await app.inject({ url: '/edge/v1/control-state' })).statusCode).toBe(401);
+    const headers = { 'x-comanview-edge-id': edge.edgeId, authorization: `Bearer ${edgeToken}` };
+    expect((await app.inject({ url: '/edge/v1/control-state', headers })).statusCode).toBe(200);
+    const heartbeat = await app.inject({ method: 'POST', url: '/sync/v1/heartbeat', headers,
+      payload: { protocolVersion: SYNC_PROTOCOL_VERSION, edgeId: edge.edgeId, tenantId,
+        locationId, edgeVersion: '0.0.0-test', schemaVersion: '12',
+        timestamp: now.toISOString(), status: 'ONLINE', pendingEventCount: 0 } });
+    expect(heartbeat.statusCode).toBe(200);
+    const ack = await app.inject({ method: 'POST', url: '/edge/v1/control-state/acks', headers,
+      payload: { commandId: '01991a00-0000-7000-8000-000000000242', stream: 'LICENSE',
+        revision: 1, documentHash: 'a'.repeat(64), appliedAt: now.toISOString() } });
+    expect(ack.statusCode).toBe(204);
+    expect(controlState).toHaveBeenCalledWith(edge.edgeId);
+    expect(acknowledge).toHaveBeenCalledWith(edge.edgeId, expect.any(Object));
+    expect(desiredRevision).toHaveBeenCalledWith(edge.edgeId);
+    expect(saveHeartbeat).toHaveBeenCalledWith(expect.objectContaining({ edgeId: edge.edgeId }));
   });
 
   it('returns a stable conflict when revoking an Edge with a pending replacement', async () => {

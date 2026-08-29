@@ -25,6 +25,7 @@ import type { CashReportPrintPayload } from '@comanview/printing';
 import type { EdgeOperationalContext } from '../../../app/operationalContext.js';
 import { AppError } from '../../../app/errorHandler.js';
 import type { AuthorizedOperation } from '../../../app/authContext.js';
+import type { EdgeLicenseManager } from '../../licensing/EdgeLicenseManager.js';
 
 const moneyJson = (money: Money) => money.toJSON();
 
@@ -33,6 +34,7 @@ export class CashService {
     private readonly cashRepo: CashRepository,
     private readonly printRepo: PrintJobRepository,
     private readonly context: EdgeOperationalContext,
+    private readonly licensing?: EdgeLicenseManager,
   ) {}
 
   ensureDefaultRegister(): void {
@@ -60,10 +62,12 @@ export class CashService {
   openSession(request: OpenCashSessionRequest, operation: AuthorizedOperation): CashSessionResponse {
     const existingForCommand = this.cashRepo.getSessionByCommandId(request.commandId);
     if (existingForCommand) {
+      const existingMetadata = this.cashRepo.getSessionMetadata(existingForCommand.id.toString());
       if (
         existingForCommand.openingFloat.amount !== request.openingFloatAmount ||
         existingForCommand.businessDate !== request.businessDate ||
-        existingForCommand.openedBy.toString() !== operation.actor.userId
+        existingForCommand.openedBy.toString() !== operation.actor.userId ||
+        (existingMetadata?.purpose ?? 'NORMAL') !== (request.purpose ?? 'NORMAL')
       ) {
         throw new AppError(
           'COMMAND_ID_CONFLICT',
@@ -73,6 +77,11 @@ export class CashService {
       }
       return this.mapSession(existingForCommand);
     }
+    const purpose = request.purpose ?? 'NORMAL';
+    this.licensing?.assertAllowed(
+      purpose === 'LICENSE_RECOVERY' ? 'CASH_SESSION_OPEN_RECOVERY' : 'CASH_SESSION_OPEN_NORMAL',
+      'CORE_POS',
+    );
     const registerId = EntityId.fromString(this.context.cashRegisterId);
     if (this.cashRepo.getOpenSession(registerId)) {
       throw new AppError('CASH_SESSION_ALREADY_OPEN', 409, 'La caja ya tiene una sesión abierta.');
@@ -86,7 +95,19 @@ export class CashService {
       openedBy: EntityId.fromString(operation.actor.userId),
       commandId: request.commandId,
     });
-    this.cashRepo.openSession(session);
+    const authorization = this.licensing?.currentOpenAuthorization() ?? { revision: null, mode: 'LEGACY' };
+    const protectedOrderIds = purpose === 'LICENSE_RECOVERY'
+      ? (this.licensing?.protectedOrderIds() ?? []) : [];
+    const recoveryAudit = purpose === 'LICENSE_RECOVERY' ? this.auditEntry(operation, {
+      action: 'LICENSE_RECOVERY_CASH_SESSION_OPENED', entityType: 'CASH_SESSION',
+      entityId: session.id.toString(), reason: 'Restricted license recovery for protected Orders',
+      commandId: request.commandId, before: null,
+      after: { purpose, protectedOrderIds, licenseRevision: authorization.revision },
+      amountAffected: request.openingFloatAmount, currency: this.context.currency, eventId: null,
+    }) : undefined;
+    this.cashRepo.openSession(session, { purpose, openedLicenseRevision: authorization.revision,
+      openedLicenseMode: authorization.mode, protectedOrderIds,
+      ...(recoveryAudit ? { audit: recoveryAudit } : {}) });
     return this.mapSession(session);
   }
 
@@ -108,6 +129,7 @@ export class CashService {
       if (!session) throw new AppError('CASH_SESSION_NOT_OPEN', 409, 'CashSession not found.');
       return this.mapMovement(existing, this.cashRepo.calculateExpectedCash(session));
     }
+    this.licensing?.assertAllowed('CASH_MOVEMENT', 'CORE_POS');
     const session = this.requireOpenSession();
     const movement = CashMovement.create({
       cashSessionId: session.id,
@@ -150,6 +172,7 @@ export class CashService {
       }
       return existing.snapshot as CashReportSnapshotResponse;
     }
+    this.licensing?.assertAllowed('CASH_REPORT', 'CORE_POS');
     const session = this.requireOpenSession();
     const generatedAt = new Date();
     const reportId = EntityId.generate().toString();
@@ -197,6 +220,7 @@ export class CashService {
     request: PreviewCashClosingRequest,
     _operation: AuthorizedOperation,
   ): CashClosingPreviewResponse {
+    this.licensing?.assertAllowed('CASH_REPORT', 'CORE_POS');
     const session = this.requireOpenSession();
     this.assertNoPendingPayments(session);
     const counted = Money.fromMinorUnits(request.countedCashAmount, session.openingFloat.currency);
@@ -241,6 +265,7 @@ export class CashService {
       if (!session) throw new AppError('CASH_SESSION_NOT_OPEN', 409, 'CashSession not found.');
       return { session: this.mapSession(session), report };
     }
+    this.licensing?.assertAllowed('CASH_CLOSE', 'CORE_POS');
     const session = this.requireOpenSession();
     this.assertNoPendingPayments(session);
     const summary = this.cashRepo.calculateFinancialSummary(session);
@@ -315,6 +340,7 @@ export class CashService {
   private mapSession(session: CashSession): CashSessionResponse {
     const register = this.cashRepo.getRegister(session.cashRegisterId);
     const blindCashCount = register?.blindCashCount ?? true;
+    const metadata = this.cashRepo.getSessionMetadata(session.id.toString());
     return {
       id: session.id.toString(),
       cashRegisterId: session.cashRegisterId.toString(),
@@ -335,6 +361,7 @@ export class CashService {
       countedCash: session.countedCash?.toJSON() ?? null,
       expectedCashAtClose: session.expectedCashAtClose?.toJSON() ?? null,
       difference: session.difference?.toJSON() ?? null,
+      purpose: metadata?.purpose ?? 'NORMAL',
     };
   }
 

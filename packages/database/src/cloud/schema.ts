@@ -396,3 +396,96 @@ export const cloudAdminAuditLog = pgTable('cloud_admin_audit_log', {
   previousHash: text('previous_hash'),
   entryHash: text('entry_hash').notNull(),
 });
+
+export const cloudPlans = pgTable('cloud_plans', {
+  planId: uuid('plan_id').primaryKey(),
+  code: text('code').notNull().unique(),
+  displayName: text('display_name').notNull(),
+  active: boolean('active').notNull().default(true),
+  revision: integer('revision').notNull().default(1),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull(),
+});
+
+export const cloudPlanEntitlements = pgTable(
+  'cloud_plan_entitlements',
+  {
+    planId: uuid('plan_id').notNull(),
+    capability: text('capability').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+  },
+  (table) => ({ pk: primaryKey({ columns: [table.planId, table.capability] }) }),
+);
+
+export const cloudLocationLicenseState = pgTable('cloud_location_license_state', {
+  locationId: uuid('location_id').primaryKey(),
+  tenantId: uuid('tenant_id').notNull(),
+  planId: uuid('plan_id').notNull(),
+  declaredState: text('declared_state').notNull(),
+  revision: integer('revision').notNull().default(1),
+  updatedByAdminUserId: uuid('updated_by_admin_user_id').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull(),
+});
+
+export const cloudLocationConfigurationState = pgTable('cloud_location_configuration_state', {
+  locationId: uuid('location_id').primaryKey(),
+  tenantId: uuid('tenant_id').notNull(),
+  revision: integer('revision').notNull().default(1),
+  configuration: jsonb('configuration').notNull(),
+  updatedByAdminUserId: uuid('updated_by_admin_user_id').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull(),
+});
+
+export const cloudLocationFeatureFlagState = pgTable('cloud_location_feature_flag_state', {
+  locationId: uuid('location_id').primaryKey(),
+  tenantId: uuid('tenant_id').notNull(),
+  revision: integer('revision').notNull().default(1),
+  flags: jsonb('flags').notNull(),
+  updatedByAdminUserId: uuid('updated_by_admin_user_id').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull(),
+});
+
+export const cloudLocationControlState = pgTable('cloud_location_control_state', {
+  locationId: uuid('location_id').primaryKey(),
+  tenantId: uuid('tenant_id').notNull(),
+  desiredControlRevision: bigint('desired_control_revision', { mode: 'number' }).notNull().default(1),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull(),
+});
+
+export const cloudSignedControlDocuments = pgTable(
+  'cloud_signed_control_documents',
+  {
+    documentId: uuid('document_id').primaryKey(),
+    documentType: text('document_type').notNull(),
+    tenantId: uuid('tenant_id').notNull(),
+    locationId: uuid('location_id').notNull(),
+    edgeId: uuid('edge_id').notNull(),
+    revision: integer('revision').notNull(),
+    kid: text('kid').notNull(),
+    documentHash: text('document_hash').notNull(),
+    envelope: jsonb('envelope').notNull(),
+    issuedAt: timestamp('issued_at', { withTimezone: true }).notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
+    graceUntil: timestamp('grace_until', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+  },
+  (table) => ({
+    edgeStreamRevision: uniqueIndex('unq_cloud_control_edge_stream_revision').on(
+      table.edgeId, table.documentType, table.revision,
+    ),
+  }),
+);
+
+export const cloudEdgeControlStateAcks = pgTable(
+  'cloud_edge_control_state_acks',
+  {
+    edgeId: uuid('edge_id').notNull(),
+    documentType: text('document_type').notNull(),
+    revision: integer('revision').notNull(),
+    documentHash: text('document_hash').notNull(),
+    appliedAt: timestamp('applied_at', { withTimezone: true }).notNull(),
+    receivedAt: timestamp('received_at', { withTimezone: true }).notNull(),
+    commandId: uuid('command_id').notNull().unique(),
+  },
+  (table) => ({ pk: primaryKey({ columns: [table.edgeId, table.documentType, table.revision] }) }),
+);

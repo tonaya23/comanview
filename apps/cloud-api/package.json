@@ -20,6 +20,7 @@
     "@comanview/sync": "workspace:*",
     "@comanview/database": "workspace:*",
     "@comanview/auth": "workspace:*",
+    "@comanview/licensing": "workspace:*",
     "fastify": "^5.12.0",
     "fastify-type-provider-zod": "^4.0.2",
     "zod": "^3.25.67"

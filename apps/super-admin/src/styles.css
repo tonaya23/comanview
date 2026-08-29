@@ -31,3 +31,5 @@ code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }.status 
 @media (max-width: 900px) { .control-grid { grid-template-columns: 1fr; }.location-control { grid-template-columns: 1fr; } }
 .edge-actions { display: flex; gap: 8px; flex-wrap: wrap; }.edge-actions .secondary { margin: 0; }
 .secondary.danger { background: #f5dddd; color: #8a2929; }.pending-replacement { color: #855b09 !important; font-weight: 700; margin-top: 5px; }.empty-state { max-width: 680px; text-align: center; padding: 34px; }.empty-state p { color: #687a77; }.empty-state .secondary { margin-top: 8px; }
+.control-grid.compact { margin: 0; }.capability-grid { display: flex; flex-wrap: wrap; gap: 8px 18px; }.capability-grid label { display: flex; align-items: center; gap: 7px; margin: 4px 0; font-size: .82rem; }.capability-grid input { min-height: auto; }.plan-row { display: block; margin-top: 9px; color: #687a77; }
+.license-actions { display: flex !important; flex-wrap: wrap; gap: 8px; }.license-actions select { min-width: 150px; }.license-actions .secondary { margin: 0; }

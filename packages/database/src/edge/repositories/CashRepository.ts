@@ -74,7 +74,10 @@ export class CashRepository {
     });
   }
 
-  openSession(session: CashSession): void {
+  openSession(session: CashSession, metadata: {
+    purpose: 'NORMAL'|'LICENSE_RECOVERY'; openedLicenseRevision: number|null;
+    openedLicenseMode: string; protectedOrderIds: string[]; audit?: NewAuditEntry;
+  } = { purpose: 'NORMAL', openedLicenseRevision: null, openedLicenseMode: 'LEGACY', protectedOrderIds: [] }): void {
     try {
       this.db.transaction((tx) => {
         tx.insert(schema.cashSessions)
@@ -91,8 +94,22 @@ export class CashRepository {
             openedBy: session.openedBy.toString(),
             closedAt: session.closedAt,
             openCommandId: session.openCommandId,
+            purpose: metadata.purpose,
+            openedLicenseRevision: metadata.openedLicenseRevision,
+            openedLicenseMode: metadata.openedLicenseMode,
           })
           .run();
+
+        for (const orderId of metadata.protectedOrderIds) {
+          tx.insert(schema.cashSessionProtectedOrders).values({
+            cashSessionId: session.id.toString(), orderId,
+          }).run();
+        }
+        if (metadata.purpose === 'LICENSE_RECOVERY') {
+          tx.update(schema.edgeControlRuntime).set({ recoverySessionConsumed: true })
+            .where(eq(schema.edgeControlRuntime.singletonKey, 'PRIMARY')).run();
+        }
+        if (metadata.audit) insertAuditEntry(tx as unknown as DB, metadata.audit);
 
         tx.insert(schema.processedCommands)
           .values({ commandId: session.openCommandId, processedAt: session.openedAt })
@@ -130,6 +147,17 @@ export class CashRepository {
       }
       throw error;
     }
+  }
+
+  getSessionMetadata(id: string): {
+    purpose: 'NORMAL'|'LICENSE_RECOVERY'; openedLicenseRevision: number|null; openedLicenseMode: string|null;
+  } | null {
+    const row = this.db.select({ purpose: schema.cashSessions.purpose,
+      openedLicenseRevision: schema.cashSessions.openedLicenseRevision,
+      openedLicenseMode: schema.cashSessions.openedLicenseMode })
+      .from(schema.cashSessions).where(eq(schema.cashSessions.id, id)).get();
+    return row ? { purpose: row.purpose as 'NORMAL'|'LICENSE_RECOVERY',
+      openedLicenseRevision: row.openedLicenseRevision, openedLicenseMode: row.openedLicenseMode } : null;
   }
 
   getOpenSession(cashRegisterId: EntityId): CashSession | null {

@@ -42,6 +42,7 @@ function migrateAndSeed(path: string) {
     '0009_operational_realtime.sql',
     '0010_sync_foundation.sql',
     '0011_edge_provisioning.sql',
+    '0012_signed_licensing_configuration.sql',
   ]) {
     sqlite.exec(
       readFileSync(resolve(__dirname, `../../../../migrations/edge/${migration}`), 'utf8'),
