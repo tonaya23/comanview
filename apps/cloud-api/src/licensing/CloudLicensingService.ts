@@ -3,6 +3,7 @@ import type {
   CapabilityCode,
   EdgeConfiguration,
   LicenseDeclaredState,
+  DeviceLimits,
 } from '@comanview/contracts';
 import type {
   CloudAdminMutationActor,
@@ -19,6 +20,8 @@ import {
   LICENSE_RENEWAL_WINDOW_MS,
   hashSignedEnvelope,
   signControlDocument,
+  signInstallationAuthorization,
+  hashPairingCode,
 } from '@comanview/licensing';
 import { CloudError } from '../app/CloudError.js';
 
@@ -36,7 +39,7 @@ export class CloudLicensingService {
   }
 
   async createPlan(input: {
-    commandId: string; code: string; displayName: string; capabilities: CapabilityCode[]; reason: string;
+    commandId: string; code: string; displayName: string; capabilities: CapabilityCode[]; deviceLimits: DeviceLimits; reason: string;
   }, actor: CloudAdminMutationActor): Promise<CloudPlanRecord> {
     const existing = await this.repository.findIdempotentResult(input.commandId);
     if (existing?.['planId']) {
@@ -65,6 +68,7 @@ export class CloudLicensingService {
           tenantId: context.tenantId, locationId, edgeId: context.activeEdgeId,
           planCode: context.plan.code, declaredState: input.declaredState,
           capabilities: context.plan.capabilities, configuration: input.configuration,
+          deviceLimits: context.plan.deviceLimits,
           featureFlags: current?.featureFlags ?? {}, types: ['LICENSE','CONFIGURATION','FEATURE_FLAGS'],
         })
       : [];
@@ -144,6 +148,29 @@ export class CloudLicensingService {
   }
 
   desiredRevision(edgeId: string) { return this.repository.desiredRevision(edgeId); }
+  getLatestInstallationAuthorization(locationId:string){
+    return this.repository.getLatestInstallationAuthorization(locationId,this.now());
+  }
+  consumeInstallationAuthorization(edgeId:string,input:{commandId:string;authorizationId:string;consumedAt:string}){
+    return this.repository.consumeInstallationAuthorization({edgeId,commandId:input.commandId,authorizationId:input.authorizationId,consumedAt:new Date(input.consumedAt)});
+  }
+  async issueInstallationAuthorization(locationId:string,input:{commandId:string;pairingId:string;pairingCode:string;deviceId:string;
+    deviceType:'POS'|'WAITER'|'KDS';displayName:string;initialOwnerDisplayName:string;reason:string},actor:CloudAdminMutationActor){
+    const previous = await this.repository.getInstallationAuthorizationByCommand(input.commandId);
+    if (previous) return { authorizationId: previous.authorizationId, status: previous.status,
+      expiresAt: previous.expiresAt.toISOString(), authorization: previous.envelope };
+    const assignment=await this.requireAssignment(locationId);
+    if(!assignment.activeEdgeId) throw new CloudError('CLOUD_LOCATION_UNPROVISIONED',409,'Location does not have an ACTIVE Edge.');
+    const issuedAt=this.now(),expiresAt=new Date(issuedAt.getTime()+10*60_000),authorizationId=EntityId.generate().toString();
+    const payload={formatVersion:1 as const,typ:'comanview-installation-authorization' as const,authorizationId,
+      tenantId:assignment.tenantId,locationId,edgeId:assignment.activeEdgeId,pairingId:input.pairingId,
+      pairingCodeHash:hashPairingCode(input.pairingId,input.pairingCode),deviceId:input.deviceId,deviceType:input.deviceType,
+      displayName:input.displayName,initialOwnerId:EntityId.generate().toString(),initialOwnerDisplayName:input.initialOwnerDisplayName,
+      issuedAt:issuedAt.toISOString(),expiresAt:expiresAt.toISOString()};
+    const envelope=signInstallationAuthorization(payload,this.signing.signingKid,this.signing.privateKeyPem);
+    const stored = await this.repository.issueInstallationAuthorization({...payload,kid:this.signing.signingKid,envelope,commandId:input.commandId,reason:input.reason,actor,issuedAt,expiresAt});
+    return {authorizationId:stored.authorization_id,status:stored.status,expiresAt:stored.expires_at.toISOString(),authorization:stored.envelope};
+  }
 
   private async requireAssignment(locationId: string): Promise<LocationLicenseRecord> {
     const assignment = await this.repository.getLocationAssignment(locationId);
@@ -154,6 +181,7 @@ export class CloudLicensingService {
   private async buildDocuments(input: {
     tenantId: string; locationId: string; edgeId: string; planCode: string;
     declaredState: LicenseDeclaredState; capabilities: CapabilityCode[];
+    deviceLimits: DeviceLimits | null;
     configuration: EdgeConfiguration; featureFlags: Record<string, boolean>;
     types: Array<'LICENSE'|'FEATURE_FLAGS'|'CONFIGURATION'>;
   }): Promise<NewSignedControlDocument[]> {
@@ -173,6 +201,7 @@ export class CloudLicensingService {
       const payload = type === 'LICENSE'
         ? { ...base, documentType: 'LICENSE' as const, declaredState: input.declaredState,
             planCode: input.planCode, capabilities: input.capabilities,
+            ...(input.deviceLimits ? { deviceLimits: input.deviceLimits } : {}),
             expiresAt: expiresAt!.toISOString(), graceUntil: graceUntil!.toISOString() }
         : type === 'FEATURE_FLAGS'
           ? { ...base, documentType: 'FEATURE_FLAGS' as const, flags: input.featureFlags }
@@ -199,6 +228,6 @@ export function planResponse(plan: CloudPlanRecord) {
 export function assignmentResponse(value: LocationLicenseRecord) {
   return { tenantId: value.tenantId, locationId: value.locationId, planId: value.planId,
     planCode: value.planCode, declaredState: value.declaredState, revision: value.revision,
-    capabilities: value.capabilities, configuration: value.configuration,
+    capabilities: value.capabilities, deviceLimits:value.deviceLimits, configuration: value.configuration,
     configurationRevision: value.configurationRevision, updatedAt: value.updatedAt.toISOString() };
 }

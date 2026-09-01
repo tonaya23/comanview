@@ -5,4 +5,4 @@
  * Used by POS, Waiter, KDS and Super-Admin apps.
  */
 
-export {};
+export * from './DeviceOnboardingCard.js';

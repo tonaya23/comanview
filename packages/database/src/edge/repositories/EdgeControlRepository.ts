@@ -16,6 +16,7 @@ import {
   edgeControlRuntime,
   edgeProtectedOrders,
   orders,
+  installationState,
 } from '../schema.js';
 
 export type ControlPayload = LicenseDocumentPayload | FeatureFlagsDocumentPayload | ConfigurationDocumentPayload;
@@ -142,6 +143,14 @@ export class EdgeControlRepository {
     this.db.update(edgeControlAckOutbox).set({ attemptCount: sql`${edgeControlAckOutbox.attemptCount}+1`,
       lastError: error.slice(0,500), nextAttemptAt }).where(eq(edgeControlAckOutbox.commandId, commandId)).run();
   }
+  pendingInstallationAuthorizationAck(now:Date){
+    const row=this.db.select().from(installationState).where(eq(installationState.singletonKey,'PRIMARY')).get();
+    return row?.bootstrapStatus==='COMPLETED'&&row.authorizationId&&row.cloudAckCommandId&&!row.cloudAcknowledgedAt&&
+      (!row.cloudAckNextAttemptAt||row.cloudAckNextAttemptAt<=now)
+      ? {commandId:row.cloudAckCommandId,authorizationId:row.authorizationId,consumedAt:row.completedAt!,attemptCount:row.cloudAckAttemptCount}:null;
+  }
+  markInstallationAuthorizationAcked(at:Date):void{this.db.update(installationState).set({cloudAcknowledgedAt:at,cloudAckLastError:null}).where(eq(installationState.singletonKey,'PRIMARY')).run();}
+  markInstallationAuthorizationAckFailed(error:string,nextAttemptAt:Date):void{this.db.update(installationState).set({cloudAckAttemptCount:sql`${installationState.cloudAckAttemptCount}+1`,cloudAckLastError:error.slice(0,500),cloudAckNextAttemptAt:nextAttemptAt}).where(eq(installationState.singletonKey,'PRIMARY')).run();}
 
   getOpenCashSession(): {
     id: string; purpose: string; openedLicenseRevision: number|null; openedLicenseMode: string|null;

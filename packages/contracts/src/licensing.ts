@@ -49,9 +49,20 @@ export const LicenseDocumentPayloadSchema = DocumentIdentitySchema.extend({
   declaredState: LicenseDeclaredStateSchema,
   planCode: z.string().trim().min(1).max(120),
   capabilities: z.array(CapabilityCodeSchema).max(100),
+  deviceLimits: z.object({
+    POS: z.number().int().nonnegative().nullable(),
+    WAITER: z.number().int().nonnegative().nullable(),
+    KDS: z.number().int().nonnegative().nullable(),
+  }).optional(),
   expiresAt: TimestampSchema,
   graceUntil: TimestampSchema,
 });
+export const DeviceLimitsSchema = z.object({
+  POS: z.number().int().nonnegative().nullable(),
+  WAITER: z.number().int().nonnegative().nullable(),
+  KDS: z.number().int().nonnegative().nullable(),
+});
+export type DeviceLimits = z.infer<typeof DeviceLimitsSchema>;
 
 export const FeatureFlagsDocumentPayloadSchema = DocumentIdentitySchema.extend({
   documentType: z.literal('FEATURE_FLAGS'),
@@ -108,6 +119,7 @@ export const EffectiveCapabilitiesResponseSchema = z.object({
   mode: EffectiveLicenseModeSchema,
   declaredState: LicenseDeclaredStateSchema.nullable(),
   capabilities: z.array(CapabilityCodeSchema),
+  deviceLimits: DeviceLimitsSchema.optional(),
   licenseRevision: z.number().int().positive().nullable(),
   featureFlagsRevision: z.number().int().positive().nullable(),
   configurationRevision: z.number().int().positive().nullable(),
@@ -125,6 +137,7 @@ export const CloudPlanSchema = z.object({
   displayName: z.string().trim().min(1).max(160),
   active: z.boolean(),
   capabilities: z.array(CapabilityCodeSchema),
+  deviceLimits: DeviceLimitsSchema.nullable(),
   revision: z.number().int().positive(),
   createdAt: TimestampSchema,
   updatedAt: TimestampSchema,
@@ -134,6 +147,7 @@ export const CreateCloudPlanRequestSchema = z.object({
   code: z.string().trim().min(1).max(120).regex(/^[A-Z0-9_-]+$/),
   displayName: z.string().trim().min(1).max(160),
   capabilities: z.array(CapabilityCodeSchema),
+  deviceLimits: DeviceLimitsSchema,
   reason: z.string().trim().min(3).max(500),
 });
 export const CloudPlanListResponseSchema = z.object({ data: z.array(CloudPlanSchema) });
@@ -146,6 +160,7 @@ export const LocationLicenseAssignmentSchema = z.object({
   declaredState: LicenseDeclaredStateSchema,
   revision: z.number().int().positive(),
   capabilities: z.array(CapabilityCodeSchema),
+  deviceLimits: DeviceLimitsSchema.nullable(),
   configuration: EdgeConfigurationPayloadSchema,
   configurationRevision: z.number().int().positive(),
   updatedAt: TimestampSchema,

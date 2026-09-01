@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useState, type FormEvent, type KeyboardEvent } from 'react';
 import {
   CloudAdminClientError,
   createCloudAdminClient,
@@ -21,7 +21,11 @@ import type {
   LocationLicenseAssignment,
   CapabilityCode,
   LicenseDeclaredState,
+  InstallationAuthorizationStatus,
+  PairingAuthorizationData,
 } from '@comanview/contracts';
+import { InstallationAuthorizationPanel } from './InstallationAuthorizationPanel.js';
+import { LocationCommercialSummary } from './LocationCommercialSummary.js';
 
 type View = 'control-plane' | 'locations' | 'overview' | 'orders' | 'sales' | 'cash';
 const client = createCloudAdminClient();
@@ -99,7 +103,7 @@ function Login({ onAuthenticated }: { onAuthenticated(value: CloudAdminSessionRe
   return <div className="login-shell"><form className="login-card" onSubmit={submit}>
     <div className="login-mark">CV</div><h1>ComanView Cloud</h1><p>Acceso privado de administración</p>
     <label>Email<input type="email" autoComplete="username" value={email} onChange={(event) => setEmail(event.target.value)} required /></label>
-    <label>Password<input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} required minLength={8} /></label>
+    <label>Contraseña<input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} required minLength={8} /></label>
     <div className="form-error" aria-live="polite">{error ?? '\u00a0'}</div>
     <button className="primary" disabled={busy}>{busy ? 'Ingresando…' : 'Iniciar sesión'}</button>
   </form></div>;
@@ -113,7 +117,7 @@ function Locations({ onSelect, onError }: { onSelect(value: CloudLocationSummary
   return <section><PageTitle title="Locations" subtitle="Estado operacional recibido desde cada Edge" />
     <div className="toolbar"><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">Todos los estados</option><option>ONLINE</option><option>DEGRADED</option><option>OFFLINE</option></select></div>
     <div className="table-card"><table><thead><tr><th>Location</th><th>Edge</th><th>Estado</th><th>Heartbeat</th><th>Version</th><th>Pendientes</th></tr></thead><tbody>
-      {page?.data.map((item) => <tr key={item.locationId} className="clickable" onClick={() => onSelect(item)}><td><code>{item.locationId}</code><small>Tenant {shortId(item.tenantId)}</small></td><td><code>{shortId(item.edgeId)}</code></td><td><Status value={item.edgeStatus} /></td><td>{date(item.lastSeenAt)}</td><td>{item.edgeVersion ?? '—'} / schema {item.schemaVersion ?? '—'}</td><td>{item.pendingEventCount ?? '—'}</td></tr>)}
+      {page?.data.map((item) => <tr key={item.locationId} className="clickable" role="button" tabIndex={0} onKeyDown={(event)=>activateRow(event,()=>onSelect(item))} onClick={() => onSelect(item)}><td><code>{item.locationId}</code><small>Tenant {shortId(item.tenantId)}</small></td><td><code>{shortId(item.edgeId)}</code></td><td><Status value={item.edgeStatus} /></td><td>{date(item.lastSeenAt)}</td><td>{item.edgeVersion ?? '—'} / schema {item.schemaVersion ?? '—'}</td><td>{item.pendingEventCount ?? '—'}</td></tr>)}
     </tbody></table>{page && page.data.length === 0 && <Empty text="No hay Locations visibles para este usuario." />}</div>
     {page?.page.nextCursor && <button className="secondary" onClick={() => load(page.page.nextCursor!)}>Siguiente página</button>}
   </section>;
@@ -131,15 +135,15 @@ function Overview({ location, canViewFinancial, canManageControlPlane, onOpenCon
       setState('error'); onError(message(error));
     });
   }, [location.locationId]);
-  if (state === 'loading') return <CenteredState text="Cargando overview…" />;
-  if (state === 'unprovisioned') return <section><PageTitle title="Location Overview" subtitle={location.locationId} /><article className="panel empty-state"><h2>Esta Location aún no tiene un Edge ACTIVE</h2><p>Provisiona un Edge desde Control Plane para habilitar el estado operacional.</p>{canManageControlPlane && <button className="secondary" onClick={onOpenControlPlane}>Ir a Control Plane</button>}</article></section>;
-  if (state === 'error' || !data) return <section><PageTitle title="Location Overview" subtitle={location.locationId} /><Empty text="No fue posible cargar el overview." /></section>;
-  return <section><PageTitle title="Location Overview" subtitle={location.locationId} />
-    <div className="cards"><Metric label="Edge" value={data.location.edgeStatus} tone={data.location.edgeStatus.toLowerCase()} /><Metric label="Orders OPEN" value={data.orderCounts.open} /><Metric label="Orders CLOSED" value={data.orderCounts.closed} /><Metric label="Orders CANCELLED" value={data.orderCounts.cancelled} /></div>
+  if (state === 'loading') return <CenteredState text="Cargando resumen…" />;
+  if (state === 'unprovisioned') return <section><PageTitle title="Resumen de Location" subtitle={location.locationId} /><article className="panel empty-state"><h2>Esta Location aún no tiene un Edge activo</h2><p>Provisiona un Edge desde Control Plane para habilitar el estado operacional.</p>{canManageControlPlane && <button className="secondary" onClick={onOpenControlPlane}>Ir a Control Plane</button>}</article></section>;
+  if (state === 'error' || !data) return <section><PageTitle title="Resumen de Location" subtitle={location.locationId} /><Empty text="No fue posible cargar el resumen." /></section>;
+  return <section><PageTitle title="Resumen de Location" subtitle={location.locationId} />
+    <div className="cards"><Metric label="Edge" value={statusLabel(data.location.edgeStatus)} tone={data.location.edgeStatus.toLowerCase()} /><Metric label="Pedidos abiertos" value={data.orderCounts.open} /><Metric label="Pedidos cerrados" value={data.orderCounts.closed} /><Metric label="Pedidos cancelados" value={data.orderCounts.cancelled} /></div>
     <div className="info-grid"><article className="panel"><h2>Operación</h2><Info label="Último heartbeat" value={date(data.location.lastSeenAt)} /><Info label="Último evento recibido" value={date(data.location.projectionHealth.lastEventReceivedAt)} /><Info label="Última projection procesada" value={date(data.location.projectionHealth.lastProjectionProcessedAt)} /><Info label="Eventos reportados pendientes" value={String(data.location.pendingEventCount ?? '—')} /></article>
-      {canViewFinancial && data.financial && <article className="panel"><h2>Ventas cerradas completas</h2>{data.financial.completeSalesTotals.map((total) => <div className="financial-total" key={total.currency}><strong>{money(total.chargedTotal, total.currency)}</strong><span>Venta {money(total.saleAmount, total.currency)} · Tip {money(total.tipAmount, total.currency)}</span></div>)}{data.financial.completeSalesTotals.length === 0 && <Empty text="Sin ventas completas en las últimas 24 horas." />}{data.financial.incompleteSaleCount > 0 && <div className="warning">{data.financial.incompleteSaleCount} venta(s) INCOMPLETE excluidas de totals.</div>}</article>}
+      {canViewFinancial && data.financial && <article className="panel"><h2>Ventas cerradas completas</h2>{data.financial.completeSalesTotals.map((total) => <div className="financial-total" key={total.currency}><strong>{money(total.chargedTotal, total.currency)}</strong><span>Venta {money(total.saleAmount, total.currency)} · Propina {money(total.tipAmount, total.currency)}</span></div>)}{data.financial.completeSalesTotals.length === 0 && <Empty text="Sin ventas completas en las últimas 24 horas." />}{data.financial.incompleteSaleCount > 0 && <div className="warning">{data.financial.incompleteSaleCount} venta(s) incompleta(s) excluida(s) de los totales.</div>}</article>}
     </div>
-    <div className="section-heading"><h2>Orders recientes</h2><button className="text-button" onClick={onOpenOrder}>Ver todas</button></div><OrdersTable rows={data.recentOrders} />
+    <div className="section-heading"><h2>Pedidos recientes</h2><button className="text-button" onClick={onOpenOrder}>Ver todos</button></div><OrdersTable rows={data.recentOrders} />
   </section>;
 }
 
@@ -147,10 +151,10 @@ function Orders({ location, canViewFinancial, onError }: { location: CloudLocati
   const [page, setPage] = useState<CloudAdminPage<CloudOrderSummary> | null>(null); const [status, setStatus] = useState(''); const [detail, setDetail] = useState<CloudOrderDetail | null>(null);
   const load = (cursor?: string) => client.getOrders(location.locationId, { status: status || undefined, cursor }).then(setPage).catch((error) => onError(message(error)));
   useEffect(() => { setDetail(null); void load(); }, [location.locationId, status]);
-  return <section><PageTitle title="Orders" subtitle="Resumen operacional; el detalle de items no está proyectado" /><div className="toolbar"><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">Todos</option><option>OPEN</option><option>CLOSED</option><option>CANCELLED</option></select></div>
+  return <section><PageTitle title="Pedidos" subtitle="Resumen operacional; el detalle de productos no está proyectado" /><div className="toolbar"><select aria-label="Filtrar pedidos por estado" value={status} onChange={(event) => setStatus(event.target.value)}><option value="">Todos</option><option value="OPEN">Abiertos</option><option value="CLOSED">Cerrados</option><option value="CANCELLED">Cancelados</option></select></div>
     <OrdersTable rows={page?.data ?? []} onSelect={(order) => client.getOrder(location.locationId, order.orderId).then(setDetail).catch((error) => onError(message(error)))} />
     {page?.page.nextCursor && <button className="secondary" onClick={() => load(page.page.nextCursor!)}>Siguiente página</button>}
-    {detail && <article className="panel detail"><button className="close" onClick={() => setDetail(null)}>×</button><h2>Order {shortId(detail.order.orderId)}</h2><Info label="Estado" value={detail.order.status} /><Info label="Items / SENT" value={`${detail.order.itemCount} / ${detail.order.sentItemCount}`} /><Info label="Mesas" value={detail.order.tableIds.join(', ') || '—'} />{canViewFinancial && detail.financial && <><h3>Payments</h3>{detail.financial.payments.map((payment) => <p key={payment.paymentId}>{payment.method} · {money(payment.amountApplied, payment.currency)} + tip {money(payment.tipAmount, payment.currency)} · {payment.status}</p>)}</>}</article>}
+    {detail && <article className="panel detail"><button type="button" className="close" aria-label="Cerrar detalle del pedido" onClick={() => setDetail(null)}>×</button><h2>Pedido {shortId(detail.order.orderId)}</h2><Info label="Estado" value={statusLabel(detail.order.status)} /><Info label="Productos / enviados" value={`${detail.order.itemCount} / ${detail.order.sentItemCount}`} /><Info label="Mesas" value={detail.order.tableIds.join(', ') || '—'} />{canViewFinancial && detail.financial && <><h3>Pagos</h3>{detail.financial.payments.map((payment) => <p key={payment.paymentId}>{payment.method} · {money(payment.amountApplied, payment.currency)} + propina {money(payment.tipAmount, payment.currency)} · {statusLabel(payment.status)}</p>)}</>}</article>}
   </section>;
 }
 
@@ -158,14 +162,15 @@ function Sales({ location, onError }: { location: CloudLocationSummary; onError(
   const [page, setPage] = useState<CloudAdminPage<CloudSaleSummary> | null>(null); const [completeness, setCompleteness] = useState('');
   const load = (cursor?: string) => client.getSales(location.locationId, { completenessStatus: completeness || undefined, cursor }).then(setPage).catch((error) => onError(message(error)));
   useEffect(() => { void load(); }, [location.locationId, completeness]);
-  return <section><PageTitle title="Sales" subtitle="Importes autoritativos proyectados al cierre" /><div className="toolbar"><select value={completeness} onChange={(event) => setCompleteness(event.target.value)}><option value="">Todas</option><option>COMPLETE</option><option>INCOMPLETE</option></select></div><div className="table-card"><table><thead><tr><th>Order</th><th>Cierre UTC</th><th>Venta</th><th>Tip</th><th>Charged total</th><th>Completitud</th></tr></thead><tbody>{page?.data.map((sale) => <tr key={sale.orderId}><td><code>{shortId(sale.orderId)}</code></td><td>{date(sale.closedAt)}</td><td>{money(sale.saleAmount, sale.currency)}</td><td>{money(sale.tipAmount, sale.currency)}</td><td>{money(sale.chargedTotal, sale.currency)}</td><td><Status value={sale.completenessStatus} /></td></tr>)}</tbody></table></div>{page?.page.nextCursor && <button className="secondary" onClick={() => load(page.page.nextCursor!)}>Siguiente página</button>}</section>;
+  return <section><PageTitle title="Ventas" subtitle="Importes autoritativos proyectados al cierre" /><div className="toolbar"><select aria-label="Filtrar ventas por completitud" value={completeness} onChange={(event) => setCompleteness(event.target.value)}><option value="">Todas</option><option value="COMPLETE">Completas</option><option value="INCOMPLETE">Incompletas</option></select></div><div className="table-card"><table><thead><tr><th>Pedido</th><th>Cierre UTC</th><th>Venta</th><th>Propina</th><th>Total cobrado</th><th>Completitud</th></tr></thead><tbody>{page?.data.map((sale) => <tr key={sale.orderId}><td><code>{shortId(sale.orderId)}</code></td><td>{date(sale.closedAt)}</td><td>{money(sale.saleAmount, sale.currency)}</td><td>{money(sale.tipAmount, sale.currency)}</td><td>{money(sale.chargedTotal, sale.currency)}</td><td><Status value={sale.completenessStatus} /></td></tr>)}</tbody></table></div>{page?.page.nextCursor && <button className="secondary" onClick={() => load(page.page.nextCursor!)}>Siguiente página</button>}</section>;
 }
 
 function CashSessions({ location, onError }: { location: CloudLocationSummary; onError(value: string | null): void }) {
   const [page, setPage] = useState<CloudAdminPage<CloudCashSessionSummary> | null>(null); const [movements, setMovements] = useState<CloudCashMovement[] | null>(null); const [status, setStatus] = useState('');
   const load = () => client.getCashSessions(location.locationId, { status: status || undefined }).then(setPage).catch((error) => onError(message(error)));
   useEffect(() => { setMovements(null); void load(); }, [location.locationId, status]);
-  return <section><PageTitle title="CashSessions" subtitle="Expected y difference sólo aparecen después del cierre Edge" /><div className="toolbar"><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">Todas</option><option>OPEN</option><option>CLOSED</option></select></div><div className="table-card"><table><thead><tr><th>Session</th><th>Business date</th><th>Estado</th><th>Opening float</th><th>Expected</th><th>Difference</th></tr></thead><tbody>{page?.data.map((session) => <tr className="clickable" key={session.cashSessionId} onClick={() => client.getCashMovements(location.locationId, session.cashSessionId).then((result) => setMovements(result.data)).catch((error) => onError(message(error)))}><td><code>{shortId(session.cashSessionId)}</code><small>{date(session.openedAt)}</small></td><td>{session.businessDate}</td><td><Status value={session.status} /></td><td>{money(session.openingFloatAmount, session.currency)}</td><td>{session.expectedCashAmount === null ? 'Disponible al cerrar' : money(session.expectedCashAmount, session.currency)}</td><td>{session.differenceAmount === null ? '—' : money(session.differenceAmount, session.currency)}</td></tr>)}</tbody></table></div>{movements && <article className="panel"><h2>Movimientos</h2>{movements.map((movement) => <p key={movement.cashMovementId}><strong>{movement.movementType}</strong> {money(movement.amount, movement.currency)} · {movement.reason} · {date(movement.occurredAt)}</p>)}{movements.length === 0 && <Empty text="Sin movimientos para esta sesión." />}</article>}</section>;
+  const selectSession=(cashSessionId:string)=>client.getCashMovements(location.locationId,cashSessionId).then((result)=>setMovements(result.data)).catch((error)=>onError(message(error)));
+  return <section><PageTitle title="Sesiones de caja" subtitle="El efectivo esperado y la diferencia aparecen después del cierre en Edge" /><div className="toolbar"><select aria-label="Filtrar sesiones de caja por estado" value={status} onChange={(event) => setStatus(event.target.value)}><option value="">Todas</option><option value="OPEN">Abiertas</option><option value="CLOSED">Cerradas</option></select></div><div className="table-card"><table><thead><tr><th>Sesión</th><th>Día operativo</th><th>Estado</th><th>Fondo inicial</th><th>Efectivo esperado</th><th>Diferencia</th></tr></thead><tbody>{page?.data.map((session) => <tr className="clickable" role="button" tabIndex={0} key={session.cashSessionId} onKeyDown={(event)=>activateRow(event,()=>selectSession(session.cashSessionId))} onClick={()=>selectSession(session.cashSessionId)}><td><code>{shortId(session.cashSessionId)}</code><small>{date(session.openedAt)}</small></td><td>{session.businessDate}</td><td><Status value={session.status} /></td><td>{money(session.openingFloatAmount, session.currency)}</td><td>{session.expectedCashAmount === null ? 'Disponible al cerrar' : money(session.expectedCashAmount, session.currency)}</td><td>{session.differenceAmount === null ? '—' : money(session.differenceAmount, session.currency)}</td></tr>)}</tbody></table></div>{movements && <article className="panel"><h2>Movimientos</h2>{movements.map((movement) => <p key={movement.cashMovementId}><strong>{movement.movementType}</strong> {money(movement.amount, movement.currency)} · {movement.reason} · {date(movement.occurredAt)}</p>)}{movements.length === 0 && <Empty text="Sin movimientos para esta sesión." />}</article>}</section>;
 }
 
 function ControlPlane({ onError }: { onError(value: string | null): void }) {
@@ -182,6 +187,12 @@ function ControlPlane({ onError }: { onError(value: string | null): void }) {
   const [planCode, setPlanCode] = useState('');
   const [planName, setPlanName] = useState('');
   const [planCapabilities, setPlanCapabilities] = useState<CapabilityCode[]>(['CORE_POS']);
+  const [planDeviceLimits,setPlanDeviceLimits]=useState({POS:'',WAITER:'',KDS:''});
+  const [installationAuthorization,setInstallationAuthorization]=useState<string|null>(null);
+  const [installationAuthorizationStatuses,setInstallationAuthorizationStatuses]=useState<Record<string,InstallationAuthorizationStatus|null>>({});
+  const [installationAuthorizationTarget,setInstallationAuthorizationTarget]=useState<CanonicalCloudLocation|null>(null);
+  const [installationAuthorizationError,setInstallationAuthorizationError]=useState<string|null>(null);
+  const [installationAuthorizationBusy,setInstallationAuthorizationBusy]=useState(false);
   const [tenantName, setTenantName] = useState('');
   const [locationName, setLocationName] = useState('');
   const [timezone, setTimezone] = useState('America/Matamoros');
@@ -205,10 +216,14 @@ function ControlPlane({ onError }: { onError(value: string | null): void }) {
         setTenant(selected);
         const states = await Promise.all(
           result.data.map(async (location) => {
-            const [edgeResult, replacementResult, license] = await Promise.all([
+            const [edgeResult, replacementResult, license,installationAuthorizationStatus] = await Promise.all([
               client.getEdges(location.locationId),
               client.getPendingReplacement(location.locationId),
               client.getLocationLicense(location.locationId).catch((error) => {
+                if (error instanceof CloudAdminClientError && error.status === 404) return null;
+                throw error;
+              }),
+              client.getLatestInstallationAuthorization(location.locationId).then(result=>result.authorization).catch((error) => {
                 if (error instanceof CloudAdminClientError && error.status === 404) return null;
                 throw error;
               }),
@@ -218,6 +233,7 @@ function ControlPlane({ onError }: { onError(value: string | null): void }) {
               edgeResult.data,
               replacementResult.replacement,
               license,
+              installationAuthorizationStatus,
             ] as const;
           }),
         );
@@ -234,6 +250,7 @@ function ControlPlane({ onError }: { onError(value: string | null): void }) {
         setLicenses(
           Object.fromEntries(states.map(([locationId, , , license]) => [locationId, license])),
         );
+        setInstallationAuthorizationStatuses(Object.fromEntries(states.map(([locationId,,,,status])=>[locationId,status])));
       })
       .catch((error) => onError(message(error)));
   useEffect(() => {
@@ -242,8 +259,8 @@ function ControlPlane({ onError }: { onError(value: string | null): void }) {
   return (
     <section>
       <PageTitle
-        title="Tenant & Edge Control Plane"
-        subtitle="Provisioning seguro; el código se muestra una sola vez"
+        title="Control de Tenants, Locations y Edge"
+        subtitle="Provisioning, licencias e instalación inicial con historial y autorización explícita"
       />
       <div className="control-grid">
         <article className="panel">
@@ -361,6 +378,13 @@ function ControlPlane({ onError }: { onError(value: string | null): void }) {
             </label>
           ))}
         </div>
+        <div className="control-grid compact">
+          {(['POS','WAITER','KDS'] as const).map((type)=><label key={type}>
+            Límite {type} <small>vacío = sin límite</small>
+            <input type="number" min="0" step="1" value={planDeviceLimits[type]}
+              onChange={(event)=>setPlanDeviceLimits({...planDeviceLimits,[type]:event.target.value})}/>
+          </label>)}
+        </div>
         <button
           className="secondary"
           onClick={() =>
@@ -370,11 +394,17 @@ function ControlPlane({ onError }: { onError(value: string | null): void }) {
                 code: planCode,
                 displayName: planName,
                 capabilities: planCapabilities,
+                deviceLimits: {
+                  POS: planDeviceLimits.POS === '' ? null : Number(planDeviceLimits.POS),
+                  WAITER: planDeviceLimits.WAITER === '' ? null : Number(planDeviceLimits.WAITER),
+                  KDS: planDeviceLimits.KDS === '' ? null : Number(planDeviceLimits.KDS),
+                },
                 reason: 'Plan configuration from Super Admin',
               })
               .then(() => {
                 setPlanCode('');
                 setPlanName('');
+                setPlanDeviceLimits({POS:'',WAITER:'',KDS:''});
                 void loadTenants();
               })
               .catch((error) => onError(message(error)))
@@ -384,7 +414,7 @@ function ControlPlane({ onError }: { onError(value: string | null): void }) {
         </button>
         {plans.map((plan) => (
           <small className="plan-row" key={plan.planId}>
-            {plan.code} · {plan.capabilities.join(', ') || 'Sin capabilities'}
+            {plan.code} · {plan.capabilities.join(', ') || 'Sin capabilities'} · limits {JSON.stringify(plan.deviceLimits)}
           </small>
         ))}
       </article>
@@ -422,34 +452,29 @@ function ControlPlane({ onError }: { onError(value: string | null): void }) {
             const active = edges[location.locationId]?.find((edge) => edge.status === 'ACTIVE');
             const pending = pendingReplacements[location.locationId];
             const license = licenses[location.locationId];
+            const assignedPlan = license ? plans.find((plan) => plan.planId === license.planId) ?? null : null;
             return (
               <div className="location-control" key={location.locationId}>
-                <div>
+                <div className="location-summary">
                   <strong>{location.displayName ?? 'Pendiente de configuración'}</strong>
-                  <small>
-                    {location.locationId} · {location.timezone ?? 'Timezone pendiente'}
-                  </small>
+                  <span>{location.timezone ?? 'Timezone pendiente'}</span>
                   {(edges[location.locationId] ?? []).map((edge) => (
-                    <small key={edge.edgeId}>
-                      {shortId(edge.edgeId)} · {edge.status}
-                    </small>
+                    <span className="edge-history" key={edge.edgeId}><Status value={edge.status}/> Edge …{edge.edgeId.slice(-8)}</span>
                   ))}
-                  {license ? (
-                    <small>
-                      License {license.declaredState} · {license.planCode} · rev {license.revision}
-                    </small>
-                  ) : (
-                    <small className="pending-replacement">Licencia no asignada</small>
-                  )}
+                  {!license ? (
+                    <span className="pending-replacement">Licencia no asignada</span>
+                  ) : null}
                   {pending && (
-                    <small className="pending-replacement">
-                      Replacement PENDING · código {pending.provisioningCode.status} · expira{' '}
+                    <span className="pending-replacement">
+                      Reemplazo pendiente · código {pending.provisioningCode.status} · expira{' '}
                       {date(pending.provisioningCode.expiresAt)}
-                    </small>
+                    </span>
                   )}
+                  <details><summary>Detalles técnicos</summary><code>{location.locationId}</code></details>
                 </div>
-                <Status value={location.configurationStatus} />
-                <div>
+                <div className="location-state"><span>Configuración</span><Status value={location.configurationStatus}/><span>{active ? 'Edge operativo' : 'Sin Edge activo'}</span></div>
+                <div className="location-license-controls">
+                  {license ? <LocationCommercialSummary license={license} plan={assignedPlan}/> : null}
                   {license ? (
                     <div className="license-actions">
                       <select
@@ -588,7 +613,11 @@ function ControlPlane({ onError }: { onError(value: string | null): void }) {
                     </>
                   )}
                 </div>
-                <span>{active ? 'Edge ACTIVE' : 'Sin Edge ACTIVE'}</span>
+                {active && license && <button className="secondary" onClick={() => {setInstallationAuthorizationTarget(location);setInstallationAuthorizationError(null);}}>Autorizar instalación inicial</button>}
+                {installationAuthorizationStatuses[location.locationId]&&<span className="authorization-summary">
+                  <span>Autorización inicial</span><Status value={installationAuthorizationStatuses[location.locationId]!.status}/>
+                  <small>Expira {date(installationAuthorizationStatuses[location.locationId]!.expiresAt)}</small>
+                </span>}
                 {pending ? (
                   <button
                     className="secondary danger"
@@ -604,12 +633,12 @@ function ControlPlane({ onError }: { onError(value: string | null): void }) {
                           .catch((error) => onError(message(error)));
                     }}
                   >
-                    Cancelar Replacement
+                    Cancelar reemplazo
                   </button>
                 ) : active ? (
                   <div className="edge-actions">
                     <button
-                      className="secondary"
+                      className="secondary danger"
                       onClick={() => {
                         const reason = window.prompt('Motivo de revocación');
                         if (reason)
@@ -619,7 +648,7 @@ function ControlPlane({ onError }: { onError(value: string | null): void }) {
                             .catch((error) => onError(message(error)));
                       }}
                     >
-                      Revocar
+                      Revocar Edge
                     </button>
                     <button
                       className="secondary"
@@ -639,7 +668,7 @@ function ControlPlane({ onError }: { onError(value: string | null): void }) {
                             .catch((error) => onError(message(error)));
                       }}
                     >
-                      Replacement
+                      Reemplazar Edge
                     </button>
                   </div>
                 ) : (
@@ -682,18 +711,44 @@ function ControlPlane({ onError }: { onError(value: string | null): void }) {
           </div>
         </div>
       )}
+      {installationAuthorization && (
+        <div className="secret-once" role="alert">
+          <strong>Autorización inicial firmada (cópiala ahora)</strong>
+          <textarea readOnly value={installationAuthorization} aria-label="Autorización inicial firmada" />
+          <span>No contiene el PIN ni la credencial del dispositivo.</span>
+          <button onClick={() => setInstallationAuthorization(null)}>Ya la guardé</button>
+        </div>
+      )}
+      {installationAuthorizationTarget && <InstallationAuthorizationPanel
+        locationName={installationAuthorizationTarget.displayName??'Location sin nombre'}
+        status={installationAuthorizationStatuses[installationAuthorizationTarget.locationId]??null}
+        busy={installationAuthorizationBusy} error={installationAuthorizationError}
+        onClose={()=>{if(!installationAuthorizationBusy){setInstallationAuthorizationTarget(null);setInstallationAuthorizationError(null);}}}
+        onSubmit={(pairing:PairingAuthorizationData,ownerDisplayName:string)=>{
+          setInstallationAuthorizationBusy(true);setInstallationAuthorizationError(null);
+          void client.issueInstallationAuthorization(installationAuthorizationTarget.locationId,{commandId:crypto.randomUUID(),
+            pairingId:pairing.pairingId,pairingCode:pairing.pairingCode,deviceId:pairing.deviceId,
+            deviceType:pairing.deviceType,displayName:pairing.displayName,initialOwnerDisplayName:ownerDisplayName,
+            reason:'Initial installation authorization from Super Admin'})
+            .then(result=>{setInstallationAuthorization(JSON.stringify(result.authorization));setInstallationAuthorizationTarget(null);void loadLocations(tenant!);})
+            .catch(error=>setInstallationAuthorizationError(message(error)))
+            .finally(()=>setInstallationAuthorizationBusy(false));
+        }}/>
+      }
     </section>
   );
 }
 
-function OrdersTable({ rows, onSelect }: { rows: CloudOrderSummary[]; onSelect?: (value: CloudOrderSummary) => void }) { return <div className="table-card"><table><thead><tr><th>Order</th><th>Creada UTC</th><th>Tipo / canal</th><th>Estado</th><th>Items / SENT</th><th>Mesas</th></tr></thead><tbody>{rows.map((order) => <tr key={order.orderId} className={onSelect ? 'clickable' : ''} onClick={() => onSelect?.(order)}><td><code>{shortId(order.orderId)}</code></td><td>{date(order.createdAt)}</td><td>{order.orderType} / {order.orderChannel}</td><td><Status value={order.status} /></td><td>{order.itemCount} / {order.sentItemCount}</td><td>{order.tableIds.map(shortId).join(', ') || '—'}</td></tr>)}</tbody></table>{rows.length === 0 && <Empty text="No hay Orders para estos filtros." />}</div>; }
+function OrdersTable({ rows, onSelect }: { rows: CloudOrderSummary[]; onSelect?: (value: CloudOrderSummary) => void }) { return <div className="table-card"><table><thead><tr><th>Pedido</th><th>Creado UTC</th><th>Tipo / canal</th><th>Estado</th><th>Productos / enviados</th><th>Mesas</th></tr></thead><tbody>{rows.map((order) => <tr key={order.orderId} className={onSelect ? 'clickable' : ''} role={onSelect?'button':undefined} tabIndex={onSelect?0:undefined} onKeyDown={onSelect?(event)=>activateRow(event,()=>onSelect(order)):undefined} onClick={() => onSelect?.(order)}><td><code>{shortId(order.orderId)}</code></td><td>{date(order.createdAt)}</td><td>{order.orderType} / {order.orderChannel}</td><td><Status value={order.status} /></td><td>{order.itemCount} / {order.sentItemCount}</td><td>{order.tableIds.map(shortId).join(', ') || '—'}</td></tr>)}</tbody></table>{rows.length === 0 && <Empty text="No hay pedidos para estos filtros." />}</div>; }
 function PageTitle({ title, subtitle }: { title: string; subtitle: string }) { return <div className="page-title"><div><h1>{title}</h1><p>{subtitle}</p></div></div>; }
 function Metric({ label, value, tone }: { label: string; value: string | number; tone?: string }) { return <article className={`metric ${tone ?? ''}`}><span>{label}</span><strong>{value}</strong></article>; }
 function Info({ label, value }: { label: string; value: string }) { return <div className="info-row"><span>{label}</span><strong>{value}</strong></div>; }
-function Status({ value }: { value: string }) { return <span className={`status status-${value.toLowerCase()}`}>{value}</span>; }
+function Status({ value }: { value: string }) { return <span className={`status status-${value.toLowerCase()}`}>{statusLabel(value)}</span>; }
 function Empty({ text }: { text: string }) { return <div className="empty">{text}</div>; }
 function CenteredState({ text }: { text: string }) { return <div className="centered-state">{text}</div>; }
 function shortId(value: string | null) { return value ? value.slice(0, 8) : 'Sin Edge'; }
 function date(value: string | null) { return value ? new Intl.DateTimeFormat('es-MX', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'UTC' }).format(new Date(value)) + ' UTC' : 'Nunca'; }
 function money(amount: number, currency: string | null) { return currency ? new Intl.NumberFormat('es-MX', { style: 'currency', currency }).format(amount / 100) : `${amount} minor units`; }
 function message(error: unknown) { return error instanceof CloudAdminClientError ? error.message : error instanceof Error ? error.message : 'Ocurrió un error inesperado.'; }
+export function activateRow(event:KeyboardEvent,action:()=>void) { if(event.key==='Enter'||event.key===' '){event.preventDefault();action();} }
+export function statusLabel(value:string) { return ({ACTIVE:'Activo',INACTIVE:'Inactivo',ONLINE:'En línea',OFFLINE:'Sin conexión',DEGRADED:'Degradado',OPEN:'Abierto',CLOSED:'Cerrado',CANCELLED:'Cancelado',PENDING:'Pendiente',READY:'Listo',NOT_READY:'No listo',REVOKED:'Revocado',REPLACED:'Reemplazado',EXPIRED:'Expirado',COMPLETE:'Completo',INCOMPLETE:'Incompleto',ISSUED:'Emitida',CONSUMED:'Consumida',PAST_DUE:'Pago vencido',GRACE_PERIOD:'Periodo de gracia',SUSPENDED:'Suspendida',TERMINATED:'Terminada'} as Record<string,string>)[value]??value; }

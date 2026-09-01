@@ -25,6 +25,10 @@ export const PERMISSIONS = {
   KDS_VIEW: 'KDS_VIEW',
   KDS_UPDATE_PREPARATION: 'KDS_UPDATE_PREPARATION',
   AUDIT_VIEW: 'AUDIT_VIEW',
+  DEVICE_VIEW: 'DEVICE_VIEW',
+  DEVICE_PAIR: 'DEVICE_PAIR',
+  DEVICE_REVOKE: 'DEVICE_REVOKE',
+  INSTALLATION_READINESS_VIEW: 'INSTALLATION_READINESS_VIEW',
 } as const;
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -44,6 +48,7 @@ export const CLOUD_PERMISSIONS = {
   CLOUD_PLAN_MANAGE: 'CLOUD_PLAN_MANAGE',
   CLOUD_LICENSE_MANAGE: 'CLOUD_LICENSE_MANAGE',
   CLOUD_CONFIGURATION_MANAGE: 'CLOUD_CONFIGURATION_MANAGE',
+  CLOUD_DEVICE_BOOTSTRAP: 'CLOUD_DEVICE_BOOTSTRAP',
 } as const;
 
 export type CloudPermission = (typeof CLOUD_PERMISSIONS)[keyof typeof CLOUD_PERMISSIONS];
@@ -98,6 +103,27 @@ export const BASE_ROLE_PERMISSIONS: Readonly<Record<BaseRole, readonly Permissio
   ],
   KITCHEN: [PERMISSIONS.KDS_VIEW, PERMISSIONS.KDS_UPDATE_PREPARATION],
 };
+
+const DEVICE_SECRET_VERSION = 'scrypt-device-v1';
+export function generateDeviceCredential(): string {
+  return randomBytes(32).toString('base64url');
+}
+export function hashDeviceCredential(secret: string): string {
+  const salt = randomBytes(16);
+  const derived = scryptSync(`comanview-device:${secret}`, salt, 32, {
+    N: 32_768, r: 8, p: 1, maxmem: 64 * 1024 * 1024,
+  });
+  return [DEVICE_SECRET_VERSION, salt.toString('base64url'), derived.toString('base64url')].join('$');
+}
+export function verifyDeviceCredential(secret: string, encoded: string): boolean {
+  const [version, saltValue, expectedValue] = encoded.split('$');
+  if (version !== DEVICE_SECRET_VERSION || !saltValue || !expectedValue) return false;
+  const expected = Buffer.from(expectedValue, 'base64url');
+  const actual = scryptSync(`comanview-device:${secret}`, Buffer.from(saltValue, 'base64url'), expected.length, {
+    N: 32_768, r: 8, p: 1, maxmem: 64 * 1024 * 1024,
+  });
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
+}
 
 const SCRYPT_VERSION = 'scrypt-v1';
 const SCRYPT_N = 32_768;

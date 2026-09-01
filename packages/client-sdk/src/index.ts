@@ -64,9 +64,14 @@ import {
   type RequestOrderPaymentRequest,
   type EffectiveCapabilitiesResponse,
   type EdgeConfiguration,
+  DeviceSchema, DeviceListResponseSchema, PairingCreatedSchema, PairingStatusResponseSchema,
+  PairingListResponseSchema, InstallationReadinessSchema,
+  type Device, type DeviceType, type PairingCreated, type PairingStatusResponse,
+  type PairingListResponse, type CompleteBootstrapRequest, type InstallationReadiness,
 } from '@comanview/contracts';
 
 export * from './cloudAdmin.js';
+export * from './deviceIdentity.js';
 
 interface RuntimeSchema<T> {
   parse(value: unknown): T;
@@ -171,6 +176,15 @@ export interface EdgeClient {
     stationId: string,
     request: KdsTransitionRequest,
   ): Promise<KdsTicketResponse>;
+  createPairing(request:{deviceId:string;deviceType:DeviceType;displayName:string;credential:string}):Promise<PairingCreated>;
+  getPairingStatus(pairingId:string,requestToken:string):Promise<PairingStatusResponse>;
+  completeBootstrap(request:CompleteBootstrapRequest):Promise<Device>;
+  getDevices():Promise<{data:Device[]}>;
+  getPendingPairings():Promise<PairingListResponse>;
+  approvePairing(request:{commandId:string;pairingId:string;pairingCode:string}):Promise<Device>;
+  cancelPairing(pairingId:string,request:{commandId:string}):Promise<{cancelled:true}>;
+  revokeDevice(deviceId:string,request:{commandId:string;reason:string}):Promise<{revoked:true}>;
+  getInstallationReadiness():Promise<InstallationReadiness>;
 }
 
 export function createEdgeClient(options: EdgeClientOptions = {}): EdgeClient {
@@ -263,6 +277,15 @@ export function createEdgeClient(options: EdgeClientOptions = {}): EdgeClient {
       ),
     getCurrentSession: () => request('/auth/session', CurrentSessionResponseSchema),
     logout: () => request('/auth/logout', LogoutResponseSchema, { method: 'POST' }),
+    createPairing:(body)=>request('/device-pairing/requests',PairingCreatedSchema,{method:'POST',body:JSON.stringify(body)},false),
+    getPairingStatus:(pairingId,requestToken)=>request(`/device-pairing/requests/${pairingId}`,PairingStatusResponseSchema,{headers:{'x-pairing-request-token':requestToken}},false),
+    completeBootstrap:(body)=>request('/device-pairing/bootstrap/complete',DeviceSchema,{method:'POST',body:JSON.stringify(body)},false),
+    getDevices:()=>request('/devices',DeviceListResponseSchema),
+    getPendingPairings:()=>request('/device-pairing/requests',PairingListResponseSchema),
+    approvePairing:(body)=>request('/device-pairing/approve',DeviceSchema,{method:'POST',body:JSON.stringify(body)}),
+    cancelPairing:(pairingId,body)=>request(`/device-pairing/${pairingId}/cancel`,{parse:(v:unknown)=>v as {cancelled:true}},{method:'POST',body:JSON.stringify(body)}),
+    revokeDevice:(deviceId,body)=>request(`/devices/${deviceId}/revoke`,{parse:(v:unknown)=>v as {revoked:true}},{method:'POST',body:JSON.stringify(body)}),
+    getInstallationReadiness:()=>request('/installation/readiness',InstallationReadinessSchema),
     getAuditEntries: (query = {}) => {
       const parameters = Object.entries(query)
         .filter(([, value]) => value !== undefined)

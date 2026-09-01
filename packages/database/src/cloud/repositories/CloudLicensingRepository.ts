@@ -4,6 +4,8 @@ import type {
   EdgeConfiguration,
   LicenseDeclaredState,
   SignedDocumentEnvelope,
+  InstallationAuthorizationEnvelope,
+  DeviceLimits,
 } from '@comanview/contracts';
 import { appendCloudAdminAudit, type CloudAdminMutationActor } from './CloudControlPlaneRepository.js';
 
@@ -13,6 +15,7 @@ export interface CloudPlanRecord {
   displayName: string;
   active: boolean;
   capabilities: CapabilityCode[];
+  deviceLimits: DeviceLimits | null;
   revision: number;
   createdAt: Date;
   updatedAt: Date;
@@ -26,6 +29,7 @@ export interface LocationLicenseRecord {
   declaredState: LicenseDeclaredState;
   revision: number;
   capabilities: CapabilityCode[];
+  deviceLimits: DeviceLimits | null;
   configuration: EdgeConfiguration;
   configurationRevision: number;
   featureFlags: Record<string, boolean>;
@@ -63,6 +67,33 @@ export class CloudLicensingRepository {
     return result.rows[0]?.after_state ?? null;
   }
 
+  async getInstallationAuthorizationByCommand(commandId: string): Promise<{
+    authorizationId: string; status: 'ISSUED'|'CONSUMED'|'EXPIRED'|'REVOKED'; expiresAt: Date;
+    envelope: InstallationAuthorizationEnvelope;
+  } | null> {
+    const result = await this.pool.query<InstallationAuthorizationRow>(
+      `SELECT authorization_id,status,expires_at,envelope
+       FROM cloud_installation_authorizations WHERE command_id=$1`, [commandId],
+    );
+    return result.rows[0] ? mapInstallationAuthorization(result.rows[0]) : null;
+  }
+  async getLatestInstallationAuthorization(locationId:string,now:Date):Promise<{
+    authorizationId:string;tenantId:string;status:'ISSUED'|'CONSUMED'|'EXPIRED'|'REVOKED';
+    issuedAt:Date;expiresAt:Date;consumedAt:Date|null;
+  }|null>{
+    const result=await this.pool.query<{
+      authorization_id:string;tenant_id:string;status:'ISSUED'|'CONSUMED'|'EXPIRED'|'REVOKED';
+      issued_at:Date;expires_at:Date;consumed_at:Date|null;
+    }>(`SELECT authorization_id,tenant_id,
+          CASE WHEN status='ISSUED' AND expires_at<=$2 THEN 'EXPIRED' ELSE status END AS status,
+          issued_at,expires_at,consumed_at
+        FROM cloud_installation_authorizations WHERE location_id=$1
+        ORDER BY issued_at DESC LIMIT 1`,[locationId,now]);
+    const row=result.rows[0];
+    return row?{authorizationId:row.authorization_id,tenantId:row.tenant_id,status:row.status,
+      issuedAt:row.issued_at,expiresAt:row.expires_at,consumedAt:row.consumed_at}:null;
+  }
+
   async listPlans(): Promise<CloudPlanRecord[]> {
     const plans = await this.pool.query<PlanRow>(
       `SELECT plan_id, code, display_name, active, revision, created_at, updated_at
@@ -80,7 +111,7 @@ export class CloudLicensingRepository {
   }
 
   async createPlan(input: {
-    planId: string; code: string; displayName: string; capabilities: CapabilityCode[];
+    planId: string; code: string; displayName: string; capabilities: CapabilityCode[]; deviceLimits: DeviceLimits;
     commandId: string; reason: string; actor: CloudAdminMutationActor; now: Date;
   }): Promise<CloudPlanRecord> {
     return this.transaction(async (client) => {
@@ -96,7 +127,10 @@ export class CloudLicensingRepository {
           [input.planId, capability, input.now],
         );
       }
-      const plan = { ...mapPlanRow(row), capabilities: [...new Set(input.capabilities)].sort() as CapabilityCode[] };
+      for (const type of ['POS','WAITER','KDS'] as const) await client.query(
+        `INSERT INTO cloud_plan_device_limits(plan_id,device_type,max_active_devices) VALUES($1,$2,$3)`,
+        [input.planId,type,input.deviceLimits[type]]);
+      const plan = { ...mapPlanRow(row), capabilities: [...new Set(input.capabilities)].sort() as CapabilityCode[], deviceLimits:input.deviceLimits };
       await appendCloudAdminAudit(client, {
         actor: input.actor, action: 'PLAN_CREATED', entityType: 'PLAN', entityId: input.planId,
         commandId: input.commandId, reason: input.reason, after: plan, now: input.now,
@@ -298,6 +332,45 @@ export class CloudLicensingRepository {
     );
     return Number(result.rows[0]?.desired_control_revision ?? 0);
   }
+  async issueInstallationAuthorization(input:{authorizationId:string;tenantId:string;locationId:string;edgeId:string;pairingId:string;
+    pairingCodeHash:string;deviceId:string;deviceType:string;displayName:string;initialOwnerId:string;initialOwnerDisplayName:string;
+    kid:string;envelope:InstallationAuthorizationEnvelope;commandId:string;reason:string;actor:CloudAdminMutationActor;issuedAt:Date;expiresAt:Date}) {
+    return this.transaction(async(client)=>{
+      const edge=await client.query<{tenant_id:string;location_id:string}>(`SELECT tenant_id,location_id FROM edges WHERE edge_id=$1 AND status='ACTIVE' FOR UPDATE`,[input.edgeId]);
+      if(!edge.rows[0]||edge.rows[0].tenant_id!==input.tenantId||edge.rows[0].location_id!==input.locationId) throw new LicensingConflictError('INSTALLATION_AUTHORIZATION_INVALID');
+      const existing=await client.query<InstallationAuthorizationRow>(
+        'SELECT authorization_id,status,expires_at,envelope FROM cloud_installation_authorizations WHERE command_id=$1',
+        [input.commandId],
+      );
+      if(existing.rows[0]) return existing.rows[0];
+      await client.query(`UPDATE cloud_installation_authorizations SET status='EXPIRED' WHERE edge_id=$1 AND status='ISSUED' AND expires_at<=$2`,[input.edgeId,input.issuedAt]);
+      const pending=await client.query('SELECT authorization_id FROM cloud_installation_authorizations WHERE edge_id=$1 AND status=\'ISSUED\' FOR UPDATE',[input.edgeId]);
+      if(pending.rowCount)throw new LicensingConflictError('INSTALLATION_AUTHORIZATION_PENDING');
+      const inserted=(await client.query<InstallationAuthorizationRow>(`INSERT INTO cloud_installation_authorizations
+        (authorization_id,tenant_id,location_id,edge_id,pairing_id,pairing_code_hash,device_id,device_type,display_name,
+         initial_owner_id,initial_owner_display_name,kid,envelope,status,command_id,issued_by_admin_user_id,issued_at,expires_at)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'ISSUED',$14,$15,$16,$17) RETURNING *`,
+        [input.authorizationId,input.tenantId,input.locationId,input.edgeId,input.pairingId,input.pairingCodeHash,input.deviceId,input.deviceType,input.displayName,
+         input.initialOwnerId,input.initialOwnerDisplayName,input.kid,JSON.stringify(input.envelope),input.commandId,input.actor.userId,input.issuedAt,input.expiresAt])).rows[0]!;
+      await appendCloudAdminAudit(client,{actor:input.actor,action:'INSTALLATION_AUTHORIZATION_ISSUED',entityType:'INSTALLATION_AUTHORIZATION',entityId:input.authorizationId,
+        tenantId:input.tenantId,locationId:input.locationId,commandId:input.commandId,reason:input.reason,
+        after:{authorizationId:input.authorizationId,edgeId:input.edgeId,pairingId:input.pairingId,status:'ISSUED',expiresAt:input.expiresAt.toISOString()},now:input.issuedAt});
+      return inserted;
+    });
+  }
+  async consumeInstallationAuthorization(input:{edgeId:string;authorizationId:string;commandId:string;consumedAt:Date}):Promise<void>{
+    await this.transaction(async(client)=>{
+      const row=await client.query<{edge_id:string;status:string;consumed_command_id:string|null}>(
+        'SELECT edge_id,status,consumed_command_id FROM cloud_installation_authorizations WHERE authorization_id=$1 FOR UPDATE',[input.authorizationId]);
+      const current=row.rows[0];
+      if(!current||current.edge_id!==input.edgeId) throw new LicensingConflictError('INSTALLATION_AUTHORIZATION_INVALID');
+      if(current.status==='CONSUMED'&&current.consumed_command_id===input.commandId)return;
+      if(current.status!=='ISSUED') throw new LicensingConflictError('INSTALLATION_AUTHORIZATION_INVALID');
+      const changed=await client.query(`UPDATE cloud_installation_authorizations SET status='CONSUMED',consumed_at=$3,consumed_command_id=$4
+        WHERE authorization_id=$1 AND edge_id=$2 AND status='ISSUED'`,[input.authorizationId,input.edgeId,input.consumedAt,input.commandId]);
+      if(changed.rowCount!==1) throw new LicensingConflictError('INSTALLATION_AUTHORIZATION_INVALID');
+    });
+  }
 
   async nextDocumentRevision(edgeId: string, documentType: string): Promise<number> {
     const result = await this.pool.query<{ next_revision: number }>(
@@ -312,7 +385,10 @@ export class CloudLicensingRepository {
     const entitlements = await this.pool.query<{ capability: CapabilityCode }>(
       'SELECT capability FROM cloud_plan_entitlements WHERE plan_id=$1 ORDER BY capability', [row.plan_id],
     );
-    return { ...mapPlanRow(row), capabilities: entitlements.rows.map((item) => item.capability) };
+    const limits=await this.pool.query<{device_type:'POS'|'WAITER'|'KDS';max_active_devices:number|null}>(
+      'SELECT device_type,max_active_devices FROM cloud_plan_device_limits WHERE plan_id=$1',[row.plan_id]);
+    const deviceLimits=limits.rows.length===3 ? Object.fromEntries(limits.rows.map(x=>[x.device_type,x.max_active_devices])) as DeviceLimits : undefined;
+    return { ...mapPlanRow(row), capabilities: entitlements.rows.map((item) => item.capability), deviceLimits: deviceLimits ?? null };
   }
 
   private async insertDocuments(client: PoolClient, documents: NewSignedControlDocument[], now: Date): Promise<void> {
@@ -345,6 +421,7 @@ interface PlanRow { plan_id: string; code: string; display_name: string; active:
 interface AssignmentRow {
   tenant_id: string; location_id: string; plan_id: string; plan_code: string;
   declared_state: LicenseDeclaredState; license_revision: number; capabilities: CapabilityCode[];
+  device_limits: DeviceLimits | null;
   configuration: EdgeConfiguration; configuration_revision: number;
   flags: Record<string, boolean>; feature_flags_revision: number;
   desired_control_revision: string | number; edge_id: string | null; updated_at: Date;
@@ -354,11 +431,16 @@ interface DocumentRow {
   kid: string; document_hash: string; envelope: SignedDocumentEnvelope; issued_at: Date;
   expires_at: Date | null; grace_until: Date | null;
 }
+interface InstallationAuthorizationRow {
+  authorization_id: string; status: 'ISSUED'|'CONSUMED'|'EXPIRED'|'REVOKED'; expires_at: Date;
+  envelope: InstallationAuthorizationEnvelope;
+}
 
 const assignmentSql = `SELECT ls.tenant_id,ls.location_id,ls.plan_id,p.code AS plan_code,
   ls.declared_state,ls.revision AS license_revision,
   COALESCE((SELECT jsonb_agg(pe.capability ORDER BY pe.capability)
     FROM cloud_plan_entitlements pe WHERE pe.plan_id=ls.plan_id),'[]'::jsonb) AS capabilities,
+  (SELECT jsonb_object_agg(dl.device_type,dl.max_active_devices) FROM cloud_plan_device_limits dl WHERE dl.plan_id=ls.plan_id) AS device_limits,
   cs.configuration,cs.revision AS configuration_revision,
   fs.flags,fs.revision AS feature_flags_revision,
   ctl.desired_control_revision,e.edge_id,ls.updated_at
@@ -370,7 +452,7 @@ JOIN cloud_location_control_state ctl ON ctl.location_id=ls.location_id
 LEFT JOIN edges e ON e.location_id=ls.location_id AND e.status='ACTIVE'
 WHERE ls.location_id=$1`;
 
-function mapPlanRow(row: PlanRow): Omit<CloudPlanRecord, 'capabilities'> {
+function mapPlanRow(row: PlanRow): Omit<CloudPlanRecord, 'capabilities'|'deviceLimits'> {
   return { planId: row.plan_id, code: row.code, displayName: row.display_name, active: row.active,
     revision: row.revision, createdAt: row.created_at, updatedAt: row.updated_at };
 }
@@ -378,6 +460,7 @@ function mapAssignment(row: AssignmentRow): LocationLicenseRecord {
   return { tenantId: row.tenant_id, locationId: row.location_id, planId: row.plan_id,
     planCode: row.plan_code, declaredState: row.declared_state, revision: row.license_revision,
     capabilities: row.capabilities, configuration: row.configuration,
+    deviceLimits: row.device_limits,
     configurationRevision: row.configuration_revision, featureFlags: row.flags,
     featureFlagsRevision: row.feature_flags_revision,
     desiredControlRevision: Number(row.desired_control_revision), activeEdgeId: row.edge_id,
@@ -387,4 +470,8 @@ function mapDocument(row: DocumentRow): SignedControlDocumentRecord {
   return { documentId: row.document_id, documentType: row.document_type, revision: row.revision,
     kid: row.kid, documentHash: row.document_hash, envelope: row.envelope,
     issuedAt: row.issued_at, expiresAt: row.expires_at, graceUntil: row.grace_until };
+}
+function mapInstallationAuthorization(row: InstallationAuthorizationRow) {
+  return { authorizationId: row.authorization_id, status: row.status,
+    expiresAt: row.expires_at, envelope: row.envelope };
 }

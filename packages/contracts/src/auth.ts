@@ -25,6 +25,10 @@ export const PermissionSchema = z.enum([
   'KDS_VIEW',
   'KDS_UPDATE_PREPARATION',
   'AUDIT_VIEW',
+  'DEVICE_VIEW',
+  'DEVICE_PAIR',
+  'DEVICE_REVOKE',
+  'INSTALLATION_READINESS_VIEW',
 ]);
 export const PermissionCodes = PermissionSchema.enum;
 
@@ -47,6 +51,7 @@ export const LocalSessionSchema = z.object({
 export const LoginRequestSchema = z.object({
   pin: z.string().regex(/^\d{4,12}$/),
   deviceId: z.string().uuid(),
+  deviceCredential: z.string().min(43).max(512),
 });
 
 export const LoginResponseSchema = z.object({

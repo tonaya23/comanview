@@ -30,6 +30,7 @@ import {
   TableRepository,
   SyncOutboxRepository,
   EdgeControlRepository,
+  DeviceRepository,
 } from '@comanview/database';
 import { loadEdgeSyncConfig, type EdgeSyncConfig } from '@comanview/config';
 import { DebugPrinterAdapter, PrintWorker, type PrinterAdapter } from '@comanview/printing';
@@ -66,6 +67,8 @@ import { HttpControlTransport } from './modules/licensing/HttpControlTransport.j
 import { EdgeLicenseManager } from './modules/licensing/EdgeLicenseManager.js';
 import { ControlStateWorker } from './modules/licensing/ControlStateWorker.js';
 import { licensingRoutes } from './modules/licensing/routes.js';
+import { DeviceService } from './modules/devices/DeviceService.js';
+import { deviceRoutes } from './modules/devices/routes.js';
 
 export interface BuildAppOptions {
   printerAdapter?: PrinterAdapter;
@@ -107,6 +110,7 @@ export async function buildApp(dbPath: string = ':memory:', options: BuildAppOpt
   const tableRepo = new TableRepository(db);
   const syncRepo = new SyncOutboxRepository(db);
   const controlRepo = new EdgeControlRepository(db);
+  const deviceRepo = new DeviceRepository(db);
   const syncConfig = options.syncConfig ?? loadEdgeSyncConfig();
   const persistedIdentity = syncRepo.findIdentity();
   if (process.env['NODE_ENV'] === 'production' && !persistedIdentity) {
@@ -162,6 +166,9 @@ export async function buildApp(dbPath: string = ':memory:', options: BuildAppOpt
   const authService = new AuthService(authRepo, operationalContext.tenantId,
     operationalContext.locationId);
   const authGuard = new AuthGuard(authService, options.authMode ?? 'enforced');
+  const deviceService = new DeviceService(deviceRepo, licenseManager,
+    { edgeId:edgeIdentity.edgeId,tenantId:operationalContext.tenantId,locationId:operationalContext.locationId },
+    syncConfig.licensing.publicKeyring,app.log);
   const auditService = new AuditService(auditRepo);
   const tableService = new TableService(tableRepo, orderRepo, operationalContext);
   cashService.ensureDefaultRegister();
@@ -194,6 +201,7 @@ export async function buildApp(dbPath: string = ':memory:', options: BuildAppOpt
   app.register(tableRoutes(tableService, authGuard));
   app.register(syncRoutes(syncWorker, authGuard));
   app.register(licensingRoutes(licenseManager, authGuard));
+  app.register(deviceRoutes(deviceService, authGuard));
 
   // Health route
   app.get(

@@ -11,6 +11,10 @@ import {
   LocationLicenseAssignmentSchema,
   UpdateLocationConfigurationRequestSchema,
   UpdateLocationLicenseStateRequestSchema,
+  IssueInstallationAuthorizationRequestSchema,
+  IssuedInstallationAuthorizationSchema,
+  InstallationAuthorizationAckRequestSchema,
+  LatestInstallationAuthorizationResponseSchema,
 } from '@comanview/contracts';
 import type { EdgeAuthenticator } from '../auth/EdgeAuthenticator.js';
 import type { CloudAdminAuthService, CloudAdminPrincipal } from '../admin/CloudAdminAuthService.js';
@@ -72,6 +76,27 @@ export function registerCloudLicensingRoutes(app: FastifyInstance, input: {
       locationId, UpdateLocationConfigurationRequestSchema.parse(request.body), actor(principal),
     )));
   });
+  app.post('/admin/v1/locations/:locationId/installation-authorizations',async(request,reply)=>{
+    const principal=await writePrincipal(request,input.auth,CLOUD_PERMISSIONS.CLOUD_DEVICE_BOOTSTRAP);
+    const {locationId}=LocationParams.parse(request.params);
+    const current=await input.service.getLocationAssignment(locationId);
+    if(!current||!canAccessTenant(principal,current.tenantId)) throw notFound();
+    reply.status(201);
+    return IssuedInstallationAuthorizationSchema.parse(await input.service.issueInstallationAuthorization(locationId,IssueInstallationAuthorizationRequestSchema.parse(request.body),actor(principal)));
+  });
+  app.get('/admin/v1/locations/:locationId/installation-authorizations/latest',async(request)=>{
+    const principal=await authenticateCloudAdmin(request,input.auth);
+    requireCloudPermission(principal,CLOUD_PERMISSIONS.CLOUD_DEVICE_BOOTSTRAP);
+    const {locationId}=LocationParams.parse(request.params);
+    const current=await input.service.getLocationAssignment(locationId);
+    if(!current||!canAccessTenant(principal,current.tenantId))throw notFound();
+    const authorization=await input.service.getLatestInstallationAuthorization(locationId);
+    return LatestInstallationAuthorizationResponseSchema.parse({authorization:authorization?{
+      authorizationId:authorization.authorizationId,status:authorization.status,
+      issuedAt:authorization.issuedAt.toISOString(),expiresAt:authorization.expiresAt.toISOString(),
+      consumedAt:authorization.consumedAt?.toISOString()??null,
+    }:null});
+  });
 
   app.get('/edge/v1/control-state', async (request) => {
     const edge = await input.authenticator.authenticate(
@@ -84,6 +109,11 @@ export function registerCloudLicensingRoutes(app: FastifyInstance, input: {
       request.headers['x-comanview-edge-id'], request.headers.authorization,
     );
     await input.service.acknowledge(edge.edgeId, EdgeControlAckRequestSchema.parse(request.body));
+    reply.status(204).send();
+  });
+  app.post('/edge/v1/installation-authorizations/acks',async(request,reply)=>{
+    const edge=await input.authenticator.authenticate(request.headers['x-comanview-edge-id'],request.headers.authorization);
+    await input.service.consumeInstallationAuthorization(edge.edgeId,InstallationAuthorizationAckRequestSchema.parse(request.body));
     reply.status(204).send();
   });
 }

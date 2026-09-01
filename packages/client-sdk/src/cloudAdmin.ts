@@ -43,6 +43,12 @@ import {
   type CapabilityCode,
   type LicenseDeclaredState,
   type EdgeConfiguration,
+  IssuedInstallationAuthorizationSchema,
+  LatestInstallationAuthorizationResponseSchema,
+  type DeviceLimits,
+  type IssueInstallationAuthorizationRequest,
+  type IssuedInstallationAuthorization,
+  type InstallationAuthorizationStatus,
 } from '@comanview/contracts';
 
 interface Schema<T> { parse(value: unknown): T }
@@ -89,7 +95,9 @@ export interface CloudAdminClient {
   getPendingReplacement(locationId: string): Promise<{ replacement: EdgeReplacement | null }>;
   cancelReplacement(replacementId: string, input: { commandId: string; reason: string }): Promise<EdgeReplacement>;
   getPlans(): Promise<{ data: CloudPlan[] }>;
-  createPlan(input: { commandId: string; code: string; displayName: string; capabilities: CapabilityCode[]; reason: string }): Promise<CloudPlan>;
+  createPlan(input: { commandId: string; code: string; displayName: string; capabilities: CapabilityCode[]; deviceLimits:DeviceLimits; reason: string }): Promise<CloudPlan>;
+  issueInstallationAuthorization(locationId:string,input:IssueInstallationAuthorizationRequest):Promise<IssuedInstallationAuthorization>;
+  getLatestInstallationAuthorization(locationId:string):Promise<{authorization:InstallationAuthorizationStatus|null}>;
   getLocationLicense(locationId: string): Promise<LocationLicenseAssignment>;
   assignLocationLicense(locationId: string, input: { commandId: string; expectedRevision: number; planId: string; declaredState: LicenseDeclaredState; configuration: EdgeConfiguration; reason: string }): Promise<LocationLicenseAssignment>;
   updateLocationLicenseState(locationId: string, input: { commandId: string; expectedRevision: number; declaredState: LicenseDeclaredState; reason: string }): Promise<LocationLicenseAssignment>;
@@ -148,6 +156,8 @@ export function createCloudAdminClient(options: CloudAdminClientOptions = {}): C
     cancelReplacement: (replacementId, input) => request(`/admin/v1/replacements/${replacementId}/cancel`, EdgeReplacementSchema, { method: 'POST', body: JSON.stringify(input) }),
     getPlans: () => request('/admin/v1/plans', CloudPlanListResponseSchema),
     createPlan: (input) => request('/admin/v1/plans', CloudPlanSchema, { method: 'POST', body: JSON.stringify(input) }),
+    issueInstallationAuthorization:(locationId,input)=>request(`/admin/v1/locations/${locationId}/installation-authorizations`,IssuedInstallationAuthorizationSchema,{method:'POST',body:JSON.stringify(input)}),
+    getLatestInstallationAuthorization:(locationId)=>request(`/admin/v1/locations/${locationId}/installation-authorizations/latest`,LatestInstallationAuthorizationResponseSchema),
     getLocationLicense: (locationId) => request(`/admin/v1/locations/${locationId}/license`, LocationLicenseAssignmentSchema),
     assignLocationLicense: (locationId, input) => request(`/admin/v1/locations/${locationId}/license`, LocationLicenseAssignmentSchema, { method: 'PUT', body: JSON.stringify(input) }),
     updateLocationLicenseState: (locationId, input) => request(`/admin/v1/locations/${locationId}/license/state`, LocationLicenseAssignmentSchema, { method: 'PATCH', body: JSON.stringify(input) }),

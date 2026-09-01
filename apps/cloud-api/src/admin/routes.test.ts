@@ -198,6 +198,7 @@ describe('Cloud Admin HTTP security', () => {
       tenantId, locationId, planId: '01991a00-0000-7000-8000-000000000231',
       planCode: 'TEST_DATA', declaredState: 'ACTIVE' as const, revision: 1,
       capabilities: ['CORE_POS' as const],
+      deviceLimits: null,
       configuration: { payment: { tipsEnabled: true, tipPercentageOptionsBasisPoints: [1000] } },
       configurationRevision: 1, featureFlags: {}, featureFlagsRevision: 1,
       desiredControlRevision: 1, activeEdgeId: null, updatedAt: now,
@@ -228,6 +229,54 @@ describe('Cloud Admin HTTP security', () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({ locationId, planCode: 'TEST_DATA', revision: 1 });
     expect(assignLocation).toHaveBeenCalledTimes(1);
+  });
+
+  it('exposes only safe installation authorization status with tenant-scoped RBAC',async()=>{
+    const getLatestInstallationAuthorization=vi.fn().mockResolvedValue({
+      authorizationId:'01991a00-0000-7000-8000-000000000233',tenantId,status:'CONSUMED' as const,
+      issuedAt:now,expiresAt:new Date(now.getTime()+600_000),consumedAt:new Date(now.getTime()+1_000),
+    });
+    const getLocationAssignment=vi.fn().mockResolvedValue({tenantId});
+    const licensing={getLatestInstallationAuthorization,getLocationAssignment} as unknown as CloudLicensingService;
+    const restricted=await setup('SUPPORT_READ',undefined,licensing);
+    const restrictedCookie=await login(restricted.app);
+    expect((await restricted.app.inject({url:`/admin/v1/locations/${locationId}/installation-authorizations/latest`,headers:{cookie:restrictedCookie}})).statusCode).toBe(403);
+
+    const allowed=await setup('PLATFORM_ADMIN',undefined,licensing);
+    const cookie=await login(allowed.app);
+    const response=await allowed.app.inject({url:`/admin/v1/locations/${locationId}/installation-authorizations/latest`,headers:{cookie}});
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({authorization:{authorizationId:'01991a00-0000-7000-8000-000000000233',
+      status:'CONSUMED',issuedAt:now.toISOString(),expiresAt:new Date(now.getTime()+600_000).toISOString(),
+      consumedAt:new Date(now.getTime()+1_000).toISOString()}});
+    expect(response.json()).not.toHaveProperty('authorization.authorization');
+  });
+
+  it('passes the exact pairing bindings into the signed installation authorization flow',async()=>{
+    const expiresAt=new Date(now.getTime()+600_000).toISOString();
+    const authorization={protected:'protected-value',payload:'payload-value',signature:'signature-value'};
+    const issueInstallationAuthorization=vi.fn().mockResolvedValue({
+      authorizationId:'01991a00-0000-7000-8000-000000000234',status:'ISSUED',expiresAt,authorization,
+    });
+    const getLocationAssignment=vi.fn().mockResolvedValue({tenantId});
+    const licensing={issueInstallationAuthorization,getLocationAssignment} as unknown as CloudLicensingService;
+    const allowed=await setup('PLATFORM_ADMIN',undefined,licensing);
+    const cookie=await login(allowed.app);
+    const payload={
+      commandId:'01991a00-0000-7000-8000-000000000235',
+      pairingId:'01991a00-0000-7000-8000-000000000236',pairingCode:'123456',
+      deviceId:'01991a00-0000-7000-8000-000000000237',deviceType:'POS',
+      displayName:'POS principal',initialOwnerDisplayName:'Owner inicial',
+      reason:'Initial installation authorization test',
+    };
+    const response=await allowed.app.inject({method:'POST',
+      url:`/admin/v1/locations/${locationId}/installation-authorizations`,
+      headers:{cookie,origin:'http://localhost:80'},payload});
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toEqual({authorizationId:'01991a00-0000-7000-8000-000000000234',
+      status:'ISSUED',expiresAt,authorization});
+    expect(issueInstallationAuthorization).toHaveBeenCalledWith(locationId,payload,
+      expect.objectContaining({userId:expect.any(String),sessionId:expect.any(String)}));
   });
 
   it('uses the same existing Edge credential for heartbeat, control pull and ACK', async () => {

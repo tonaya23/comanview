@@ -2,6 +2,7 @@ import {
   generateSessionToken,
   hashSessionToken,
   verifyOperationalPin,
+  verifyDeviceCredential,
   type Permission,
 } from '@comanview/auth';
 import type { CurrentSessionResponse, LoginRequest, LoginResponse } from '@comanview/contracts';
@@ -23,9 +24,11 @@ export class AuthService {
 
   async login(request: LoginRequest, now = new Date()): Promise<LoginResponse> {
     const device = this.repository.getDevice(request.deviceId, this.tenantId, this.locationId);
-    if (!device || device.status !== 'ACTIVE') {
-      throw new AppError('DEVICE_NOT_AUTHORIZED', 401, 'Device is not authorized for this Edge.');
-    }
+    if (!device) throw new AppError('DEVICE_NOT_PAIRED', 401, 'Device is not paired with this Edge.');
+    if (device.status === 'REVOKED') throw new AppError('DEVICE_REVOKED', 401, 'Device authorization was revoked.');
+    if (device.status !== 'ACTIVE') throw new AppError('DEVICE_NOT_AUTHORIZED', 401, 'Device is not active.');
+    if (!device.credentialHash || !verifyDeviceCredential(request.deviceCredential, device.credentialHash))
+      throw new AppError('DEVICE_CREDENTIAL_INVALID', 401, 'Device credential is invalid.');
 
     let attempt = this.repository.getLoginAttempt(device.id);
     if (attempt?.lockedUntil && attempt.lockedUntil.getTime() > now.getTime()) {
@@ -49,7 +52,10 @@ export class AuthService {
     );
     const matchedUsers = matches.filter(({ matches: pinMatches }) => pinMatches);
     const matched = matchedUsers.length === 1 ? matchedUsers[0]?.user : null;
-    if (!matched || matched.status !== 'ACTIVE') {
+    if (matched?.status === 'DISABLED') {
+      throw new AppError('USER_DISABLED', 401, 'User is disabled.');
+    }
+    if (!matched) {
       const failedAttempts = (attempt?.failedAttempts ?? 0) + 1;
       this.repository.recordFailedLogin(
         device.id,

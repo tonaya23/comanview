@@ -10,25 +10,31 @@ export type AuditAction =
   | 'CASH_X_REPORT_GENERATED'
   | 'CASH_SESSION_CLOSED'
   | 'ORDER_EMPTY_CANCELLED'
-  | 'LICENSE_RECOVERY_CASH_SESSION_OPENED';
+  | 'LICENSE_RECOVERY_CASH_SESSION_OPENED'
+  | 'DEVICE_PAIRING_CREATED' | 'DEVICE_PAIRED' | 'DEVICE_PAIRING_FAILED'
+  | 'DEVICE_PAIRING_RATE_LIMITED' | 'DEVICE_PAIRING_CANCELLED' | 'DEVICE_REVOKED'
+  | 'FIRST_DEVICE_BOOTSTRAP_COMPLETED' | 'DEVICE_LIMIT_EXCEEDED_ATTEMPT';
 export type AuditEntityType =
-  'PAYMENT' | 'CASH_MOVEMENT' | 'CASH_REPORT' | 'CASH_SESSION' | 'ORDER';
+  'PAYMENT' | 'CASH_MOVEMENT' | 'CASH_REPORT' | 'CASH_SESSION' | 'ORDER' | 'DEVICE' | 'PAIRING' | 'INSTALLATION';
 
 export interface NewAuditEntry {
   auditId: string;
   occurredAt: Date;
   tenantId: string;
   locationId: string;
-  deviceId: string;
-  sessionId: string;
-  actorUserId: string;
+  deviceId: string | null;
+  sessionId: string | null;
+  actorUserId: string | null;
   actorRole: string | null;
+  actorType?: 'USER' | 'CLOUD_ADMIN_AUTHORIZATION' | 'SYSTEM';
+  authorizationId?: string | null;
+  source?: string | null;
   authorizedByUserId: string | null;
   authorizedByRole: string | null;
   action: AuditAction;
   entityType: AuditEntityType;
   entityId: string;
-  outcome: 'SUCCESS';
+  outcome: 'SUCCESS' | 'REJECTED';
   reason: string;
   commandId: string | null;
   before: Record<string, unknown> | null;
@@ -61,7 +67,7 @@ export class AuditPersistenceError extends Error {
 }
 
 function serializeForHash(entry: NewAuditEntry, previousHash: string | null): string {
-  return JSON.stringify({
+  const legacy = {
     auditId: entry.auditId,
     occurredAt: entry.occurredAt.toISOString(),
     tenantId: entry.tenantId,
@@ -84,6 +90,20 @@ function serializeForHash(entry: NewAuditEntry, previousHash: string | null): st
     currency: entry.currency,
     eventId: entry.eventId,
     previousHash,
+  };
+  if ((entry.actorType ?? 'USER') === 'USER' && !entry.authorizationId && !entry.source) {
+    return JSON.stringify(legacy);
+  }
+  return JSON.stringify({
+    auditId: entry.auditId, occurredAt: entry.occurredAt.toISOString(), tenantId: entry.tenantId,
+    locationId: entry.locationId, deviceId: entry.deviceId, sessionId: entry.sessionId,
+    actorUserId: entry.actorUserId, actorRole: entry.actorRole, actorType: entry.actorType ?? 'USER',
+    authorizationId: entry.authorizationId ?? null, source: entry.source ?? null,
+    authorizedByUserId: entry.authorizedByUserId, authorizedByRole: entry.authorizedByRole,
+    action: entry.action, entityType: entry.entityType, entityId: entry.entityId,
+    outcome: entry.outcome, reason: entry.reason, commandId: entry.commandId,
+    before: entry.before, after: entry.after, amountAffected: entry.amountAffected,
+    currency: entry.currency, eventId: entry.eventId, previousHash,
   });
 }
 
@@ -156,12 +176,15 @@ export class AuditRepository {
       sessionId: row.sessionId,
       actorUserId: row.actorUserId,
       actorRole: row.actorRole,
+      actorType: row.actorType as 'USER' | 'CLOUD_ADMIN_AUTHORIZATION' | 'SYSTEM',
+      authorizationId: row.authorizationId,
+      source: row.source,
       authorizedByUserId: row.authorizedByUserId,
       authorizedByRole: row.authorizedByRole,
       action: row.action as AuditAction,
       entityType: row.entityType as AuditEntityType,
       entityId: row.entityId,
-      outcome: row.outcome as 'SUCCESS',
+      outcome: row.outcome as 'SUCCESS' | 'REJECTED',
       reason: row.reason,
       commandId: row.commandId,
       before: row.beforeJson ? (JSON.parse(row.beforeJson) as Record<string, unknown>) : null,

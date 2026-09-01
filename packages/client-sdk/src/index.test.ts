@@ -1,5 +1,60 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createEdgeClient, EdgeClientError, type EdgeFetch, type EdgeResponse } from './index.js';
+import {
+  clearDeviceIdentity,
+  clearDevicePairing,
+  createDeviceIdentity,
+  createPairingAuthorizationData,
+  getDeviceOnboardingState,
+  loadDeviceIdentity,
+  loadDevicePairing,
+  parsePairingAuthorizationData,
+  markDeviceAuthorizationStatus,
+  rotateDeviceIdentity,
+  saveDeviceIdentity,
+  saveDevicePairing,
+  serializePairingAuthorizationData,
+} from './deviceIdentity.js';
+
+function installMemoryIndexedDb(): Map<string, unknown> {
+  const values = new Map<string, unknown>();
+  const store = {
+    get(key: string) { return request(() => values.get(key)); },
+    put(value: unknown, key: string) { return request(() => { values.set(key, value); }); },
+    delete(key: string) { return request(() => { values.delete(key); }); },
+  };
+  const database = {
+    objectStoreNames: { contains: () => true },
+    createObjectStore: () => store,
+    transaction: () => {
+      const transaction: { objectStore: () => typeof store; error: unknown;
+        oncomplete?: () => void; onerror?: () => void; onabort?: () => void } = {
+        objectStore: () => store,
+        error: null,
+      };
+      setTimeout(() => transaction.oncomplete?.(), 0);
+      return transaction;
+    },
+  };
+  Object.defineProperty(globalThis, 'indexedDB', { configurable: true, value: {
+    open: () => {
+      const result = request(() => database) as ReturnType<typeof request> & { result: typeof database };
+      result.result = database;
+      return result;
+    },
+  } });
+  return values;
+}
+
+function request(run: () => unknown) {
+  const result: { result?: unknown; error?: unknown; onsuccess?: () => void; onerror?: () => void;
+    onupgradeneeded?: () => void } = {};
+  queueMicrotask(() => {
+    try { result.result = run(); result.onupgradeneeded?.(); result.onsuccess?.(); }
+    catch (error) { result.error = error; result.onerror?.(); }
+  });
+  return result;
+}
 
 function jsonResponse(body: unknown, status = 200): EdgeResponse {
   return {
@@ -10,6 +65,112 @@ function jsonResponse(body: unknown, status = 200): EdgeResponse {
 }
 
 describe('createEdgeClient', () => {
+  it('creates a random UUIDv7 device identity without a fixed credential',()=>{
+    const first=createDeviceIdentity('POS','Caja'); const second=createDeviceIdentity('POS','Caja');
+    expect(first.deviceId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(first.credential).toHaveLength(43);
+    expect(second.credential).not.toBe(first.credential);
+  });
+  it('persists Device identity and private pairing proof in IndexedDB without coupling it to logout',async()=>{
+    installMemoryIndexedDb();
+    const localStorageWrites=vi.fn();
+    Object.defineProperty(globalThis,'localStorage',{configurable:true,value:{setItem:localStorageWrites}});
+    const identity=createDeviceIdentity('POS','Caja principal');
+    const pairing={pairingId:'01991a00-0000-7000-8000-000000000401',requestToken:'r'.repeat(43),
+      pairingCode:'123456',expiresAt:'2026-08-29T12:10:00.000Z',deviceId:identity.deviceId,
+      currentStatus:'PENDING' as const};
+    await saveDeviceIdentity(identity);await expect(saveDevicePairing(pairing)).resolves.toBe(true);
+    await expect(loadDeviceIdentity()).resolves.toEqual(identity);
+    await expect(loadDevicePairing()).resolves.toEqual(pairing);
+    await clearDevicePairing();
+    await expect(loadDeviceIdentity()).resolves.toEqual(identity);
+    await clearDeviceIdentity();
+    await expect(loadDeviceIdentity()).resolves.toBeNull();
+    expect(localStorageWrites).not.toHaveBeenCalled();
+  });
+  it('persists only the authoritative Device authorization state after pairing proof cleanup',async()=>{
+    installMemoryIndexedDb();
+    const identity=createDeviceIdentity('POS','Caja principal');
+    await saveDeviceIdentity(identity);
+    await expect(markDeviceAuthorizationStatus(identity.deviceId,'ACTIVE')).resolves.toMatchObject({authorizationStatus:'ACTIVE'});
+    await expect(loadDeviceIdentity()).resolves.toMatchObject({deviceId:identity.deviceId,authorizationStatus:'ACTIVE'});
+    expect(getDeviceOnboardingState(await loadDeviceIdentity(),null)).toBe('ACTIVE');
+    expect(getDeviceOnboardingState({...identity,authorizationStatus:'REVOKED'},null)).toBe('REVOKED');
+    expect(getDeviceOnboardingState(identity,null)).toBe('UNREGISTERED');
+    expect(getDeviceOnboardingState(identity,{currentStatus:'PENDING'})).toBe('PENDING');
+  });
+  it('does not restore an old pairing after a storage wipe creates a new Device identity',async()=>{
+    const storage=installMemoryIndexedDb();
+    const oldIdentity=createDeviceIdentity('POS','POS principal');
+    const oldPairing={pairingId:'01991a00-0000-7000-8000-000000000411',requestToken:'r'.repeat(43),
+      pairingCode:'123456',expiresAt:'2026-08-29T12:10:00.000Z',deviceId:oldIdentity.deviceId,
+      currentStatus:'PENDING' as const};
+    await saveDeviceIdentity(oldIdentity);await expect(saveDevicePairing(oldPairing)).resolves.toBe(true);
+    storage.clear();
+    await expect(loadDeviceIdentity()).resolves.toBeNull();
+    await expect(loadDevicePairing()).resolves.toBeNull();
+    const replacement=createDeviceIdentity('POS','POS principal');
+    await saveDeviceIdentity(replacement);
+    expect(replacement.deviceId).not.toBe(oldIdentity.deviceId);
+    expect(replacement.credential).not.toBe(oldIdentity.credential);
+    await expect(saveDevicePairing(oldPairing)).resolves.toBe(false);
+    await expect(loadDevicePairing()).resolves.toBeNull();
+  });
+  it('atomically replaces a revoked identity and removes only its stale pairing',async()=>{
+    const storage=installMemoryIndexedDb();
+    const revoked=createDeviceIdentity('POS','POS principal');
+    const stalePairing={pairingId:'01991a00-0000-7000-8000-000000000431',requestToken:'r'.repeat(43),
+      pairingCode:'123456',expiresAt:'2026-08-29T12:10:00.000Z',deviceId:revoked.deviceId,
+      currentStatus:'ACTIVE' as const};
+    await saveDeviceIdentity(revoked);await expect(saveDevicePairing(stalePairing)).resolves.toBe(true);
+    storage.set('unrelated',{preserved:true});
+
+    const replacement=await rotateDeviceIdentity(revoked.deviceId);
+
+    expect(replacement?.deviceId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(replacement?.deviceId).not.toBe(revoked.deviceId);
+    expect(replacement?.credential).toHaveLength(43);
+    expect(replacement?.credential).not.toBe(revoked.credential);
+    await expect(loadDeviceIdentity()).resolves.toEqual(replacement);
+    await expect(loadDevicePairing()).resolves.toBeNull();
+    expect(storage.get('unrelated')).toEqual({preserved:true});
+  });
+  it('does not overwrite a newer identity when the expected revoked identity is stale',async()=>{
+    installMemoryIndexedDb();
+    const revoked=createDeviceIdentity('POS','POS principal');
+    const current=createDeviceIdentity('POS','POS principal');
+    await saveDeviceIdentity(current);
+
+    await expect(rotateDeviceIdentity(revoked.deviceId)).resolves.toBeNull();
+    await expect(loadDeviceIdentity()).resolves.toEqual(current);
+  });
+  it('does not let a stale poll overwrite a newer pairing for the same Device identity',async()=>{
+    installMemoryIndexedDb();
+    const identity=createDeviceIdentity('POS','POS principal');
+    const previous={pairingId:'01991a00-0000-7000-8000-000000000421',requestToken:'r'.repeat(43),
+      pairingCode:'123456',expiresAt:'2026-08-29T12:10:00.000Z',deviceId:identity.deviceId,
+      currentStatus:'PENDING' as const};
+    const current={...previous,pairingId:'01991a00-0000-7000-8000-000000000422',pairingCode:'654321'};
+    await saveDeviceIdentity(identity);
+    await expect(saveDevicePairing(previous)).resolves.toBe(true);
+    await expect(saveDevicePairing(current)).resolves.toBe(true);
+    await expect(saveDevicePairing({...previous,currentStatus:'ACTIVE'},previous.pairingId)).resolves.toBe(false);
+    await expect(loadDevicePairing()).resolves.toEqual(current);
+  });
+  it('round-trips the exact public pairing bindings without private Device proof',()=>{
+    const identity={deviceId:'01991a00-0000-7000-8000-000000000402',credential:'private-device-credential',
+      type:'POS' as const,displayName:'POS principal'};
+    const pairing={pairingId:'01991a00-0000-7000-8000-000000000401',requestToken:'private-request-token',
+      pairingCode:'123456',expiresAt:'2026-08-29T12:10:00.000Z',deviceId:identity.deviceId,
+      currentStatus:'PENDING' as const};
+    const transfer=createPairingAuthorizationData(pairing,identity);
+    const serialized=serializePairingAuthorizationData(transfer);
+    expect(parsePairingAuthorizationData(serialized)).toEqual({schemaVersion:1,
+      pairingId:pairing.pairingId,pairingCode:pairing.pairingCode,deviceId:identity.deviceId,
+      deviceType:'POS',displayName:'POS principal'});
+    expect(serialized).not.toContain(identity.credential);
+    expect(serialized).not.toContain(pairing.requestToken);
+  });
   it('keeps PIN login unauthenticated and sends the opaque session token afterwards', async () => {
     let token: string | null = null;
     const fetchMock = vi.fn(async (input: string, init?: { headers?: Record<string, string> }) => {
@@ -59,6 +220,7 @@ describe('createEdgeClient', () => {
     const loggedIn = await client.login({
       pin: '2222',
       deviceId: '01991a00-0000-7000-8000-000000000721',
+      deviceCredential: 'comanview-development-pos-device-credential-0001',
     });
     expect(fetchMock.mock.calls[0]?.[1]?.headers).not.toHaveProperty('authorization');
     token = loggedIn.token;
@@ -104,6 +266,51 @@ describe('createEdgeClient', () => {
       openingFloatAmount: 1000,
       businessDate: '2026-08-27',
     });
+  });
+
+  it('sends the current Bearer token when requesting installation readiness', async () => {
+    let token = 'stale-session-token';
+    const fetchMock = vi.fn(async (_input: string, init?: { headers?: Record<string, string> }) => {
+      expect(init?.headers?.['authorization']).toBe('Bearer current-session-token');
+      return jsonResponse({
+        technicalHealth: 'READY',
+        operationalReadiness: 'READY',
+        productionReadiness: 'NOT_READY',
+        licensingStatus: 'VALID',
+        components: [],
+      });
+    });
+    const client = createEdgeClient({
+      baseUrl: 'http://localhost:3000',
+      fetch: fetchMock as EdgeFetch,
+      getAccessToken: () => token,
+    });
+
+    token = 'current-session-token';
+    await expect(client.getInstallationReadiness()).resolves.toMatchObject({
+      technicalHealth: 'READY',
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:3000/installation/readiness',
+      expect.objectContaining({
+        headers: expect.objectContaining({ authorization: 'Bearer current-session-token' }),
+      }),
+    );
+  });
+
+  it('cancels a pairing through the authenticated local administration route', async () => {
+    const fetchMock = vi.fn(async (input: string, init?: { headers?: Record<string, string>; body?: string }) => {
+      expect(input).toBe('http://localhost:3000/device-pairing/01991a00-0000-7000-8000-000000000401/cancel');
+      expect(init).toMatchObject({ method: 'POST', body: expect.any(String) });
+      expect(init?.headers?.['authorization']).toBe('Bearer owner-session');
+      return jsonResponse({ cancelled: true });
+    });
+    const client = createEdgeClient({ baseUrl: 'http://localhost:3000', fetch: fetchMock as EdgeFetch,
+      getAccessToken: () => 'owner-session' });
+
+    await expect(client.cancelPairing('01991a00-0000-7000-8000-000000000401', {
+      commandId: '01991a00-0000-7000-8000-000000000499',
+    })).resolves.toEqual({ cancelled: true });
   });
 
   it('requests and validates the Edge health endpoint', async () => {

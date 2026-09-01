@@ -32,7 +32,7 @@ describe('authenticated client-sdk flow against real Edge and SQLite', () => {
     let sessionToken: string | null = null;
     const client = createEdgeClient({ baseUrl, getAccessToken: () => sessionToken });
 
-    const login = await client.login({ pin: '2222', deviceId: POS_DEVICE_ID });
+    const login = await client.login({ pin: '2222', deviceId: POS_DEVICE_ID,deviceCredential:'comanview-development-pos-device-credential-0001' });
     sessionToken = login.token;
     expect((await client.getCurrentSession()).user.id).toBe(CASHIER_ID);
     expect((await client.getCurrentCashSession()).session).toBeNull();

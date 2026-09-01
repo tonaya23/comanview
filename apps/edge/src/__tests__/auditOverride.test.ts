@@ -55,8 +55,8 @@ describe('durable Audit Log and single-operation Manager Override', () => {
     await startEdge();
     cashier = createEdgeClient({ baseUrl, getAccessToken: () => cashierToken });
     owner = createEdgeClient({ baseUrl, getAccessToken: () => ownerToken });
-    cashierToken = (await cashier.login({ pin: '2222', deviceId: POS_DEVICE_ID })).token;
-    ownerToken = (await owner.login({ pin: '1111', deviceId: POS_DEVICE_ID })).token;
+    cashierToken = (await cashier.login({ pin: '2222', deviceId: POS_DEVICE_ID,deviceCredential:'comanview-development-pos-device-credential-0001' })).token;
+    ownerToken = (await owner.login({ pin: '1111', deviceId: POS_DEVICE_ID,deviceCredential:'comanview-development-pos-device-credential-0001' })).token;
     await cashier.openCashSession({
       commandId: 'audit-open-cash',
       openingFloatAmount: 0,

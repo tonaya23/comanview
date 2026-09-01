@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
-import { BASE_ROLE_PERMISSIONS, hashOperationalPinSync, PERMISSIONS } from '@comanview/auth';
+import { BASE_ROLE_PERMISSIONS, hashOperationalPinSync, hashDeviceCredential, PERMISSIONS } from '@comanview/auth';
 
 const migrationPaths = [
   fileURLToPath(new URL('../../../../migrations/edge/0000_initial.sql', import.meta.url)),
@@ -41,12 +41,18 @@ const edgeProvisioningMigrationPath = fileURLToPath(
 const licensingConfigurationMigrationPath = fileURLToPath(
   new URL('../../../../migrations/edge/0012_signed_licensing_configuration.sql', import.meta.url),
 );
+const devicePairingMigrationPath = fileURLToPath(
+  new URL('../../../../migrations/edge/0013_device_pairing_readiness.sql', import.meta.url),
+);
 const defaultDatabasePath = fileURLToPath(
   new URL('../../../../apps/edge/edge-dev.db', import.meta.url),
 );
 const databasePath = process.env['COMANVIEW_EDGE_DB_PATH'] ?? defaultDatabasePath;
 
-export function prepareDevelopmentDatabase(targetPath = databasePath): void {
+export function prepareDevelopmentDatabase(
+  targetPath = databasePath,
+  prepareOptions: { seedOperationalIdentities?: boolean } = {},
+): void {
   if (process.env['NODE_ENV'] === 'production') {
     throw new Error('Development database preparation is disabled in production.');
   }
@@ -94,6 +100,8 @@ export function prepareDevelopmentDatabase(targetPath = databasePath): void {
       .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'edge_control_runtime'")
       .get();
     if (!hasControlRuntime) sqlite.exec(readFileSync(licensingConfigurationMigrationPath, 'utf8'));
+    const hasDeviceCredentials = sqlite.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='device_credentials'").get();
+    if (!hasDeviceCredentials) sqlite.exec(readFileSync(devicePairingMigrationPath, 'utf8'));
 
     const seed = sqlite.transaction(() => {
       const insertCategory = sqlite.prepare(
@@ -161,6 +169,10 @@ export function prepareDevelopmentDatabase(targetPath = databasePath): void {
           (id, tenant_id, location_id, name, device_type, status, session_timeout_minutes, created_at)
         VALUES (?, ?, ?, ?, ?, 'ACTIVE', ?, ?)
       `);
+      const insertDeviceCredential = sqlite.prepare(`
+        INSERT OR IGNORE INTO device_credentials(credential_id,device_id,credential_hash,created_at)
+        VALUES(?,?,?,?)
+      `);
       const insertRestaurantTable = sqlite.prepare(`
         INSERT OR IGNORE INTO restaurant_tables
           (id, tenant_id, location_id, name, zone, capacity, display_order, active)
@@ -172,6 +184,16 @@ export function prepareDevelopmentDatabase(targetPath = databasePath): void {
       const taxProfileId = '01991a00-0000-7000-8000-000000000010';
       const tenantId = '01991a00-0000-7000-8000-000000000301';
       const locationId = '01991a00-0000-7000-8000-000000000302';
+      const installedBinding = sqlite
+        .prepare(
+          `SELECT tenant_id tenantId, location_id locationId
+           FROM edge_installations WHERE singleton_key = 'PRIMARY'`,
+        )
+        .get() as { tenantId: string; locationId: string } | undefined;
+      const seedKnownDevelopmentIdentities =
+        (prepareOptions.seedOperationalIdentities ?? true) &&
+        (!installedBinding ||
+          (installedBinding.tenantId === tenantId && installedBinding.locationId === locationId));
       const kitchenStationId = '01991a00-0000-7000-8000-000000000501';
       const barStationId = '01991a00-0000-7000-8000-000000000502';
       const now = Date.now();
@@ -360,20 +382,22 @@ export function prepareDevelopmentDatabase(targetPath = databasePath): void {
           roleIds.MANAGER,
         ],
       ] as const;
-      for (const [id, displayName, status, pin, roleId] of developmentUsers) {
-        insertUser.run(
-          id,
-          tenantId,
-          locationId,
-          displayName,
-          status,
-          hashOperationalPinSync(pin),
-          now,
-        );
-        assignRole.run(id, roleId);
+      if (seedKnownDevelopmentIdentities) {
+        for (const [id, displayName, status, pin, roleId] of developmentUsers) {
+          insertUser.run(
+            id,
+            tenantId,
+            locationId,
+            displayName,
+            status,
+            hashOperationalPinSync(pin),
+            now,
+          );
+          assignRole.run(id, roleId);
+        }
       }
 
-      insertDevice.run(
+      if (seedKnownDevelopmentIdentities) insertDevice.run(
         '01991a00-0000-7000-8000-000000000721',
         tenantId,
         locationId,
@@ -382,7 +406,9 @@ export function prepareDevelopmentDatabase(targetPath = databasePath): void {
         720,
         now,
       );
-      insertDevice.run(
+      if (seedKnownDevelopmentIdentities) insertDeviceCredential.run('01991a00-0000-7000-8000-000000000731','01991a00-0000-7000-8000-000000000721',
+        hashDeviceCredential(process.env['COMANVIEW_DEV_POS_DEVICE_CREDENTIAL'] ?? 'comanview-development-pos-device-credential-0001'),now);
+      if (seedKnownDevelopmentIdentities) insertDevice.run(
         '01991a00-0000-7000-8000-000000000723',
         tenantId,
         locationId,
@@ -391,6 +417,8 @@ export function prepareDevelopmentDatabase(targetPath = databasePath): void {
         720,
         now,
       );
+      if (seedKnownDevelopmentIdentities) insertDeviceCredential.run('01991a00-0000-7000-8000-000000000733','01991a00-0000-7000-8000-000000000723',
+        hashDeviceCredential(process.env['COMANVIEW_DEV_WAITER_DEVICE_CREDENTIAL'] ?? 'comanview-development-waiter-device-credential-01'),now);
 
       const developmentTables = [
         ['01991a00-0000-7000-8000-000000000801', 'Mesa 1', 'SALÓN', 4, 10],
@@ -411,7 +439,7 @@ export function prepareDevelopmentDatabase(targetPath = databasePath): void {
           table[4],
         );
       }
-      insertDevice.run(
+      if (seedKnownDevelopmentIdentities) insertDevice.run(
         '01991a00-0000-7000-8000-000000000722',
         tenantId,
         locationId,
@@ -420,6 +448,11 @@ export function prepareDevelopmentDatabase(targetPath = databasePath): void {
         1_440,
         now,
       );
+      if (seedKnownDevelopmentIdentities) insertDeviceCredential.run('01991a00-0000-7000-8000-000000000732','01991a00-0000-7000-8000-000000000722',
+        hashDeviceCredential(process.env['COMANVIEW_DEV_KDS_DEVICE_CREDENTIAL'] ?? 'comanview-development-kds-device-credential-0001'),now);
+      if (seedKnownDevelopmentIdentities) sqlite.prepare(`UPDATE installation_state SET bootstrap_status='COMPLETED',completed_at=COALESCE(completed_at,?),
+        first_device_id=COALESCE(first_device_id,'01991a00-0000-7000-8000-000000000721'),
+        initial_owner_user_id=COALESCE(initial_owner_user_id,'01991a00-0000-7000-8000-000000000711') WHERE singleton_key='PRIMARY'`).run(now);
     });
 
     seed();

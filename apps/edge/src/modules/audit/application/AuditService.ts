@@ -19,6 +19,9 @@ export class AuditService {
         })
         .map((entry) => ({
           ...entry,
+          actorType: entry.actorType ?? 'USER',
+          authorizationId: entry.authorizationId ?? null,
+          source: entry.source ?? null,
           occurredAt: entry.occurredAt.toISOString(),
         })),
     };

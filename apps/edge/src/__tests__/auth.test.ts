@@ -25,7 +25,8 @@ describe('offline local Auth and RBAC', () => {
   const authorized = (token: string) => ({ authorization: `Bearer ${token}` });
 
   async function login(pin: string, deviceId = POS_DEVICE_ID) {
-    return app.inject({ method: 'POST', url: '/auth/login', payload: { pin, deviceId } });
+    const deviceCredential=deviceId===KDS_DEVICE_ID?'comanview-development-kds-device-credential-0001':'comanview-development-pos-device-credential-0001';
+    return app.inject({ method: 'POST', url: '/auth/login', payload: { pin, deviceId, deviceCredential } });
   }
 
   beforeAll(async () => {
@@ -42,13 +43,18 @@ describe('offline local Auth and RBAC', () => {
   });
 
   it('validates PIN locally, rejects wrong/inactive users, and never exposes credentials', async () => {
+    const wrongDeviceSecret = await app.inject({ method:'POST',url:'/auth/login',payload:{
+      pin:'2222',deviceId:POS_DEVICE_ID,deviceCredential:'a-wrong-device-credential-that-is-long-enough-0001' } });
+    expect(wrongDeviceSecret.statusCode).toBe(401);
+    expect(wrongDeviceSecret.json().error).toBe('DEVICE_CREDENTIAL_INVALID');
+
     const wrong = await login('0000');
     expect(wrong.statusCode).toBe(401);
     expect(wrong.json().error).toBe('INVALID_CREDENTIALS');
 
     const inactive = await login('9999');
     expect(inactive.statusCode).toBe(401);
-    expect(inactive.json().error).toBe('INVALID_CREDENTIALS');
+    expect(inactive.json().error).toBe('USER_DISABLED');
 
     const cashier = await login('2222');
     expect(cashier.statusCode).toBe(200);

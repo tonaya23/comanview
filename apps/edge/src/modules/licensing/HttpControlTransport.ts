@@ -36,9 +36,15 @@ export class HttpControlTransport {
   }
 
   async acknowledge(body: unknown): Promise<void> {
+    return this.postAck('/edge/v1/control-state/acks',body);
+  }
+  async acknowledgeInstallation(body:unknown):Promise<void>{
+    return this.postAck('/edge/v1/installation-authorizations/acks',body);
+  }
+  private async postAck(path:string,body:unknown):Promise<void>{
     let response: Response;
     try {
-      response = await fetch(`${this.cloudUrl}/edge/v1/control-state/acks`, {
+      response = await fetch(`${this.cloudUrl}${path}`, {
         method: 'POST', headers: this.headers(), body: JSON.stringify(body),
         signal: AbortSignal.timeout(this.timeoutMs),
       });

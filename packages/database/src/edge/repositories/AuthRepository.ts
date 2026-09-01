@@ -20,8 +20,9 @@ export interface LocalDevice {
   locationId: string;
   name: string;
   deviceType: 'POS' | 'WAITER' | 'KDS';
-  status: 'ACTIVE' | 'REVOKED';
+  status: 'PENDING' | 'ACTIVE' | 'REVOKED';
   sessionTimeoutMinutes: number;
+  credentialHash: string | null;
 }
 
 export interface AuthenticatedSessionRecord {
@@ -32,7 +33,7 @@ export interface AuthenticatedSessionRecord {
   deviceId: string;
   deviceName: string;
   deviceType: 'POS' | 'WAITER' | 'KDS';
-  deviceStatus: 'ACTIVE' | 'REVOKED';
+  deviceStatus: 'PENDING' | 'ACTIVE' | 'REVOKED';
   tenantId: string;
   locationId: string;
   userTenantId: string;
@@ -95,8 +96,11 @@ export class AuthRepository {
 
   getDevice(id: string, tenantId: string, locationId: string): LocalDevice | null {
     const row = this.db
-      .select()
+      .select({ id:schema.devices.id,tenantId:schema.devices.tenantId,locationId:schema.devices.locationId,
+        name:schema.devices.name,deviceType:schema.devices.deviceType,status:schema.devices.status,
+        sessionTimeoutMinutes:schema.devices.sessionTimeoutMinutes,credentialHash:schema.deviceCredentials.credentialHash })
       .from(schema.devices)
+      .leftJoin(schema.deviceCredentials,and(eq(schema.deviceCredentials.deviceId,schema.devices.id),isNull(schema.deviceCredentials.revokedAt)))
       .where(
         and(
           eq(schema.devices.id, id),
@@ -178,7 +182,7 @@ export class AuthRepository {
       ...row,
       userStatus: row.userStatus as 'ACTIVE' | 'DISABLED',
       deviceType: row.deviceType as 'POS' | 'WAITER' | 'KDS',
-      deviceStatus: row.deviceStatus as 'ACTIVE' | 'REVOKED',
+      deviceStatus: row.deviceStatus as 'PENDING' | 'ACTIVE' | 'REVOKED',
       roles: roleRows.map(({ role }) => role),
       permissions: [...new Set(permissionRows.map(({ permission }) => permission as Permission))],
     };

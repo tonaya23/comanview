@@ -6,6 +6,9 @@ import {
   verifyOperationalPin,
   hashCloudAdminPassword,
   verifyCloudAdminPassword,
+  generateDeviceCredential,
+  hashDeviceCredential,
+  verifyDeviceCredential,
 } from './index.js';
 
 describe('local authentication primitives', () => {
@@ -27,6 +30,13 @@ describe('local authentication primitives', () => {
     expect(first.length).toBeGreaterThanOrEqual(40);
     expect(hashSessionToken(first)).toHaveLength(64);
     expect(hashSessionToken(first)).toBe(hashSessionToken(first));
+  });
+
+  it('stores only salted hashes for device credentials and verifies the device proof',()=>{
+    const credential=generateDeviceCredential();const hash=hashDeviceCredential(credential);
+    expect(credential).toHaveLength(43);expect(hash).not.toContain(credential);
+    expect(verifyDeviceCredential(credential,hash)).toBe(true);
+    expect(verifyDeviceCredential(generateDeviceCredential(),hash)).toBe(false);
   });
 });
 

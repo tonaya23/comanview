@@ -1,6 +1,7 @@
 import { generateKeyPairSync } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { assertDocumentBinding, signControlDocument, verifyControlDocument } from '../index.js';
+import { assertDocumentBinding, hashPairingCode, signControlDocument,
+  signInstallationAuthorization, verifyControlDocument, verifyInstallationAuthorization } from '../index.js';
 
 describe('signed control documents', () => {
   it('signs and verifies an edge-bound Ed25519 license using kid', () => {
@@ -61,5 +62,26 @@ describe('signed control documents', () => {
       tenantId: verified.payload.tenantId, locationId: verified.payload.locationId,
       edgeId: '01991a00-0000-7000-8000-000000000099',
     })).toThrow('CONTROL_DOCUMENT_BINDING_MISMATCH');
+  });
+});
+
+describe('installation authorization', () => {
+  it('signs a one-time authorization bound to the exact pairing and rejects tampering', () => {
+    const pair=generateKeyPairSync('ed25519');
+    const privateKey=pair.privateKey.export({format:'pem',type:'pkcs8'}).toString();
+    const publicKey=pair.publicKey.export({format:'pem',type:'spki'}).toString();
+    const payload={formatVersion:1 as const,typ:'comanview-installation-authorization' as const,
+      authorizationId:'01991a00-0000-7000-8000-000000000101',tenantId:'01991a00-0000-7000-8000-000000000102',
+      locationId:'01991a00-0000-7000-8000-000000000103',edgeId:'01991a00-0000-7000-8000-000000000104',
+      pairingId:'01991a00-0000-7000-8000-000000000105',pairingCodeHash:hashPairingCode('01991a00-0000-7000-8000-000000000105','123456'),
+      deviceId:'01991a00-0000-7000-8000-000000000106',deviceType:'POS' as const,displayName:'Caja principal',
+      initialOwnerId:'01991a00-0000-7000-8000-000000000107',initialOwnerDisplayName:'Owner inicial',
+      issuedAt:'2026-08-29T00:00:00.000Z',expiresAt:'2026-08-29T00:10:00.000Z'};
+    const envelope=signInstallationAuthorization(payload,'install-current',privateKey);
+    expect(verifyInstallationAuthorization(envelope,{'install-current':publicKey}).payload).toEqual(payload);
+    expect(()=>verifyInstallationAuthorization(envelope,{}))
+      .toThrow('INSTALLATION_AUTHORIZATION_UNKNOWN_KID');
+    expect(()=>verifyInstallationAuthorization({...envelope,payload:`${envelope.payload}x`},{'install-current':publicKey}))
+      .toThrow('INSTALLATION_AUTHORIZATION_INVALID');
   });
 });

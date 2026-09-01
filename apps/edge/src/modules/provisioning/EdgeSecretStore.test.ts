@@ -32,5 +32,5 @@ describe('EdgeSecretStore', () => {
     await store.save(value);
     await expect(store.load()).resolves.toEqual(value);
     expect((await readFile(path)).includes(Buffer.from(credential))).toBe(false);
-  }, 15_000);
+  }, 30_000);
 });

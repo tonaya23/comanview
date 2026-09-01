@@ -7,7 +7,8 @@ import {
   createCloudDatabase,
   migrateCloudDatabase,
 } from '@comanview/database';
-import { verifyControlDocument } from '@comanview/licensing';
+import { PairingAuthorizationDataSchema } from '@comanview/contracts';
+import { verifyControlDocument, verifyInstallationAuthorization } from '@comanview/licensing';
 import { CloudLicensingService } from './CloudLicensingService.js';
 
 const databaseUrl = process.env['COMANVIEW_TEST_POSTGRES_URL'];
@@ -54,7 +55,8 @@ describe.skipIf(!databaseUrl)('Cloud PostgreSQL signed licensing', () => {
 
   it('assigns a plan, emits separate signed streams, enforces OCC and stores idempotent ACK', async () => {
     const plan = await service.createPlan({ commandId: '01991a00-3000-7000-8000-000000000012',
-      code: 'TEST_PLAN', displayName: 'Test Plan', capabilities: ['CORE_POS','KDS'], reason: 'test setup' }, actor);
+      code: 'TEST_PLAN', displayName: 'Test Plan', capabilities: ['CORE_POS','KDS'],
+      deviceLimits:{POS:2,WAITER:null,KDS:1}, reason: 'test setup' }, actor);
     const assigned = await service.assignLocation(ids.location, {
       commandId: '01991a00-3000-7000-8000-000000000013', expectedRevision: 0,
       planId: plan.planId, declaredState: 'ACTIVE', reason: 'initial assignment',
@@ -68,7 +70,31 @@ describe.skipIf(!databaseUrl)('Cloud PostgreSQL signed licensing', () => {
     expect(controlState.featureFlags).not.toBeNull();
     const verified = verifyControlDocument(controlState.license!.envelope, { 'test-current': publicKeyPem });
     expect(verified.payload).toMatchObject({ documentType: 'LICENSE', edgeId: ids.edge,
-      declaredState: 'ACTIVE', capabilities: ['CORE_POS','KDS'] });
+      declaredState: 'ACTIVE', capabilities: ['CORE_POS','KDS'],deviceLimits:{POS:2,WAITER:null,KDS:1} });
+
+    const authorizationCommand='01991a00-3000-7000-8000-000000000018';
+    const pairingTransfer=PairingAuthorizationDataSchema.parse({schemaVersion:1,
+      pairingId:'01991a00-3000-7000-8000-000000000019',pairingCode:'123456',
+      deviceId:'01991a00-3000-7000-8000-000000000020',deviceType:'POS',displayName:'POS principal'});
+    const authorizationInput={commandId:authorizationCommand,pairingId:pairingTransfer.pairingId,
+      pairingCode:pairingTransfer.pairingCode,deviceId:pairingTransfer.deviceId,deviceType:pairingTransfer.deviceType,
+      displayName:pairingTransfer.displayName,initialOwnerDisplayName:'Owner inicial',reason:'first installation test'};
+    const authorization=await service.issueInstallationAuthorization(ids.location,authorizationInput,actor);
+    expect(verifyInstallationAuthorization(authorization.authorization,{'test-current':publicKeyPem}).payload)
+      .toMatchObject({pairingId:pairingTransfer.pairingId,deviceId:pairingTransfer.deviceId,
+        deviceType:'POS',displayName:'POS principal'});
+    const authorizationRetry=await service.issueInstallationAuthorization(ids.location,authorizationInput,actor);
+    expect(authorizationRetry).toEqual(authorization);
+    expect(authorization.authorization).toEqual(authorizationRetry.authorization);
+    await expect(service.issueInstallationAuthorization(ids.location,{...authorizationInput,
+      commandId:'01991a00-3000-7000-8000-000000000022'},actor)).rejects.toMatchObject({code:'INSTALLATION_AUTHORIZATION_PENDING'});
+    await service.consumeInstallationAuthorization(ids.edge,{commandId:'01991a00-3000-7000-8000-000000000021',authorizationId:authorization.authorizationId,consumedAt:now.toISOString()});
+    await service.consumeInstallationAuthorization(ids.edge,{commandId:'01991a00-3000-7000-8000-000000000021',authorizationId:authorization.authorizationId,consumedAt:now.toISOString()});
+    const consumed=await database.pool.query('SELECT status,consumed_at FROM cloud_installation_authorizations WHERE authorization_id=$1',[authorization.authorizationId]);
+    expect(consumed.rows[0]).toMatchObject({status:'CONSUMED',consumed_at:now});
+    expect(await service.getLatestInstallationAuthorization(ids.location)).toMatchObject({
+      authorizationId:authorization.authorizationId,status:'CONSUMED',tenantId:ids.tenant,consumedAt:now,
+    });
 
     await expect(service.updateState(ids.location, {
       commandId: '01991a00-3000-7000-8000-000000000014', expectedRevision: 99,
@@ -106,6 +132,7 @@ describe.skipIf(!databaseUrl)('Cloud PostgreSQL signed licensing', () => {
   });
 
   async function cleanup() {
+    await database.pool.query('DELETE FROM cloud_installation_authorizations WHERE tenant_id=$1',[ids.tenant]);
     await database.pool.query('DELETE FROM cloud_edge_control_state_acks WHERE edge_id=$1',[ids.edge]);
     await database.pool.query('DELETE FROM cloud_signed_control_documents WHERE tenant_id=$1',[ids.tenant]);
     await database.pool.query('DELETE FROM cloud_location_control_state WHERE tenant_id=$1',[ids.tenant]);
@@ -119,6 +146,8 @@ describe.skipIf(!databaseUrl)('Cloud PostgreSQL signed licensing', () => {
     await database.pool.query('DELETE FROM cloud_locations WHERE location_id=$1',[ids.location]);
     await database.pool.query('DELETE FROM cloud_tenants WHERE tenant_id=$1',[ids.tenant]);
     await database.pool.query(`DELETE FROM cloud_plan_entitlements WHERE plan_id IN
+      (SELECT plan_id FROM cloud_plans WHERE code='TEST_PLAN')`);
+    await database.pool.query(`DELETE FROM cloud_plan_device_limits WHERE plan_id IN
       (SELECT plan_id FROM cloud_plans WHERE code='TEST_PLAN')`);
     await database.pool.query("DELETE FROM cloud_plans WHERE code='TEST_PLAN'");
     await database.pool.query('DELETE FROM cloud_admin_sessions WHERE session_id=$1',[ids.session]);

@@ -6,6 +6,8 @@ import type {
   EffectiveCapabilitiesResponse,
   EffectiveLicenseMode,
   LicenseDocumentPayload,
+  DeviceLimits,
+  DeviceType,
 } from '@comanview/contracts';
 import { EdgeControlStateResponseSchema } from '@comanview/contracts';
 import type { EdgeControlRepository } from '@comanview/database';
@@ -133,6 +135,11 @@ export class EdgeLicenseManager {
         'Cloud control-state ACK failed');
       }
     }
+    const installation=this.repository.pendingInstallationAuthorizationAck(now);
+    if(installation)try{
+      await this.transport.acknowledgeInstallation({commandId:installation.commandId,authorizationId:installation.authorizationId,consumedAt:installation.consumedAt.toISOString()});
+      this.repository.markInstallationAuthorizationAcked(now);
+    }catch(error){const failure=safeControlFailure(error,'ACK_REQUEST');const delay=Math.min(1_000*2**Math.min(installation.attemptCount,12),this.config.maxBackoffMs);this.repository.markInstallationAuthorizationAckFailed(failure.code,new Date(now.getTime()+delay));this.log.warn({component:'edge-control',operation:'installation-ack',...failure,attempt:installation.attemptCount+1},'Cloud installation authorization ACK failed');}
   }
 
   checkpoint(): void {
@@ -151,6 +158,7 @@ export class EdgeLicenseManager {
     if (!this.config.enforcementEnabled) return {
       mode: 'FULL', declaredState: null,
       capabilities: ['CORE_POS','TABLE_SERVICE','KDS','PRINTING'],
+      deviceLimits: { POS:null, WAITER:null, KDS:null },
       licenseRevision: null, featureFlagsRevision: null, configurationRevision: null,
       cloudReachable: this.repository.getRuntime().cloudReachable,
       expiresAt: null, graceUntil: null, reasonCode: 'LICENSING_DISABLED_FOR_DEVELOPMENT',
@@ -277,6 +285,18 @@ export class EdgeLicenseManager {
     return this.repository.currentDocument<ConfigurationDocumentPayload>('CONFIGURATION')
       ?.payload.configuration ?? DEFAULT_CONFIGURATION;
   }
+  currentDeviceLimits(): DeviceLimits | undefined {
+    if (!this.config.enforcementEnabled) return { POS:null, WAITER:null, KDS:null };
+    return this.repository.currentDocument<LicenseDocumentPayload>('LICENSE')?.payload.deviceLimits;
+  }
+  assertDevicePairingAllowed(type: DeviceType, activeCount: number): void {
+    const capability: CapabilityCode = type === 'POS' ? 'CORE_POS' : type === 'WAITER' ? 'TABLE_SERVICE' : 'KDS';
+    this.assertCapabilityAvailable(capability);
+    const limits=this.currentDeviceLimits();
+    if (!limits) throw new AppError('DEVICE_LIMITS_UNAVAILABLE',409,'La licencia no contiene límites de dispositivos.');
+    const limit=limits[type];
+    if (limit !== null && activeCount >= limit) throw new AppError('DEVICE_LIMIT_REACHED',409,`Se alcanzó el límite de dispositivos ${type}.`);
+  }
 
   currentOpenAuthorization() {
     const effective = this.effectiveCapabilities();
@@ -297,6 +317,7 @@ export class EdgeLicenseManager {
     featureFlagsRevision: number|null, configurationRevision: number|null): EffectiveCapabilitiesResponse {
     const runtime = this.repository.getRuntime();
     return { mode, declaredState: payload?.declaredState ?? null, capabilities,
+      ...(payload?.deviceLimits ? { deviceLimits:payload.deviceLimits } : {}),
       licenseRevision: payload?.revision ?? null, featureFlagsRevision, configurationRevision,
       cloudReachable: runtime.cloudReachable, expiresAt: payload?.expiresAt ?? null,
       graceUntil: payload?.graceUntil ?? null, reasonCode, protectedOrderCount,

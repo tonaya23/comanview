@@ -4,7 +4,12 @@ import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import { hashOperationalPinSync, BASE_ROLE_PERMISSIONS } from '@comanview/auth';
+import {
+  BASE_ROLE_PERMISSIONS,
+  generateDeviceCredential,
+  hashDeviceCredential,
+  hashOperationalPinSync,
+} from '@comanview/auth';
 import { buildApp } from '../index.js';
 
 const Database = createRequire(import.meta.url)('better-sqlite3') as any;
@@ -17,6 +22,9 @@ const ownerId = '01991a00-0000-7000-8000-000000000711';
 const waiterDeviceId = '01991a00-0000-7000-8000-000000000723';
 const ownerDeviceId = '01991a00-0000-7000-8000-000000000721';
 const kitchenDeviceId = '01991a00-0000-7000-8000-000000000724';
+const waiterDeviceCredential = generateDeviceCredential();
+const ownerDeviceCredential = generateDeviceCredential();
+const kitchenDeviceCredential = generateDeviceCredential();
 const table1 = '01991a00-0000-7000-8000-000000000801';
 const table2 = '01991a00-0000-7000-8000-000000000802';
 const table3 = '01991a00-0000-7000-8000-000000000803';
@@ -43,6 +51,7 @@ function migrateAndSeed(path: string) {
     '0010_sync_foundation.sql',
     '0011_edge_provisioning.sql',
     '0012_signed_licensing_configuration.sql',
+    '0013_device_pairing_readiness.sql',
   ]) {
     sqlite.exec(
       readFileSync(resolve(__dirname, `../../../../migrations/edge/${migration}`), 'utf8'),
@@ -71,9 +80,9 @@ function migrateAndSeed(path: string) {
       ('${table7}', '${tenantId}', '${locationId}', 'Mesa 7', 'TERRAZA', 4, 70, 1);
   `);
 
-  const insertRole = sqlite.prepare('INSERT INTO roles (id, name) VALUES (?, ?)');
+  const insertRole = sqlite.prepare('INSERT OR IGNORE INTO roles (id, name) VALUES (?, ?)');
   const insertPermission = sqlite.prepare('INSERT OR IGNORE INTO permissions VALUES (?, ?)');
-  const assignPermission = sqlite.prepare('INSERT INTO role_permissions VALUES (?, ?)');
+  const assignPermission = sqlite.prepare('INSERT OR IGNORE INTO role_permissions VALUES (?, ?)');
   const roles = [
     ['01991a00-0000-7000-8000-000000000701', 'OWNER', BASE_ROLE_PERMISSIONS.OWNER],
     ['01991a00-0000-7000-8000-000000000704', 'WAITER', BASE_ROLE_PERMISSIONS.WAITER],
@@ -118,14 +127,25 @@ function migrateAndSeed(path: string) {
   sqlite.prepare('INSERT INTO user_roles VALUES (?, ?)').run(waiterId, roles[1][0]);
   sqlite.prepare('INSERT INTO user_roles VALUES (?, ?)').run(kitchenId, roles[2][0]);
   sqlite
-    .prepare('INSERT INTO devices VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-    .run(waiterDeviceId, tenantId, locationId, 'Waiter test', 'WAITER', 'ACTIVE', 720, Date.now());
+    .prepare(`INSERT INTO devices
+      (id,tenant_id,location_id,name,device_type,status,session_timeout_minutes,created_at,activated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(waiterDeviceId, tenantId, locationId, 'Waiter test', 'WAITER', 'ACTIVE', 720, Date.now(), Date.now());
   sqlite
-    .prepare('INSERT INTO devices VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-    .run(ownerDeviceId, tenantId, locationId, 'POS test', 'POS', 'ACTIVE', 720, Date.now());
+    .prepare(`INSERT INTO devices
+      (id,tenant_id,location_id,name,device_type,status,session_timeout_minutes,created_at,activated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(ownerDeviceId, tenantId, locationId, 'POS test', 'POS', 'ACTIVE', 720, Date.now(), Date.now());
   sqlite
-    .prepare('INSERT INTO devices VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-    .run(kitchenDeviceId, tenantId, locationId, 'Kitchen test', 'KDS', 'ACTIVE', 720, Date.now());
+    .prepare(`INSERT INTO devices
+      (id,tenant_id,location_id,name,device_type,status,session_timeout_minutes,created_at,activated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(kitchenDeviceId, tenantId, locationId, 'Kitchen test', 'KDS', 'ACTIVE', 720, Date.now(), Date.now());
+  const insertCredential = sqlite.prepare(`INSERT INTO device_credentials
+    (credential_id,device_id,credential_hash,created_at) VALUES (?, ?, ?, ?)`);
+  insertCredential.run(crypto.randomUUID(),waiterDeviceId,hashDeviceCredential(waiterDeviceCredential),Date.now());
+  insertCredential.run(crypto.randomUUID(),ownerDeviceId,hashDeviceCredential(ownerDeviceCredential),Date.now());
+  insertCredential.run(crypto.randomUUID(),kitchenDeviceId,hashDeviceCredential(kitchenDeviceCredential),Date.now());
   sqlite.close();
 }
 
@@ -144,27 +164,27 @@ describe('Tables + Waiter vertical slice', () => {
     const login = await app.inject({
       method: 'POST',
       url: '/auth/login',
-      payload: { pin: '3333', deviceId: waiterDeviceId },
+      payload: { pin: '3333', deviceId: waiterDeviceId, deviceCredential: waiterDeviceCredential },
     });
     waiterToken = login.json().token;
     ownerToken = (
       await app.inject({
         method: 'POST',
         url: '/auth/login',
-        payload: { pin: '1111', deviceId: ownerDeviceId },
+        payload: { pin: '1111', deviceId: ownerDeviceId, deviceCredential: ownerDeviceCredential },
       })
     ).json().token;
     kitchenToken = (
       await app.inject({
         method: 'POST',
         url: '/auth/login',
-        payload: { pin: '4444', deviceId: kitchenDeviceId },
+        payload: { pin: '4444', deviceId: kitchenDeviceId, deviceCredential: kitchenDeviceCredential },
       })
     ).json().token;
   });
 
   afterAll(async () => {
-    await app.close();
+    await app?.close();
     for (const suffix of ['', '-shm', '-wal']) {
       try {
         unlinkSync(databasePath + suffix);

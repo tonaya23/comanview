@@ -115,6 +115,38 @@ export const devices = sqliteTable('devices', {
   status: text('status').notNull(),
   sessionTimeoutMinutes: integer('session_timeout_minutes').notNull(),
   createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  activatedAt: integer('activated_at', { mode: 'timestamp_ms' }),
+  revokedAt: integer('revoked_at', { mode: 'timestamp_ms' }),
+});
+
+export const deviceCredentials = sqliteTable('device_credentials', {
+  credentialId: text('credential_id').primaryKey(),
+  deviceId: text('device_id').notNull().references(() => devices.id),
+  credentialHash: text('credential_hash').notNull(),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  revokedAt: integer('revoked_at', { mode: 'timestamp_ms' }),
+});
+
+export const devicePairingRequests = sqliteTable('device_pairing_requests', {
+  pairingId: text('pairing_id').primaryKey(), deviceId: text('device_id').notNull().references(() => devices.id),
+  edgeId: text('edge_id').notNull(), tenantId: text('tenant_id').notNull(), locationId: text('location_id').notNull(),
+  codeHash: text('code_hash').notNull(), requestTokenHash: text('request_token_hash').notNull().unique(),
+  credentialHash: text('credential_hash').notNull(), attemptCount: integer('attempt_count').notNull().default(0),
+  lockedUntil: integer('locked_until', { mode: 'timestamp_ms' }), expiresAt: integer('expires_at', { mode: 'timestamp_ms' }).notNull(),
+  status: text('status').notNull(), createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  consumedAt: integer('consumed_at', { mode: 'timestamp_ms' }), approvedByUserId: text('approved_by_user_id'),
+  authorizationId: text('authorization_id').unique(),
+});
+
+export const installationState = sqliteTable('installation_state', {
+  singletonKey: text('singleton_key').primaryKey(), bootstrapStatus: text('bootstrap_status').notNull(),
+  completedAt: integer('completed_at', { mode: 'timestamp_ms' }), authorizationId: text('authorization_id').unique(),
+  firstDeviceId: text('first_device_id'), initialOwnerUserId: text('initial_owner_user_id'),
+  cloudAckCommandId: text('cloud_ack_command_id').unique(),
+  cloudAcknowledgedAt: integer('cloud_acknowledged_at',{mode:'timestamp_ms'}),
+  cloudAckAttemptCount: integer('cloud_ack_attempt_count').notNull().default(0),
+  cloudAckNextAttemptAt: integer('cloud_ack_next_attempt_at',{mode:'timestamp_ms'}),
+  cloudAckLastError: text('cloud_ack_last_error'),
 });
 
 export const authSessions = sqliteTable('auth_sessions', {
@@ -150,10 +182,13 @@ export const auditLog = sqliteTable(
     occurredAt: integer('occurred_at', { mode: 'timestamp_ms' }).notNull(),
     tenantId: text('tenant_id').notNull(),
     locationId: text('location_id').notNull(),
-    deviceId: text('device_id').notNull(),
-    sessionId: text('session_id').notNull(),
-    actorUserId: text('actor_user_id').notNull(),
+    deviceId: text('device_id'),
+    sessionId: text('session_id'),
+    actorUserId: text('actor_user_id'),
     actorRole: text('actor_role'),
+    actorType: text('actor_type').notNull().default('USER'),
+    authorizationId: text('authorization_id'),
+    source: text('source'),
     authorizedByUserId: text('authorized_by_user_id'),
     authorizedByRole: text('authorized_by_role'),
     action: text('action').notNull(),

@@ -5999,3 +5999,24 @@ Toda la arquitectura de ComanView deberá preservar simultáneamente cuatro prop
 **La complejidad Cloud o administrativa nunca debe convertirse en una dependencia crítica para vender, preparar, imprimir o cobrar localmente.**
 
 Estas propiedades tienen prioridad sobre decisiones de implementación secundarias.
+
+## 16.1 Device Pairing e Installation Readiness (Fase 1U)
+
+La identidad operacional se valida como `Device proof + User PIN → local Session`; `deviceId` por sí
+solo nunca autoriza. El primer Device requiere una autorización Ed25519 Cloud de tipo propio ligada
+al pairing exacto, mientras los Devices posteriores se aprueban localmente mediante RBAC y LKG.
+Revocation invalida credential y sesiones de forma atómica, sin borrar historia.
+
+`REVOKED` es terminal. Un cliente que conserva la credential histórica solo puede obtener la señal
+`DEVICE_REPAIR_REQUIRED` después de demostrar esa credential contra su hash revocado. La señal
+autoriza exclusivamente una rotación local compare-and-replace hacia un nuevo `deviceId` UUIDv7 y
+una nueva credential, seguida por el pairing normal con un único retry. El Device histórico nunca
+se reactiva; conocer solo su `deviceId` o recibir `DEVICE_ALREADY_REGISTERED` no autoriza rotación.
+
+Los límites firmados por tipo son `POS/WAITER/KDS: integer | null`. Un documento legacy sin límites
+conserva Devices existentes pero bloquea nuevos pairings. La identidad browser vive en IndexedDB;
+clonado de perfil y XSS same-origin son limitaciones conocidas de V1.
+
+Installation Readiness se deriva del estado durable y se mantiene separado de `/health`. Backup
+permanece `PENDING_1V`, por lo cual Production Readiness no puede ser READY en 1U. El procedimiento,
+threat model y deuda de validación manual están en `docs/Development_Device_Pairing.md`.

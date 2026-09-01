@@ -20,3 +20,4 @@ export * from './realtime.js';
 export * from './cloudAdmin.js';
 export * from './provisioning.js';
 export * from './licensing.js';
+export * from './devices.js';

@@ -16,6 +16,10 @@ import {
   type FeatureFlagsDocumentPayload,
   type LicenseDocumentPayload,
   type SignedDocumentEnvelope,
+  InstallationAuthorizationEnvelopeSchema,
+  InstallationAuthorizationPayloadSchema,
+  type InstallationAuthorizationEnvelope,
+  type InstallationAuthorizationPayload,
 } from '@comanview/contracts';
 
 export const LICENSE_DOCUMENT_DURATION_MS = 7 * 24 * 60 * 60 * 1_000;
@@ -29,6 +33,31 @@ export const EFFECTIVE_TIME_CHECKPOINT_MS = 60 * 1_000;
 
 function base64urlJson(value: unknown): string {
   return Buffer.from(JSON.stringify(value), 'utf8').toString('base64url');
+}
+
+export function hashPairingCode(pairingId: string, code: string): string {
+  return createHash('sha256').update(`comanview-pairing:${pairingId}:${code}`, 'utf8').digest('hex');
+}
+
+export function signInstallationAuthorization(payload: InstallationAuthorizationPayload, kid: string, privateKeyPem: string): InstallationAuthorizationEnvelope {
+  const protectedValue=base64urlJson({typ:'comanview-installation-authorization',formatVersion:1,alg:'EdDSA',kid});
+  const payloadValue=base64urlJson(payload);
+  return {protected:protectedValue,payload:payloadValue,signature:sign(null,Buffer.from(`${protectedValue}.${payloadValue}`,'ascii'),createPrivateKey(privateKeyPem)).toString('base64url')};
+}
+
+export function verifyInstallationAuthorization(input: unknown, publicKeyring: Readonly<Record<string,string>>): {payload:InstallationAuthorizationPayload;kid:string} {
+  const envelope=InstallationAuthorizationEnvelopeSchema.parse(input);
+  const header=zInstallationHeader(parseBase64urlJson(envelope.protected));
+  const key=publicKeyring[header.kid]; if(!key) throw new Error('INSTALLATION_AUTHORIZATION_UNKNOWN_KID');
+  const valid=verify(null,Buffer.from(`${envelope.protected}.${envelope.payload}`,'ascii'),createPublicKey(key),Buffer.from(envelope.signature,'base64url'));
+  if(!valid) throw new Error('INSTALLATION_AUTHORIZATION_INVALID_SIGNATURE');
+  return {payload:InstallationAuthorizationPayloadSchema.parse(parseBase64urlJson(envelope.payload)),kid:header.kid};
+}
+function zInstallationHeader(value:unknown):{typ:'comanview-installation-authorization';formatVersion:1;alg:'EdDSA';kid:string}{
+  if(!value||typeof value!=='object') throw new Error('INSTALLATION_AUTHORIZATION_INVALID_HEADER');
+  const h=value as Record<string,unknown>;
+  if(h['typ']!=='comanview-installation-authorization'||h['formatVersion']!==1||h['alg']!=='EdDSA'||typeof h['kid']!=='string'||!h['kid']) throw new Error('INSTALLATION_AUTHORIZATION_INVALID_HEADER');
+  return h as ReturnType<typeof zInstallationHeader>;
 }
 
 function parseBase64urlJson(value: string): unknown {

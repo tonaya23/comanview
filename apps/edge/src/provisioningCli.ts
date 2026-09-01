@@ -14,7 +14,7 @@ if (!isAbsolute(databasePath)) {
   throw new Error('COMANVIEW_EDGE_DB_PATH must be absolute.');
 }
 if (process.env['NODE_ENV'] !== 'production') {
-  prepareDevelopmentDatabase(databasePath);
+  prepareDevelopmentDatabase(databasePath, { seedOperationalIdentities: false });
 }
 const database = createEdgeDatabase(databasePath);
 try {

@@ -69,9 +69,9 @@ describe('Cash operations, blind count and X/Z closure', () => {
   beforeAll(async () => {
     prepareDevelopmentDatabase(dbPath);
     await startEdge();
-    cashierToken = (await cashier.login({ pin: '2222', deviceId: POS_DEVICE_ID })).token;
-    ownerToken = (await owner.login({ pin: '1111', deviceId: POS_DEVICE_ID })).token;
-    waiterToken = (await waiter.login({ pin: '3333', deviceId: POS_DEVICE_ID })).token;
+    cashierToken = (await cashier.login({ pin: '2222', deviceId: POS_DEVICE_ID,deviceCredential:'comanview-development-pos-device-credential-0001' })).token;
+    ownerToken = (await owner.login({ pin: '1111', deviceId: POS_DEVICE_ID,deviceCredential:'comanview-development-pos-device-credential-0001' })).token;
+    waiterToken = (await waiter.login({ pin: '3333', deviceId: POS_DEVICE_ID,deviceCredential:'comanview-development-pos-device-credential-0001' })).token;
   });
 
   afterAll(async () => {

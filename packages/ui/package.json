@@ -8,7 +8,8 @@
     ".": {
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
-    }
+    },
+    "./tokens.css": "./src/tokens.css"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

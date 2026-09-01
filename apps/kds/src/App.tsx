@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { createEdgeClient, EdgeClientError } from '@comanview/client-sdk';
+import { createEdgeClient, EdgeClientError, clearDevicePairing, createClientDevicePairing, createDeviceIdentity,
+  getDeviceOnboardingState, loadDeviceIdentity, loadDevicePairing, markDeviceAuthorizationStatus,
+  requestPairingWithIdentityRotation, saveDeviceIdentity, saveDevicePairing,
+  type ClientDeviceIdentity, type ClientDevicePairing } from '@comanview/client-sdk';
+import { DeviceOnboardingCard } from '@comanview/ui';
 import {
   KdsRealtimeMessageSchema,
   PermissionCodes,
@@ -17,9 +21,6 @@ import {
 } from './kdsLogic.js';
 
 const sessionTokenStorageKey = 'comanview.kds.sessionToken';
-const kdsDeviceId =
-  import.meta.env['VITE_COMANVIEW_DEVICE_ID'] ??
-  (import.meta.env.DEV ? '01991a00-0000-7000-8000-000000000722' : '');
 const edge = createEdgeClient({
   baseUrl: '/api',
   getAccessToken: () => window.localStorage.getItem(sessionTokenStorageKey),
@@ -36,6 +37,10 @@ export function App() {
   const [pin, setPin] = useState('');
   const [loginPending, setLoginPending] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
+  const [deviceIdentity,setDeviceIdentity]=useState<ClientDeviceIdentity|null>(null);
+  const [pairing,setPairing]=useState<ClientDevicePairing|null>(null);
+  const [pairingDisplayName,setPairingDisplayName]=useState('KDS');
+  const [pairingPending,setPairingPending]=useState(false);
   const [stations, setStations] = useState<KdsStationResponse[]>([]);
   const [stationId, setStationId] = useState('');
   const [tickets, setTickets] = useState<KdsTicketResponse[]>([]);
@@ -55,6 +60,15 @@ export function App() {
     setTickets([]);
     setStationId('');
   }, []);
+  useEffect(()=>{void loadDeviceIdentity().then(async(v)=>{const identity=v??createDeviceIdentity('KDS','KDS');if(!v)await saveDeviceIdentity(identity);setDeviceIdentity(identity);setPairingDisplayName(identity.displayName);});},[]);
+  useEffect(()=>{void loadDevicePairing().then(value=>{if(value)setPairing(value);});},[]);
+  useEffect(()=>{if(!authUser||!deviceIdentity||deviceIdentity.authorizationStatus==='ACTIVE')return;
+    void markDeviceAuthorizationStatus(deviceIdentity.deviceId,'ACTIVE').then(active=>{if(active)setDeviceIdentity(active);});
+  },[authUser,deviceIdentity]);
+  useEffect(()=>{if(!pairing?.requestToken||!deviceIdentity)return;const poll=()=>void edge.getPairingStatus(pairing.pairingId,pairing.requestToken)
+    .then(async status=>{if(status.status==='ACTIVE'){const active=await markDeviceAuthorizationStatus(deviceIdentity.deviceId,'ACTIVE');if(active)setDeviceIdentity(active);await clearDevicePairing(pairing.pairingId);setPairing(null);setLoginError(null);return;}
+      const next={...pairing,currentStatus:status.status};await saveDevicePairing(next,pairing.pairingId);setPairing(next);}).catch(()=>undefined);
+    poll();const timer=window.setInterval(poll,2_000);return()=>window.clearInterval(timer);},[pairing?.pairingId,pairing?.requestToken]);
 
   useEffect(() => {
     const restore = async () => {
@@ -221,6 +235,7 @@ export function App() {
     [tickets],
   );
   const selectedStation = stations.find((station) => station.stationId === stationId);
+  const deviceOnboardingState=getDeviceOnboardingState(deviceIdentity,pairing);
 
   async function login(event: FormEvent) {
     event.preventDefault();
@@ -228,11 +243,11 @@ export function App() {
     setLoginPending(true);
     setLoginError(null);
     try {
-      if (!kdsDeviceId) {
+      if (!deviceIdentity) {
         setLoginError('Este KDS no tiene un dispositivo configurado.');
         return;
       }
-      const authenticated = await edge.login({ pin, deviceId: kdsDeviceId });
+      const authenticated = await edge.login({ pin, deviceId: deviceIdentity.deviceId,deviceCredential:deviceIdentity.credential });
       if (!authenticated.user.permissions.includes(PermissionCodes.KDS_VIEW)) {
         window.localStorage.setItem(sessionTokenStorageKey, authenticated.token);
         await edge.logout();
@@ -241,15 +256,28 @@ export function App() {
         return;
       }
       window.localStorage.setItem(sessionTokenStorageKey, authenticated.token);
+      const active=await markDeviceAuthorizationStatus(deviceIdentity.deviceId,'ACTIVE');
+      if(active)setDeviceIdentity(active);
       setAuthUser(authenticated.user);
       setPin('');
-    } catch {
+    } catch (problem) {
       setPin('');
-      setLoginError('PIN incorrecto o acceso temporalmente bloqueado.');
+      if(deviceIdentity&&problem instanceof EdgeClientError&&problem.code==='DEVICE_REVOKED'){const revoked=await markDeviceAuthorizationStatus(deviceIdentity.deviceId,'REVOKED');if(revoked)setDeviceIdentity(revoked);}
+      else if(deviceIdentity&&problem instanceof EdgeClientError&&['DEVICE_NOT_PAIRED','DEVICE_NOT_AUTHORIZED','DEVICE_CREDENTIAL_INVALID'].includes(problem.code)){const unknown=await markDeviceAuthorizationStatus(deviceIdentity.deviceId,'UNKNOWN');if(unknown)setDeviceIdentity(unknown);}
+      setLoginError(problem instanceof EdgeClientError&&problem.code==='DEVICE_REVOKED'?'Este dispositivo fue revocado. Empáralo nuevamente para crear una identidad nueva.':problem instanceof EdgeClientError&&['DEVICE_NOT_PAIRED','DEVICE_NOT_AUTHORIZED','DEVICE_CREDENTIAL_INVALID'].includes(problem.code)?'Este dispositivo no está autorizado. Empáralo primero.':'PIN incorrecto o acceso temporalmente bloqueado.');
     } finally {
       setLoginPending(false);
     }
   }
+  async function beginPairing(){if(!deviceIdentity||pairingPending)return;setPairingPending(true);setLoginError(null);try{
+    const displayName=pairingDisplayName.trim();if(!displayName){setLoginError('Asigna un nombre a este dispositivo.');return;}
+    const named=deviceIdentity.displayName===displayName?deviceIdentity:{...deviceIdentity,displayName};if(named!==deviceIdentity){await saveDeviceIdentity(named);setDeviceIdentity(named);}
+    const requested=await requestPairingWithIdentityRotation({identity:named,
+      requestPairing:(identity)=>edge.createPairing({deviceId:identity.deviceId,deviceType:'KDS',displayName:identity.displayName,credential:identity.credential}),
+      onIdentityRotated:(identity)=>setDeviceIdentity(identity)});
+    const next=createClientDevicePairing(requested.pairing);await saveDevicePairing(next);setPairing(next);
+  }catch(problem){setLoginError(getKdsErrorMessage(problem));}finally{setPairingPending(false);}}
+  async function retryPairing(){if(pairing)await clearDevicePairing(pairing.pairingId);setPairing(null);await beginPairing();}
 
   async function logout() {
     try {
@@ -298,6 +326,9 @@ export function App() {
           <div className="kds-login-feedback" role="status">
             {loginError ?? '\u00a0'}
           </div>
+          <DeviceOnboardingCard productLabel="KDS" state={deviceOnboardingState} displayName={pairingDisplayName}
+            pairingCode={pairing?.pairingCode} pairingId={pairing?.pairingId} expiresAt={pairing?.expiresAt}
+            pending={pairingPending} onDisplayName={setPairingDisplayName} onPair={()=>void beginPairing()} onRetry={()=>void retryPairing()}/>
         </form>
       </main>
     );

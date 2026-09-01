@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { createEdgeClient, EdgeClientError } from '@comanview/client-sdk';
+import { createEdgeClient, EdgeClientError, clearDevicePairing, createClientDevicePairing, createDeviceIdentity,
+  getDeviceOnboardingState, loadDeviceIdentity, loadDevicePairing, markDeviceAuthorizationStatus,
+  requestPairingWithIdentityRotation, saveDeviceIdentity, saveDevicePairing,
+  type ClientDeviceIdentity, type ClientDevicePairing } from '@comanview/client-sdk';
+import { DeviceOnboardingCard } from '@comanview/ui';
 import {
   PermissionCodes,
   OperationalRealtimeMessageSchema,
@@ -20,9 +24,6 @@ import {
 } from './waiterLogic.js';
 
 const tokenKey = 'comanview.waiter.sessionToken';
-const waiterDeviceId =
-  import.meta.env['VITE_COMANVIEW_DEVICE_ID'] ??
-  (import.meta.env.DEV ? '01991a00-0000-7000-8000-000000000723' : '');
 const edge = createEdgeClient({
   baseUrl: '/api',
   getAccessToken: () => window.localStorage.getItem(tokenKey),
@@ -41,6 +42,10 @@ export function App() {
   const [pin, setPin] = useState('');
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loginPending, setLoginPending] = useState(false);
+  const [deviceIdentity,setDeviceIdentity]=useState<ClientDeviceIdentity|null>(null);
+  const [pairing,setPairing]=useState<ClientDevicePairing|null>(null);
+  const [pairingDisplayName,setPairingDisplayName]=useState('Waiter');
+  const [pairingPending,setPairingPending]=useState(false);
   const [tables, setTables] = useState<RestaurantTableResponse[]>([]);
   const [categories, setCategories] = useState<CategoryResponse[]>([]);
   const [products, setProducts] = useState<ProductResponse[]>([]);
@@ -67,6 +72,15 @@ export function App() {
     setOrder(null);
     setTables([]);
   }, []);
+  useEffect(()=>{void loadDeviceIdentity().then(async(v)=>{const identity=v??createDeviceIdentity('WAITER','Waiter');if(!v)await saveDeviceIdentity(identity);setDeviceIdentity(identity);setPairingDisplayName(identity.displayName);});},[]);
+  useEffect(()=>{void loadDevicePairing().then(value=>{if(value)setPairing(value);});},[]);
+  useEffect(()=>{if(!user||!deviceIdentity||deviceIdentity.authorizationStatus==='ACTIVE')return;
+    void markDeviceAuthorizationStatus(deviceIdentity.deviceId,'ACTIVE').then(active=>{if(active)setDeviceIdentity(active);});
+  },[user,deviceIdentity]);
+  useEffect(()=>{if(!pairing?.requestToken||!deviceIdentity)return;const poll=()=>void edge.getPairingStatus(pairing.pairingId,pairing.requestToken)
+    .then(async status=>{if(status.status==='ACTIVE'){const active=await markDeviceAuthorizationStatus(deviceIdentity.deviceId,'ACTIVE');if(active)setDeviceIdentity(active);await clearDevicePairing(pairing.pairingId);setPairing(null);setLoginError(null);return;}
+      const next={...pairing,currentStatus:status.status};await saveDevicePairing(next,pairing.pairingId);setPairing(next);}).catch(()=>undefined);
+    poll();const timer=window.setInterval(poll,2_000);return()=>window.clearInterval(timer);},[pairing?.pairingId,pairing?.requestToken]);
 
   const refreshTables = useCallback(async () => {
     try {
@@ -178,25 +192,38 @@ export function App() {
 
   async function login(event: FormEvent) {
     event.preventDefault();
-    if (!waiterDeviceId || pin.length < 4) return;
+    if (!deviceIdentity || pin.length < 4) return;
     setLoginPending(true);
     setLoginError(null);
     try {
-      const response = await edge.login({ pin, deviceId: waiterDeviceId });
+      const response = await edge.login({ pin, deviceId: deviceIdentity.deviceId,deviceCredential:deviceIdentity.credential });
       if (!response.user.permissions.includes(PermissionCodes.ORDER_VIEW)) {
         setLoginError('Este usuario no tiene acceso a comandería.');
         return;
       }
       window.localStorage.setItem(tokenKey, response.token);
+      const active=await markDeviceAuthorizationStatus(deviceIdentity.deviceId,'ACTIVE');
+      if(active)setDeviceIdentity(active);
       setUser(response.user);
       setPin('');
-    } catch {
+    } catch (problem) {
       setPin('');
-      setLoginError('PIN incorrecto o acceso temporalmente bloqueado.');
+      if(problem instanceof EdgeClientError&&problem.code==='DEVICE_REVOKED'){const revoked=await markDeviceAuthorizationStatus(deviceIdentity.deviceId,'REVOKED');if(revoked)setDeviceIdentity(revoked);}
+      else if(problem instanceof EdgeClientError&&['DEVICE_NOT_PAIRED','DEVICE_NOT_AUTHORIZED','DEVICE_CREDENTIAL_INVALID'].includes(problem.code)){const unknown=await markDeviceAuthorizationStatus(deviceIdentity.deviceId,'UNKNOWN');if(unknown)setDeviceIdentity(unknown);}
+      setLoginError(problem instanceof EdgeClientError&&problem.code==='DEVICE_REVOKED'?'Este dispositivo fue revocado. Empáralo nuevamente para crear una identidad nueva.':problem instanceof EdgeClientError&&['DEVICE_NOT_PAIRED','DEVICE_NOT_AUTHORIZED','DEVICE_CREDENTIAL_INVALID'].includes(problem.code)?'Este dispositivo no está autorizado. Empáralo primero.':'PIN incorrecto o acceso temporalmente bloqueado.');
     } finally {
       setLoginPending(false);
     }
   }
+  async function beginPairing(){if(!deviceIdentity||pairingPending)return;setPairingPending(true);setLoginError(null);try{
+    const displayName=pairingDisplayName.trim();if(!displayName){setLoginError('Asigna un nombre a este dispositivo.');return;}
+    const named=deviceIdentity.displayName===displayName?deviceIdentity:{...deviceIdentity,displayName};if(named!==deviceIdentity){await saveDeviceIdentity(named);setDeviceIdentity(named);}
+    const requested=await requestPairingWithIdentityRotation({identity:named,
+      requestPairing:(identity)=>edge.createPairing({deviceId:identity.deviceId,deviceType:'WAITER',displayName:identity.displayName,credential:identity.credential}),
+      onIdentityRotated:(identity)=>setDeviceIdentity(identity)});
+    const next=createClientDevicePairing(requested.pairing);await saveDevicePairing(next);setPairing(next);
+  }catch(problem){setLoginError(waiterError(problem));}finally{setPairingPending(false);}}
+  async function retryPairing(){if(pairing)await clearDevicePairing(pairing.pairingId);setPairing(null);await beginPairing();}
 
   async function logout() {
     try {
@@ -387,6 +414,7 @@ export function App() {
     () => visibleProducts(products, categoryId, productSearch),
     [products, categoryId, productSearch],
   );
+  const deviceOnboardingState=getDeviceOnboardingState(deviceIdentity,pairing);
 
   if (restoring) return <main className="login-shell">Restaurando sesión local…</main>;
   if (!user)
@@ -413,6 +441,9 @@ export function App() {
             </button>
           </div>
           <div className="stable-feedback">{loginError ?? '\u00a0'}</div>
+          <DeviceOnboardingCard productLabel="Waiter" state={deviceOnboardingState} displayName={pairingDisplayName}
+            pairingCode={pairing?.pairingCode} pairingId={pairing?.pairingId} expiresAt={pairing?.expiresAt}
+            pending={pairingPending} onDisplayName={setPairingDisplayName} onPair={()=>void beginPairing()} onRetry={()=>void retryPairing()}/>
         </form>
       </main>
     );

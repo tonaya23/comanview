@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { createEdgeClient, EdgeClientError } from '@comanview/client-sdk';
+import { createEdgeClient, EdgeClientError, clearDevicePairing, createDeviceIdentity,
+  createClientDevicePairing, createPairingAuthorizationData, getDeviceOnboardingState, loadDeviceIdentity, loadDevicePairing,
+  markDeviceAuthorizationStatus,
+  rotateDeviceIdentity, saveDeviceIdentity, saveDevicePairing, serializePairingAuthorizationData,
+  type ClientDeviceIdentity, type ClientDevicePairing } from '@comanview/client-sdk';
 import type {
   CashSessionResponse,
   CashReportSnapshotResponse,
@@ -12,6 +16,8 @@ import type {
   ProductResponse,
   TipSelection,
   AuthUserResponse,
+  Device,
+  PairingStatusResponse,
   PermissionCode,
   RestaurantTableResponse,
   EffectiveCapabilitiesResponse,
@@ -48,11 +54,14 @@ import {
   setManualCashTender,
   undoCashDenomination,
 } from './cashTenderInput.js';
+import { getPairingUxState, pairingBelongsToIdentity, requestPairingWithRevokedIdentityRotation,
+  shouldAcceptPairingPoll, shouldShowPairingOnLogin } from './devicePairingLifecycle.js';
+import { clearPairingApproval, deviceAdminErrorMessage, isGlobalDeviceAdminError, loadDeviceAdminState,
+  type DeviceAdminState } from './deviceAdmin.js';
+import { DeviceAdminPanel } from './DeviceAdminPanel.js';
+import { CashMovementTypeSelector } from './CashMovementTypeSelector.js';
 
 const sessionTokenStorageKey = 'comanview.pos.sessionToken';
-const posDeviceId =
-  import.meta.env['VITE_COMANVIEW_DEVICE_ID'] ??
-  (import.meta.env.DEV ? '01991a00-0000-7000-8000-000000000721' : '');
 const edge = createEdgeClient({
   baseUrl: import.meta.env['VITE_EDGE_API_URL'] ?? '/api',
   getAccessToken: () => window.localStorage.getItem(sessionTokenStorageKey),
@@ -66,6 +75,25 @@ export function App() {
   const [pin, setPin] = useState('');
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loginPending, setLoginPending] = useState(false);
+  const [deviceIdentity,setDeviceIdentity]=useState<ClientDeviceIdentity|null>(null);
+  const [pairing,setPairing]=useState<ClientDevicePairing|null>(null);
+  const [bootstrapAuthorization,setBootstrapAuthorization]=useState('');
+  const [bootstrapPin,setBootstrapPin]=useState('');
+  const [pairingCopyFeedback,setPairingCopyFeedback]=useState('');
+  const [pairingDisplayName,setPairingDisplayName]=useState('POS principal');
+  const [pairingError,setPairingError]=useState<string|null>(null);
+  const [pairingNotice,setPairingNotice]=useState<string|null>(null);
+  const [pairingPending,setPairingPending]=useState(false);
+  const [bootstrapPending,setBootstrapPending]=useState(false);
+  const [deviceAdminOpen,setDeviceAdminOpen]=useState(false);
+  const [deviceAdmin,setDeviceAdmin]=useState<DeviceAdminState|null>(null);
+  const [deviceAdminLoading,setDeviceAdminLoading]=useState(false);
+  const [deviceAdminError,setDeviceAdminError]=useState<string|null>(null);
+  const [deviceAdminNotice,setDeviceAdminNotice]=useState<string|null>(null);
+  const [deviceAdminBusy,setDeviceAdminBusy]=useState<`approve:${string}`|`cancel:${string}`|`revoke:${string}`|'refresh'|null>(null);
+  const [approvalPairingId,setApprovalPairingId]=useState(''); const [approvalCode,setApprovalCode]=useState('');
+  const pairingGenerationRef=useRef(0);
+  const deviceIdentityRef=useRef<ClientDeviceIdentity|null>(null);
   const [connection, setConnection] = useState<ConnectionState>('CHECKING');
   const [categories, setCategories] = useState<CategoryResponse[]>([]);
   const [products, setProducts] = useState<ProductResponse[]>([]);
@@ -138,6 +166,57 @@ export function App() {
     setOverridePin('');
     setOverrideError(null);
   }, []);
+
+  useEffect(()=>{let disposed=false;const generation=++pairingGenerationRef.current;
+    void Promise.all([loadDeviceIdentity(),loadDevicePairing()]).then(async([storedIdentity,storedPairing])=>{
+      const identity=storedIdentity??createDeviceIdentity('POS','POS principal');
+      if(!storedIdentity)await saveDeviceIdentity(identity);
+      if(disposed||generation!==pairingGenerationRef.current)return;
+      deviceIdentityRef.current=identity;setDeviceIdentity(identity);setPairingDisplayName(identity.displayName);
+      if(!storedPairing)return;
+      if(!pairingBelongsToIdentity(storedPairing,identity)){
+        await clearDevicePairing(storedPairing.pairingId);return;
+      }
+      if(storedPairing.currentStatus==='ACTIVE'){
+        const active=await markDeviceAuthorizationStatus(identity.deviceId,'ACTIVE');
+        if(active){deviceIdentityRef.current=active;setDeviceIdentity(active);}
+        await clearDevicePairing(storedPairing.pairingId);return;
+      }
+      setPairing(storedPairing);
+    });
+    return()=>{disposed=true;if(pairingGenerationRef.current===generation)pairingGenerationRef.current+=1;};
+  },[]);
+  useEffect(()=>{deviceIdentityRef.current=deviceIdentity;},[deviceIdentity]);
+  useEffect(()=>{if(!authUser||!deviceIdentity||deviceIdentity.authorizationStatus==='ACTIVE')return;
+    void markDeviceAuthorizationStatus(deviceIdentity.deviceId,'ACTIVE').then(active=>{if(active){deviceIdentityRef.current=active;setDeviceIdentity(active);}});
+  },[authUser,deviceIdentity]);
+  useEffect(()=>{
+    if(!pairing||!deviceIdentity||pairing.currentStatus!=='PENDING'||!pairingBelongsToIdentity(pairing,deviceIdentity))return;
+    const generation=++pairingGenerationRef.current;let disposed=false;let timer:number|undefined;
+    const poll=async()=>{try{
+      const status=await edge.getPairingStatus(pairing.pairingId,pairing.requestToken);
+      if(disposed||!shouldAcceptPairingPoll({responsePairingId:status.pairingId,
+        responseDeviceId:status.device.deviceId,expectedPairingId:pairing.pairingId,
+        expectedDeviceId:pairing.deviceId,currentDeviceId:deviceIdentityRef.current?.deviceId??null,
+        generation,currentGeneration:pairingGenerationRef.current}))return;
+      if(status.status==='ACTIVE'){
+        pairingGenerationRef.current+=1;setPairing(null);
+        const active=await markDeviceAuthorizationStatus(deviceIdentity.deviceId,'ACTIVE');
+        if(active){deviceIdentityRef.current=active;setDeviceIdentity(active);}
+        await clearDevicePairing(pairing.pairingId);
+        if(!disposed)setPairingNotice('Dispositivo autorizado. Ya puedes iniciar sesión.');
+        return;
+      }
+      const next={...pairing,currentStatus:status.status};
+      setPairing(next);
+      const saved=await saveDevicePairing(next,pairing.pairingId);
+      if(generation!==pairingGenerationRef.current){await clearDevicePairing(next.pairingId);return;}
+      if(!saved){pairingGenerationRef.current+=1;setPairing(null);return;}
+      if(status.status==='PENDING')timer=window.setTimeout(()=>void poll(),2_000);
+    }catch{if(!disposed&&generation===pairingGenerationRef.current)timer=window.setTimeout(()=>void poll(),2_000);}};
+    void poll();return()=>{disposed=true;if(timer!==undefined)window.clearTimeout(timer);
+      if(pairingGenerationRef.current===generation)pairingGenerationRef.current+=1;};
+  },[deviceIdentity?.deviceId,pairing?.pairingId,pairing?.requestToken,pairing?.deviceId,pairing?.currentStatus]);
 
   useEffect(() => {
     const restoreSession = async () => {
@@ -909,27 +988,60 @@ export function App() {
     setLoginPending(true);
     setLoginError(null);
     try {
-      if (!posDeviceId) {
+      if (!deviceIdentity) {
         setLoginError('Este POS no tiene un dispositivo configurado.');
         return;
       }
-      const authenticated = await edge.login({ pin, deviceId: posDeviceId });
+      const authenticated = await edge.login({ pin, deviceId: deviceIdentity.deviceId,deviceCredential:deviceIdentity.credential });
+      const active=await markDeviceAuthorizationStatus(deviceIdentity.deviceId,'ACTIVE');
+      if(active){deviceIdentityRef.current=active;setDeviceIdentity(active);}
       window.localStorage.setItem(sessionTokenStorageKey, authenticated.token);
       setAuthUser(authenticated.user);
       setPin('');
       setLoadingCatalog(true);
     } catch (problem) {
       setPin('');
-      setLoginError(
-        problem instanceof EdgeClientError && problem.code === 'EDGE_UNREACHABLE'
-          ? 'No fue posible conectar con el Edge local.'
-          : 'PIN incorrecto o acceso temporalmente bloqueado.',
-      );
+      if(problem instanceof EdgeClientError&&problem.code==='DEVICE_REVOKED'){
+        const revoked=await markDeviceAuthorizationStatus(deviceIdentity!.deviceId,'REVOKED');
+        if(revoked){deviceIdentityRef.current=revoked;setDeviceIdentity(revoked);}
+      } else if(problem instanceof EdgeClientError&&['DEVICE_NOT_PAIRED','DEVICE_NOT_AUTHORIZED','DEVICE_CREDENTIAL_INVALID'].includes(problem.code)){
+        const unknown=await markDeviceAuthorizationStatus(deviceIdentity!.deviceId,'UNKNOWN');
+        if(unknown){deviceIdentityRef.current=unknown;setDeviceIdentity(unknown);}
+      }
+      setLoginError(problem instanceof EdgeClientError && problem.code === 'EDGE_UNREACHABLE'?'No fue posible conectar con el Edge local.':
+        problem instanceof EdgeClientError && problem.code==='DEVICE_REVOKED'?'Este dispositivo fue revocado y ya no puede iniciar sesión. Empareja el dispositivo nuevamente para registrarlo como uno nuevo.':
+        problem instanceof EdgeClientError && ['DEVICE_NOT_PAIRED','DEVICE_NOT_AUTHORIZED','DEVICE_CREDENTIAL_INVALID'].includes(problem.code)?'Este dispositivo no está autorizado. Empareja el dispositivo antes de iniciar sesión.':'PIN incorrecto o acceso temporalmente bloqueado.');
     } finally {
       setLoginPending(false);
       setAuthChecking(false);
     }
   }
+  async function beginPairing(){if(!deviceIdentity||pairingPending)return;setPairingError(null);setPairingNotice(null);setPairingCopyFeedback('');setPairingPending(true);try{
+    const displayName=pairingDisplayName.trim();if(!displayName){setPairingError('Asigna un nombre a este dispositivo.');return;}
+    const namedIdentity=deviceIdentity.displayName===displayName?deviceIdentity:{...deviceIdentity,displayName};
+    if(namedIdentity!==deviceIdentity){await saveDeviceIdentity(namedIdentity);deviceIdentityRef.current=namedIdentity;setDeviceIdentity(namedIdentity);}
+    const requested=await requestPairingWithRevokedIdentityRotation({identity:namedIdentity,
+      requestPairing:(identity)=>edge.createPairing({deviceId:identity.deviceId,deviceType:'POS',displayName:identity.displayName,credential:identity.credential}),
+      rotateIdentity:rotateDeviceIdentity,onIdentityRotated:(replacement)=>{pairingGenerationRef.current+=1;
+        deviceIdentityRef.current=replacement;setDeviceIdentity(replacement);setPairing(null);}});
+    if(!requested)return;
+    const next=createClientDevicePairing(requested.pairing);const saved=await saveDevicePairing(next);
+    if(!saved||deviceIdentityRef.current?.deviceId!==requested.identity.deviceId)return;
+    pairingGenerationRef.current+=1;setPairing(next);setPairingNotice('Solicitud creada. Autorízala desde Administración y conserva esta pantalla abierta.');
+  }catch(problem){setPairingError(getErrorMessage(problem));}finally{setPairingPending(false);}}
+  async function copyPairingAuthorizationData(){
+    if(!pairing||!deviceIdentity||pairing.currentStatus!=='PENDING'||!pairingBelongsToIdentity(pairing,deviceIdentity))return;
+    const value=serializePairingAuthorizationData(createPairingAuthorizationData(pairing,deviceIdentity));
+    try{await navigator.clipboard.writeText(value);setPairingCopyFeedback('Datos de autorización copiados.');}
+    catch{setPairingCopyFeedback('No fue posible copiar. Selecciona el bloque y cópialo manualmente.');}
+  }
+  async function finishBootstrap(){if(!pairing||!deviceIdentity||bootstrapPending||pairing.currentStatus!=='PENDING'||!pairingBelongsToIdentity(pairing,deviceIdentity))return;setPairingError(null);setBootstrapPending(true);try{const authorization=JSON.parse(bootstrapAuthorization);await edge.completeBootstrap({pairingId:pairing.pairingId,pairingCode:pairing.pairingCode,requestToken:pairing.requestToken,authorization,ownerPin:bootstrapPin});const active=await markDeviceAuthorizationStatus(deviceIdentity.deviceId,'ACTIVE');if(active){deviceIdentityRef.current=active;setDeviceIdentity(active);}pairingGenerationRef.current+=1;setPairing(null);await clearDevicePairing(pairing.pairingId);setBootstrapAuthorization('');setBootstrapPin('');setPairingNotice('Dispositivo autorizado. Ya puedes iniciar sesión.');}catch(problem){setPairingError(problem instanceof SyntaxError?'La autorización pegada no tiene un formato válido.':getErrorMessage(problem));}finally{setBootstrapPending(false);}}
+  async function restartPairing(){if(!pairing)return;pairingGenerationRef.current+=1;const previousId=pairing.pairingId;setPairing(null);setBootstrapAuthorization('');setBootstrapPin('');await clearDevicePairing(previousId);await beginPairing();}
+  async function refreshDeviceAdmin(action:'refresh'|null=null){if(action)setDeviceAdminBusy(action);setDeviceAdminLoading(true);setDeviceAdminError(null);try{setDeviceAdmin(await loadDeviceAdminState(edge));}catch(problem){if(isGlobalDeviceAdminError(problem))setError(deviceAdminErrorMessage(problem));else setDeviceAdminError(deviceAdminErrorMessage(problem));}finally{setDeviceAdminLoading(false);if(action)setDeviceAdminBusy(null);}}
+  async function openDeviceAdmin(){setDeviceAdminOpen(true);setDeviceAdminNotice(null);await refreshDeviceAdmin();}
+  async function approveDevice(){if(deviceAdminBusy)return;const action=`approve:${approvalPairingId}` as const;setDeviceAdminBusy(action);setDeviceAdminError(null);setDeviceAdminNotice(null);try{await edge.approvePairing({commandId:crypto.randomUUID(),pairingId:approvalPairingId,pairingCode:approvalCode});clearPairingApproval(setApprovalPairingId,setApprovalCode);setDeviceAdminNotice('Dispositivo aprobado correctamente.');setDeviceAdmin(await loadDeviceAdminState(edge));}catch(problem){if(isGlobalDeviceAdminError(problem))setError(deviceAdminErrorMessage(problem));else setDeviceAdminError(deviceAdminErrorMessage(problem));}finally{setDeviceAdminBusy(null);}}
+  async function cancelDevicePairing(request:PairingStatusResponse){if(deviceAdminBusy)return;const action=`cancel:${request.pairingId}` as const;setDeviceAdminBusy(action);setDeviceAdminError(null);setDeviceAdminNotice(null);try{await edge.cancelPairing(request.pairingId,{commandId:crypto.randomUUID()});if(approvalPairingId===request.pairingId)clearPairingApproval(setApprovalPairingId,setApprovalCode);setDeviceAdminNotice('Solicitud cancelada. El historial permanece disponible en Edge.');setDeviceAdmin(await loadDeviceAdminState(edge));}catch(problem){if(isGlobalDeviceAdminError(problem))setError(deviceAdminErrorMessage(problem));else setDeviceAdminError(deviceAdminErrorMessage(problem));}finally{setDeviceAdminBusy(null);}}
+  async function revokeDevice(device:Device){if(deviceAdminBusy)return;const action=`revoke:${device.deviceId}` as const;setDeviceAdminBusy(action);setDeviceAdminError(null);setDeviceAdminNotice(null);try{await edge.revokeDevice(device.deviceId,{commandId:crypto.randomUUID(),reason:'Revocación administrativa local'});setDeviceAdminNotice(`${device.displayName} fue revocado. Sus sesiones activas quedaron cerradas.`);setDeviceAdmin(await loadDeviceAdminState(edge));}catch(problem){if(isGlobalDeviceAdminError(problem))setError(deviceAdminErrorMessage(problem));else setDeviceAdminError(deviceAdminErrorMessage(problem));}finally{setDeviceAdminBusy(null);}}
 
   async function logout() {
     try {
@@ -942,6 +1054,8 @@ export function App() {
       setLoginError(null);
     }
   }
+
+  const deviceOnboardingState=getDeviceOnboardingState(deviceIdentity,pairing);
 
   if (authChecking) {
     return (
@@ -1006,6 +1120,34 @@ export function App() {
           <div className="pin-feedback" role="status">
             {loginError ?? '\u00a0'}
           </div>
+          {!shouldShowPairingOnLogin(deviceOnboardingState)?<div className="device-authorized-hint" role="status">
+            <span aria-hidden="true">✓</span><div><strong>{deviceIdentity?.displayName}</strong><small>Dispositivo autorizado · inicia sesión con tu PIN.</small></div>
+          </div>:<section className="device-pairing-panel">
+            <div className="pairing-panel-heading"><div><strong>Este dispositivo</strong><small>Autorízalo una sola vez para operar contra el Edge local.</small></div>
+              {pairing?<span className={`admin-status admin-status--${pairing.currentStatus.toLowerCase()}`}>{pairing.currentStatus}</span>:null}</div>
+            {!pairing ? <><label>Nombre del dispositivo<input value={pairingDisplayName} maxLength={120} onChange={(event)=>setPairingDisplayName(event.target.value)} placeholder="Ej. Caja barra"/></label>
+              <button className="primary-button" type="button" onClick={()=>void beginPairing()} disabled={!deviceIdentity||pairingPending||!pairingDisplayName.trim()}>{pairingPending?'Creando solicitud…':deviceOnboardingState==='REVOKED'?'Emparejar dispositivo nuevamente':'Emparejar dispositivo'}</button></> : <>
+              {getPairingUxState(pairing.currentStatus)==='PENDING'&&<>
+                <div className="pairing-code"><span>Código temporal</span><strong>{pairing.pairingCode}</strong><small>Válido hasta {new Date(pairing.expiresAt).toLocaleTimeString()}</small></div>
+                <details><summary>Detalles técnicos</summary><code>{pairing.pairingId}</code><code>{deviceIdentity?.deviceId}</code></details>
+                <label>Datos para autorizar este dispositivo
+                  <textarea readOnly aria-label="Datos para autorizar este dispositivo"
+                    value={deviceIdentity?serializePairingAuthorizationData(createPairingAuthorizationData(pairing,deviceIdentity)):''}/>
+                </label>
+                <button type="button" onClick={()=>void copyPairingAuthorizationData()}>Copiar datos de autorización</button>
+                <small role="status">{pairingCopyFeedback||'El bloque no incluye credential, request token ni PIN.'}</small>
+                <label>Autorización de instalación<textarea aria-label="Autorización de instalación" placeholder="Pega aquí la autorización emitida por Super Admin" value={bootstrapAuthorization} onChange={e=>setBootstrapAuthorization(e.target.value)}/></label>
+                <label>PIN inicial OWNER<input aria-label="PIN inicial OWNER" type="password" inputMode="numeric" placeholder="4 a 12 dígitos" value={bootstrapPin} onChange={e=>setBootstrapPin(e.target.value.replace(/\D/g,'').slice(0,12))}/></label>
+                <button className="primary-button" type="button" onClick={()=>void finishBootstrap()} disabled={bootstrapPending||!bootstrapAuthorization||bootstrapPin.length<4}>{bootstrapPending?'Completando…':'Completar instalación inicial'}</button>
+              </>}
+              {getPairingUxState(pairing.currentStatus)==='AUTHORIZED'&&<p>Dispositivo autorizado. Ya puedes iniciar sesión.</p>}
+              {getPairingUxState(pairing.currentStatus)==='RETRY'&&<>
+                <p>La solicitud de emparejamiento está {pairing.currentStatus==='EXPIRED'?'expirada':'cancelada'} y ya no puede completar la instalación.</p>
+                <button type="button" onClick={()=>void restartPairing()}>Solicitar código nuevo</button>
+              </>}
+            </>}
+            <div className="pairing-feedback" aria-live="polite">{pairingError?<span className="inline-alert inline-alert--error">{pairingError}</span>:pairingNotice?<span className="inline-alert inline-alert--success">{pairingNotice}</span>:<span>&nbsp;</span>}</div>
+          </section>}
           <small>La identidad se valida directamente en el Edge local.</small>
         </form>
       </main>
@@ -1031,6 +1173,7 @@ export function App() {
             <button type="button" onClick={() => void logout()}>
               Cerrar sesión
             </button>
+            {hasPermission(PermissionCodes.DEVICE_VIEW)&&<button type="button" onClick={()=>void openDeviceAdmin()}>Administración</button>}
           </div>
           <button
             className={`cash-status ${cashSession ? 'cash-status--open' : ''}`}
@@ -1091,6 +1234,14 @@ export function App() {
           </div>
         </div>
       </header>
+      {deviceAdminOpen&&<DeviceAdminPanel state={deviceAdmin} loading={deviceAdminLoading} error={deviceAdminError} notice={deviceAdminNotice}
+        busyAction={deviceAdminBusy} currentDeviceId={deviceIdentity?.deviceId??null}
+        canPair={hasPermission(PermissionCodes.DEVICE_PAIR)} canRevoke={hasPermission(PermissionCodes.DEVICE_REVOKE)}
+        approvalPairingId={approvalPairingId} approvalCode={approvalCode} onApprovalPairingId={setApprovalPairingId}
+        onApprovalCode={setApprovalCode} onApprove={()=>void approveDevice()} onCancel={cancelDevicePairing}
+        onRevoke={revokeDevice} onRefresh={()=>void refreshDeviceAdmin('refresh')}
+        onClose={()=>{if(!deviceAdminBusy){setDeviceAdminOpen(false);setDeviceAdminError(null);setDeviceAdminNotice(null);}}}/>
+      }
       {connection === 'DISCONNECTED' && (
         <div className="critical-banner" role="alert">
           <strong>Edge no está disponible.</strong> Ninguna operación financiera se confirma sin la
@@ -1939,22 +2090,7 @@ export function App() {
                   <form className="cash-operation-section" onSubmit={(event) => void createCashMovement(event)}>
                     <div className="cash-operation-heading">
                       <h3>Movimiento de efectivo</h3>
-                      <div className="method-selector cash-movement-selector">
-                        <button
-                          type="button"
-                          className={cashMovementType === 'CASH_IN' ? 'selected' : ''}
-                          onClick={() => setCashMovementType('CASH_IN')}
-                        >
-                          Entrada
-                        </button>
-                        <button
-                          type="button"
-                          className={cashMovementType === 'CASH_OUT' ? 'selected' : ''}
-                          onClick={() => setCashMovementType('CASH_OUT')}
-                        >
-                          Salida
-                        </button>
-                      </div>
+                      <CashMovementTypeSelector value={cashMovementType} onChange={setCashMovementType}/>
                     </div>
                     <div className="cash-movement-fields">
                       <label>

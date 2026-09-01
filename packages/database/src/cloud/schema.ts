@@ -416,6 +416,21 @@ export const cloudPlanEntitlements = pgTable(
   },
   (table) => ({ pk: primaryKey({ columns: [table.planId, table.capability] }) }),
 );
+export const cloudPlanDeviceLimits = pgTable('cloud_plan_device_limits', {
+  planId: uuid('plan_id').notNull(), deviceType: text('device_type').notNull(), maxActiveDevices: integer('max_active_devices'),
+}, (table) => ({ pk: primaryKey({ columns: [table.planId, table.deviceType] }) }));
+
+export const cloudInstallationAuthorizations = pgTable('cloud_installation_authorizations', {
+  authorizationId: uuid('authorization_id').primaryKey(), tenantId: uuid('tenant_id').notNull(),
+  locationId: uuid('location_id').notNull(), edgeId: uuid('edge_id').notNull(), pairingId: uuid('pairing_id').notNull(),
+  pairingCodeHash: text('pairing_code_hash').notNull(), deviceId: uuid('device_id').notNull(),
+  deviceType: text('device_type').notNull(), displayName: text('display_name').notNull(),
+  initialOwnerId: uuid('initial_owner_id').notNull(), initialOwnerDisplayName: text('initial_owner_display_name').notNull(),
+  kid: text('kid').notNull(), envelope: jsonb('envelope').notNull(), status: text('status').notNull(),
+  commandId: uuid('command_id').notNull().unique(), issuedByAdminUserId: uuid('issued_by_admin_user_id').notNull(),
+  issuedAt: timestamp('issued_at', { withTimezone: true }).notNull(), expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  consumedAt: timestamp('consumed_at', { withTimezone: true }), consumedCommandId: uuid('consumed_command_id').unique(),
+});
 
 export const cloudLocationLicenseState = pgTable('cloud_location_license_state', {
   locationId: uuid('location_id').primaryKey(),

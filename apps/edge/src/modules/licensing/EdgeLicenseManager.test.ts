@@ -169,6 +169,16 @@ describe('EdgeLicenseManager durable offline policy', () => {
     });
   });
 
+  it('enforces signed per-type Device limits without treating legacy documents as unlimited',()=>{
+    applyLicense(1,'ACTIVE',now+10_000,now+20_000,['CORE_POS','TABLE_SERVICE','KDS']);
+    expect(()=>manager.assertDevicePairingAllowed('POS',0)).toThrowError(expect.objectContaining({code:'DEVICE_LIMITS_UNAVAILABLE'}));
+    applyLicense(2,'ACTIVE',now+10_000,now+20_000,['CORE_POS','TABLE_SERVICE','KDS'],undefined,{POS:1,WAITER:null,KDS:0});
+    expect(()=>manager.assertDevicePairingAllowed('POS',0)).not.toThrow();
+    expect(()=>manager.assertDevicePairingAllowed('POS',1)).toThrowError(expect.objectContaining({code:'DEVICE_LIMIT_REACHED'}));
+    expect(()=>manager.assertDevicePairingAllowed('WAITER',999)).not.toThrow();
+    expect(()=>manager.assertDevicePairingAllowed('KDS',0)).toThrowError(expect.objectContaining({code:'DEVICE_LIMIT_REACHED'}));
+  });
+
   it('applies a signed control response and transmits every durable ACK', async () => {
     const signed = signedControlState();
     const acknowledge = vi.fn().mockResolvedValue(undefined);
@@ -245,13 +255,13 @@ describe('EdgeLicenseManager durable offline policy', () => {
 
   function applyLicense(revision: number, state: LicenseDocumentPayload['declaredState'], expiresAt: number,
     graceUntil: number, capabilities: CapabilityCode[] = ['CORE_POS','KDS','PRINTING'],
-    protectedCapabilities?: CapabilityCode[]) {
+    protectedCapabilities?: CapabilityCode[],deviceLimits?:LicenseDocumentPayload['deviceLimits']) {
     const payload: LicenseDocumentPayload = {
       documentType: 'LICENSE', formatVersion: 1,
       documentId: `01991a00-2000-7000-8000-${String(100 + revision).padStart(12, '0')}`,
       revision, tenantId: ids.tenant, locationId: ids.location, edgeId: ids.edge,
       issuedAt: new Date(now - 1_000).toISOString(), declaredState: state,
-      planCode: 'TEST_ONLY', capabilities,
+      planCode: 'TEST_ONLY', capabilities,...(deviceLimits?{deviceLimits}:{}),
       expiresAt: new Date(expiresAt).toISOString(), graceUntil: new Date(graceUntil).toISOString(),
     };
     return repository.applyDocument({ payload, envelope: { protected: 'x', payload: 'y', signature: 'z' },
