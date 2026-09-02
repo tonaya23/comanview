@@ -1,7 +1,8 @@
 import { generateKeyPairSync } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { assertDocumentBinding, hashPairingCode, signControlDocument,
-  signInstallationAuthorization, verifyControlDocument, verifyInstallationAuthorization } from '../index.js';
+  signInstallationAuthorization,signRecoveryAuthorization,verifyControlDocument,
+  verifyInstallationAuthorization,verifyRecoveryAuthorization } from '../index.js';
 
 describe('signed control documents', () => {
   it('signs and verifies an edge-bound Ed25519 license using kid', () => {
@@ -64,6 +65,21 @@ describe('signed control documents', () => {
     })).toThrow('CONTROL_DOCUMENT_BINDING_MISMATCH');
   });
 });
+
+describe('recovery authorization',()=>{it('is Ed25519 signed, kid-bound and rejects tampering',()=>{
+  const pair=generateKeyPairSync('ed25519'),privateKey=pair.privateKey.export({format:'pem',type:'pkcs8'}).toString(),
+    publicKey=pair.publicKey.export({format:'pem',type:'spki'}).toString();
+  const payload={formatVersion:1 as const,typ:'comanview-recovery-authorization' as const,
+    authorizationId:'01991a00-0000-7000-8000-000000000201',tenantId:'01991a00-0000-7000-8000-000000000202',
+    locationId:'01991a00-0000-7000-8000-000000000203',sourceEdgeId:'01991a00-0000-7000-8000-000000000204',
+    targetEdgeId:'01991a00-0000-7000-8000-000000000205',backupId:'01991a00-0000-7000-8000-000000000206',
+    recoveryEpoch:2,purpose:'HARDWARE_REPLACEMENT_RESTORE' as const,issuedAt:'2026-09-01T00:00:00.000Z',
+    expiresAt:'2026-09-01T00:30:00.000Z',nonce:'01991a00-0000-7000-8000-000000000207'};
+  const envelope=signRecoveryAuthorization(payload,'recovery-current',privateKey);
+  expect(verifyRecoveryAuthorization(envelope,{'recovery-current':publicKey}).payload).toEqual(payload);
+  expect(()=>verifyRecoveryAuthorization({...envelope,signature:`${envelope.signature}x`},{'recovery-current':publicKey}))
+    .toThrow('RECOVERY_AUTHORIZATION_INVALID');
+});});
 
 describe('installation authorization', () => {
   it('signs a one-time authorization bound to the exact pairing and rejects tampering', () => {

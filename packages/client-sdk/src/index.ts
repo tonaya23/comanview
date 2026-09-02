@@ -68,6 +68,9 @@ import {
   PairingListResponseSchema, InstallationReadinessSchema,
   type Device, type DeviceType, type PairingCreated, type PairingStatusResponse,
   type PairingListResponse, type CompleteBootstrapRequest, type InstallationReadiness,
+  BackupProtectionStatusSchema,BackupRecordSchema,RecoveryKeyExportResponseSchema,RestoreScheduledResponseSchema,
+  EmergencyRestoreRequestSchema,
+  type BackupProtectionStatus,type BackupRecord,
 } from '@comanview/contracts';
 
 export * from './cloudAdmin.js';
@@ -185,6 +188,13 @@ export interface EdgeClient {
   cancelPairing(pairingId:string,request:{commandId:string}):Promise<{cancelled:true}>;
   revokeDevice(deviceId:string,request:{commandId:string;reason:string}):Promise<{revoked:true}>;
   getInstallationReadiness():Promise<InstallationReadiness>;
+  getBackupStatus():Promise<BackupProtectionStatus>;
+  createBackup(request:{commandId:string;destinationType:'LOCAL'|'OFF_DEVICE'}):Promise<BackupRecord>;
+  configureOffDeviceBackup(request:{commandId:string;directoryPath:string}):Promise<BackupProtectionStatus>;
+  exportRecoveryKey(request:{commandId:string;confirmation:'EXPORT_RECOVERY_KEY'}):Promise<{recoveryKey:string}>;
+  restoreBackup(request:{commandId:string;backupId:string;confirmation:'RESTORE_VERIFIED_BACKUP'}):Promise<{scheduled:true;recoveryState:'RECOVERY_IN_PROGRESS'}>;
+  emergencyRestore(request:{commandId:string;backupId:string;artifactPath:string;recoveryKey:string;
+    confirmation:'RESTORE_VERIFIED_BACKUP';recoveryAuthorization?:{protected:string;payload:string;signature:string}}):Promise<{scheduled:true;recoveryState:'RECOVERY_IN_PROGRESS'}>;
 }
 
 export function createEdgeClient(options: EdgeClientOptions = {}): EdgeClient {
@@ -286,6 +296,12 @@ export function createEdgeClient(options: EdgeClientOptions = {}): EdgeClient {
     cancelPairing:(pairingId,body)=>request(`/device-pairing/${pairingId}/cancel`,{parse:(v:unknown)=>v as {cancelled:true}},{method:'POST',body:JSON.stringify(body)}),
     revokeDevice:(deviceId,body)=>request(`/devices/${deviceId}/revoke`,{parse:(v:unknown)=>v as {revoked:true}},{method:'POST',body:JSON.stringify(body)}),
     getInstallationReadiness:()=>request('/installation/readiness',InstallationReadinessSchema),
+    getBackupStatus:()=>request('/backups/status',BackupProtectionStatusSchema),
+    createBackup:(body)=>request('/backups',BackupRecordSchema,{method:'POST',body:JSON.stringify(body)}),
+    configureOffDeviceBackup:(body)=>request('/backups/off-device',BackupProtectionStatusSchema,{method:'POST',body:JSON.stringify(body)}),
+    exportRecoveryKey:(body)=>request('/recovery-key/export',RecoveryKeyExportResponseSchema,{method:'POST',body:JSON.stringify(body)}),
+    restoreBackup:(body)=>request('/recovery/restore',RestoreScheduledResponseSchema,{method:'POST',body:JSON.stringify(body)}),
+    emergencyRestore:(body)=>request('/recovery/emergency-restore',RestoreScheduledResponseSchema,{method:'POST',body:JSON.stringify(EmergencyRestoreRequestSchema.parse(body))},false),
     getAuditEntries: (query = {}) => {
       const parameters = Object.entries(query)
         .filter(([, value]) => value !== undefined)

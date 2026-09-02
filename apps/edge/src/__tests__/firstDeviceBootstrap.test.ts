@@ -121,7 +121,7 @@ describe('first Device and OWNER bootstrap',()=>{
     expect(readiness.statusCode).toBe(200);
     expect(readiness.json()).toMatchObject({productionReadiness:'NOT_READY',components:expect.arrayContaining([
       expect.objectContaining({key:'DEVICES',state:'READY'}),expect.objectContaining({key:'STATIONS',state:'NOT_READY'}),
-      expect.objectContaining({key:'BACKUP',state:'PENDING_PHASE',code:'PENDING_1V'}),
+      expect.objectContaining({key:'BACKUP',state:'NOT_READY',code:'BACKUP_PROTECTION_INCOMPLETE'}),
     ])});
     const secondDeviceId=EntityId.generate().toString(),secondCredential=randomBytes(32).toString('base64url');
     const second=(await app.inject({method:'POST',url:'/device-pairing/requests',payload:{deviceId:secondDeviceId,

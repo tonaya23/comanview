@@ -6,4 +6,5 @@ export * from './repositories/CloudAdminAuthRepository.js';
 export * from './repositories/CloudReadRepository.js';
 export * from './repositories/CloudControlPlaneRepository.js';
 export * from './repositories/CloudLicensingRepository.js';
+export * from './repositories/CloudRecoveryRepository.js';
 export * from './migrate.js';

@@ -29,6 +29,7 @@ export const PermissionSchema = z.enum([
   'DEVICE_PAIR',
   'DEVICE_REVOKE',
   'INSTALLATION_READINESS_VIEW',
+  'BACKUP_VIEW','BACKUP_CREATE','RECOVERY_VIEW','RECOVERY_EXECUTE',
 ]);
 export const PermissionCodes = PermissionSchema.enum;
 

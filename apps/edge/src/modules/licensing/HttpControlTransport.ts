@@ -41,6 +41,9 @@ export class HttpControlTransport {
   async acknowledgeInstallation(body:unknown):Promise<void>{
     return this.postAck('/edge/v1/installation-authorizations/acks',body);
   }
+  async acknowledgeRecovery(body:unknown):Promise<void>{
+    return this.postAck('/edge/v1/recovery-authorizations/acks',body);
+  }
   private async postAck(path:string,body:unknown):Promise<void>{
     let response: Response;
     try {

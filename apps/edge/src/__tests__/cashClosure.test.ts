@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { existsSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -35,9 +35,10 @@ describe('Cash operations, blind count and X/Z closure', () => {
   let cashier: EdgeClient;
   let owner: EdgeClient;
   let waiter: EdgeClient;
+  const failedPostZBackup = vi.fn(() => { throw new Error('Controlled post-Z backup failure.'); });
 
   async function startEdge() {
-    app = await buildApp(dbPath, { printerAdapter: new FailingPrinter() });
+    app = await buildApp(dbPath, { printerAdapter: new FailingPrinter(), onPostZBackup: failedPostZBackup });
     const baseUrl = await app.listen({ host: '127.0.0.1', port: 0 });
     cashier = createEdgeClient({ baseUrl, getAccessToken: () => cashierToken });
     owner = createEdgeClient({ baseUrl, getAccessToken: () => ownerToken });
@@ -184,6 +185,7 @@ describe('Cash operations, blind count and X/Z closure', () => {
     );
     expect(zPrint?.status).toBe('FAILED');
     expect(closed.session.status).toBe('CLOSED');
+    expect(failedPostZBackup).toHaveBeenCalledTimes(1);
 
     const audits = (await owner.getAuditEntries({ actorUserId: CASHIER_ID, limit: 20 })).entries;
     expect(audits.filter(({ action }) => action === 'CASH_MOVEMENT_CREATED')).toHaveLength(2);

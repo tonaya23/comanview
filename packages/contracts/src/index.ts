@@ -21,3 +21,4 @@ export * from './cloudAdmin.js';
 export * from './provisioning.js';
 export * from './licensing.js';
 export * from './devices.js';
+export * from './backup.js';

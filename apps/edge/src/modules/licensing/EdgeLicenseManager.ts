@@ -20,6 +20,9 @@ import {
 } from '@comanview/licensing';
 import { AppError } from '../../app/errorHandler.js';
 import { ControlTransportError, type HttpControlTransport } from './HttpControlTransport.js';
+import { applySignedLicenseTransition, updateRecoverySecurityFloor, type RecoverySecurityStore } from '../backup/RecoverySecurityStore.js';
+import type Database from 'better-sqlite3';
+import { activateLicense, stageLicense } from './LicensingSecurity.js';
 
 export type LicensingAction =
   | 'ORDER_CREATE' | 'ORDER_ADD_ITEM' | 'ORDER_SEND' | 'ORDER_CLOSE' | 'ORDER_CANCEL'
@@ -44,6 +47,8 @@ export class EdgeLicenseManager {
     private readonly config: EdgeLicensingConfig,
     private readonly binding: { tenantId: string; locationId: string; edgeId: string },
     private readonly log: ControlLog = SILENT_LOG,
+    private readonly recoverySecurityStore?: RecoverySecurityStore,
+    private readonly sqlite?: Database.Database,
   ) {
     if (config.enforcementEnabled) this.detectRestartClockAnomaly();
   }
@@ -73,6 +78,14 @@ export class EdgeLicenseManager {
         stream = verified.payload.documentType;
         assertDocumentBinding(verified.payload, this.binding);
         if (verified.documentHash !== document.documentHash) throw new Error('CONTROL_DOCUMENT_HASH_MISMATCH');
+        if(verified.payload.documentType==='LICENSE'&&this.recoverySecurityStore){
+          const sqlite=this.sqlite;if(!sqlite)throw new Error('LICENSE_SECURITY_DATABASE_REQUIRED');
+          await applySignedLicenseTransition(this.recoverySecurityStore,{envelope:document.envelope,publicKeyring:this.config.publicKeyring,
+            binding:this.binding,now:this.effectiveNow(),
+            prepare:(payload,hash)=>stageLicense(sqlite,payload,document.envelope,hash,cloudTime),
+            activate:(payload,hash)=>activateLicense(sqlite,payload,document.envelope,hash,cloudTime)});
+          continue;
+        }
         const incomingLicense = verified.payload.documentType === 'LICENSE' ? verified.payload : null;
         const oldLicense = incomingLicense
           ? this.repository.currentDocument<LicenseDocumentPayload>('LICENSE')?.payload : null;
@@ -108,6 +121,17 @@ export class EdgeLicenseManager {
         lastWallTime: new Date(), lastCheckpointAt: new Date(),
         clockStatus: 'TRUSTED', cloudReachable: true, lastError: null,
       });
+      if(this.recoverySecurityStore){
+        const flags=this.repository.currentDocument('FEATURE_FLAGS');
+        const configuration=this.repository.currentDocument('CONFIGURATION');
+        // LICENSE and its sticky state belong exclusively to the verified writer.
+        // A delayed pull must not re-merge its old runtime over a newer decision.
+        await this.recoverySecurityStore.mutate(floor=>updateRecoverySecurityFloor(floor,{
+          maximumSignedRevisions:{LICENSE:floor.maximumSignedRevisions.LICENSE,
+            FEATURE_FLAGS:Math.max(floor.maximumSignedRevisions.FEATURE_FLAGS,flags?.revision??0),
+            CONFIGURATION:Math.max(floor.maximumSignedRevisions.CONFIGURATION,configuration?.revision??0)},
+        }));
+      }
       stage = 'ACK_FLUSH';
       await this.flushAcks();
     } catch (error) {
@@ -122,6 +146,11 @@ export class EdgeLicenseManager {
   async flushAcks(now = new Date()): Promise<void> {
     if (!this.transport) return;
     for (const ack of this.repository.pendingAcks(now)) {
+      if(ack.documentType==='LICENSE'&&this.recoverySecurityStore){
+        const floor=await this.recoverySecurityStore.load();
+        if(ack.revision!==floor.maximumSignedRevisions.LICENSE||
+          (floor.licenseDecision&&ack.documentHash!==floor.licenseDecision.documentHash))continue;
+      }
       try {
         await this.transport.acknowledge({ commandId: ack.commandId, stream: ack.documentType,
           revision: ack.revision, documentHash: ack.documentHash, appliedAt: ack.appliedAt.toISOString() });
@@ -140,6 +169,12 @@ export class EdgeLicenseManager {
       await this.transport.acknowledgeInstallation({commandId:installation.commandId,authorizationId:installation.authorizationId,consumedAt:installation.consumedAt.toISOString()});
       this.repository.markInstallationAuthorizationAcked(now);
     }catch(error){const failure=safeControlFailure(error,'ACK_REQUEST');const delay=Math.min(1_000*2**Math.min(installation.attemptCount,12),this.config.maxBackoffMs);this.repository.markInstallationAuthorizationAckFailed(failure.code,new Date(now.getTime()+delay));this.log.warn({component:'edge-control',operation:'installation-ack',...failure,attempt:installation.attemptCount+1},'Cloud installation authorization ACK failed');}
+    if(this.recoverySecurityStore){const floor=await this.recoverySecurityStore.load();const ack=floor.pendingRecoveryAuthorizationAck;
+      if(ack)try{await this.transport.acknowledgeRecovery(ack);await this.recoverySecurityStore.mutate(current=>
+        current.pendingRecoveryAuthorizationAck?.commandId===ack.commandId&&
+        current.pendingRecoveryAuthorizationAck.authorizationId===ack.authorizationId?
+          updateRecoverySecurityFloor(current,{pendingRecoveryAuthorizationAck:null}):current);}
+      catch(error){const failure=safeControlFailure(error,'ACK_REQUEST');this.log.warn({component:'edge-control',operation:'recovery-ack',...failure},'Cloud recovery authorization ACK failed');}}
   }
 
   checkpoint(): void {
@@ -165,7 +200,11 @@ export class EdgeLicenseManager {
       protectedOrderCount: 0, clockStatus: 'TRUSTED',
     };
     const runtime = this.repository.getRuntime();
-    const license = this.repository.currentDocument<LicenseDocumentPayload>('LICENSE');
+    const policy=this.recoverySecurityStore?.licensingSnapshot?.();
+    const candidate = this.repository.currentDocument<LicenseDocumentPayload>('LICENSE');
+    const license = !this.recoverySecurityStore?candidate:policy&&policy.recoveryState==='NORMAL'&&candidate&&
+      candidate.revision===policy.maximumSignedRevisions.LICENSE&&
+      (!policy.licenseDecision||candidate.documentHash===policy.licenseDecision.documentHash)?candidate:null;
     const flags = this.repository.currentDocument('FEATURE_FLAGS');
     const configuration = this.repository.currentDocument('CONFIGURATION');
     const openSession = this.repository.getOpenCashSession();
@@ -173,6 +212,9 @@ export class EdgeLicenseManager {
     if (!license) {
       const proven = Boolean(openSession?.openedLicenseRevision && openSession.openedLicenseMode &&
         NORMAL_MODES.includes(openSession.openedLicenseMode as EffectiveLicenseMode));
+      if(!proven&&protectedOrders.length===0&&policy?.stickyDeclaredState)return this.response(
+        policy.stickyDeclaredState==='TERMINATED'?'TERMINATED_BLOCKED':'SUSPENDED_BLOCKED',null,[],
+        'LICENSE_SECURITY_FLOOR',0,flags?.revision??null,configuration?.revision??null);
       return this.response(proven ? 'GUARANTEED_SHIFT_RECOVERY' : 'NO_VALID_LICENSE', null,
         proven ? runtime.protectedCapabilities : [], proven ? 'DURABLE_SHIFT_AUTHORIZATION_PROOF' : 'NO_VALID_LICENSE',
         protectedOrders.length, flags?.revision ?? null, configuration?.revision ?? null);
@@ -181,7 +223,9 @@ export class EdgeLicenseManager {
     const payload = license.payload;
     const capabilities = filterFeatureFlags(payload.capabilities,
       this.repository.currentDocument('FEATURE_FLAGS')?.payload);
-    const sticky = runtime.stickyDeclaredState ?? payload.declaredState;
+    const sticky = policy?.stickyDeclaredState==='TERMINATED'?'TERMINATED':
+      policy?.stickyDeclaredState==='SUSPENDED'&&runtime.stickyDeclaredState!=='TERMINATED'?'SUSPENDED':
+      runtime.stickyDeclaredState ?? payload.declaredState;
     if (!openSession && runtime.restrictionStartedAt && protectedOrders.length > 0) {
       return this.response('PROTECTED_OPERATIONS', payload,
         union(capabilities,runtime.protectedCapabilities), 'ENTITLEMENT_REDUCTION_PROTECTED_ORDERS',
@@ -316,7 +360,8 @@ export class EdgeLicenseManager {
     capabilities: CapabilityCode[], reasonCode: string, protectedOrderCount: number,
     featureFlagsRevision: number|null, configurationRevision: number|null): EffectiveCapabilitiesResponse {
     const runtime = this.repository.getRuntime();
-    return { mode, declaredState: payload?.declaredState ?? null, capabilities,
+    const restriction=this.recoverySecurityStore?.licensingSnapshot?.()?.stickyDeclaredState;
+    return { mode, declaredState: restriction??payload?.declaredState??null, capabilities,
       ...(payload?.deviceLimits ? { deviceLimits:payload.deviceLimits } : {}),
       licenseRevision: payload?.revision ?? null, featureFlagsRevision, configurationRevision,
       cloudReachable: runtime.cloudReachable, expiresAt: payload?.expiresAt ?? null,

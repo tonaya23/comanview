@@ -18,6 +18,7 @@ const envelope = {
   edgeId: '01991a00-0000-7000-8000-000000000903',
   occurredAt: '2026-08-27T12:00:00.000Z',
   localSequence: 1,
+  recoveryEpoch: 0,
   aggregateVersion: 1,
   payload: { orderId: '01991a00-0000-7000-8000-000000000902' },
 };
@@ -25,6 +26,9 @@ const envelope = {
 describe('Edge to Cloud sync contract', () => {
   it('validates a versioned event envelope and batch', () => {
     expect(SyncEventEnvelopeSchema.parse(envelope)).toEqual(envelope);
+    const { recoveryEpoch: ignored, ...legacyEnvelope } = envelope;
+    void ignored;
+    expect(SyncEventEnvelopeSchema.parse(legacyEnvelope).recoveryEpoch).toBe(0);
     expect(
       SyncBatchRequestSchema.parse({
         protocolVersion: SYNC_PROTOCOL_VERSION,

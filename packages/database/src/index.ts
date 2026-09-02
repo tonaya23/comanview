@@ -6,6 +6,7 @@
  */
 
 export * from './edge/db.js';
+export * from './edge/recoveryUpgradeSchema.js';
 export * from './edge/repositories/CatalogRepository.js';
 export * from './edge/repositories/OrderRepository.js';
 export * from './edge/repositories/CashRepository.js';
@@ -18,4 +19,5 @@ export * from './edge/repositories/TableRepository.js';
 export * from './edge/repositories/SyncOutboxRepository.js';
 export * from './edge/repositories/EdgeControlRepository.js';
 export * from './edge/repositories/DeviceRepository.js';
+export * from './edge/repositories/BackupRepository.js';
 export * from './cloud/index.js';

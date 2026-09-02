@@ -35,6 +35,7 @@ export class CashService {
     private readonly printRepo: PrintJobRepository,
     private readonly context: EdgeOperationalContext,
     private readonly licensing?: EdgeLicenseManager,
+    private readonly onPostZ?: () => void,
   ) {}
 
   ensureDefaultRegister(): void {
@@ -316,6 +317,7 @@ export class CashService {
     } catch (error) {
       this.rethrowAuditFailure(error);
     }
+    try { this.onPostZ?.(); } catch { /* asynchronous protection must not roll back Z */ }
     return { session: this.mapSession(session), report };
   }
 

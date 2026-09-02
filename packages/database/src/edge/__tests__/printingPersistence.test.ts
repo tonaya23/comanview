@@ -39,6 +39,7 @@ function openDb() {
     '0011_edge_provisioning.sql',
     '0012_signed_licensing_configuration.sql',
     '0013_device_pairing_readiness.sql',
+    '0014_backup_recovery.sql',
   ]) {
     sqlite.exec(readFileSync(join(process.cwd(), '../../migrations/edge', migration), 'utf8'));
   }

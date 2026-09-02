@@ -1,24 +1,26 @@
 import { EdgeClientError, type EdgeClient } from '@comanview/client-sdk';
-import type { Device, InstallationReadiness, PairingStatus, PairingStatusResponse } from '@comanview/contracts';
+import type { Device, InstallationReadiness, PairingStatus, PairingStatusResponse,BackupProtectionStatus } from '@comanview/contracts';
 
 type DeviceAdminClient = Pick<
   EdgeClient,
-  'getDevices' | 'getPendingPairings' | 'getInstallationReadiness'
+  'getDevices' | 'getPendingPairings' | 'getInstallationReadiness' | 'getBackupStatus'
 >;
 
 export async function loadDeviceAdminState(client: DeviceAdminClient) {
-  const [devices, pairings, readiness] = await Promise.all([
+  const [devices, pairings, readiness,backup] = await Promise.all([
     client.getDevices(),
     client.getPendingPairings(),
     client.getInstallationReadiness(),
+    client.getBackupStatus(),
   ]);
-  return { devices: devices.data, pairings: pairings.data, readiness };
+  return { devices: devices.data, pairings: pairings.data, readiness,backup };
 }
 
 export interface DeviceAdminState {
   devices: Device[];
   pairings: PairingStatusResponse[];
   readiness: InstallationReadiness;
+  backup: BackupProtectionStatus;
 }
 
 export type DeviceInstallationPresentation = {
@@ -88,6 +90,7 @@ export function deviceAdminErrorMessage(problem: unknown): string {
     PAIRING_ALREADY_CONSUMED: 'La solicitud ya fue aprobada, cancelada o dejó de estar disponible.',
     DEVICE_NOT_AUTHORIZED: 'El dispositivo ya no está disponible para esta operación.',
     PERMISSION_DENIED: 'Tu usuario no tiene permiso para realizar esta acción.',
+    BACKUP_DESTINATION_UNAVAILABLE: 'El destino externo no está disponible. Verifica la unidad o la ruta e inténtalo nuevamente.',
   };
   return messages[problem.code] ?? problem.message;
 }

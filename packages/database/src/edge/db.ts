@@ -6,6 +6,7 @@ export type EdgeDatabase = BetterSQLite3Database<typeof schema>;
 
 export interface EdgeDatabaseHandle {
   db: EdgeDatabase;
+  sqlite: Database.Database;
   close(): void;
 }
 
@@ -20,6 +21,7 @@ export function createEdgeDatabase(dbPath: string): EdgeDatabaseHandle {
 
   return {
     db,
+    sqlite,
     close: () => sqlite.close(),
   };
 }

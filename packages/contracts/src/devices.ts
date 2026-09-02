@@ -76,7 +76,7 @@ export const CompleteBootstrapRequestSchema = z.object({
 export const InstallationComponentStateSchema = z.enum(['READY','DEGRADED','NOT_READY','PENDING_PHASE','NOT_APPLICABLE']);
 export const InstallationReadinessSchema = z.object({
   technicalHealth: z.enum(['READY','NOT_READY']), operationalReadiness: z.enum(['READY','NOT_READY']),
-  productionReadiness: z.literal('NOT_READY'), licensingStatus: z.string(),
+  productionReadiness: z.enum(['READY','NOT_READY']), licensingStatus: z.string(),
   components: z.array(z.object({ key: z.string(), state: InstallationComponentStateSchema, code: z.string(), detail: z.string() })),
 });
 

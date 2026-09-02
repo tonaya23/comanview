@@ -75,6 +75,7 @@ export const cloudSyncInbox = pgTable(
     edgeId: uuid('edge_id').notNull(),
     batchId: uuid('batch_id').notNull(),
     localSequence: integer('local_sequence').notNull(),
+    recoveryEpoch: integer('recovery_epoch').notNull().default(0),
     payload: jsonb('payload').notNull(),
     occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull(),
     receivedAt: timestamp('received_at', { withTimezone: true }).notNull().defaultNow(),
@@ -92,17 +93,20 @@ export const cloudSyncInbox = pgTable(
   (table) => ({
     edgeOrder: index('idx_cloud_sync_inbox_edge_order').on(
       table.edgeId,
+      table.recoveryEpoch,
       table.occurredAt,
       table.localSequence,
     ),
     edgeSequence: uniqueIndex('unq_cloud_sync_inbox_edge_sequence').on(
       table.edgeId,
+      table.recoveryEpoch,
       table.localSequence,
     ),
     processing: index('idx_cloud_sync_inbox_processing').on(
       table.processingLeaseExpiresAt,
       table.processingNextAttemptAt,
       table.edgeId,
+      table.recoveryEpoch,
       table.localSequence,
     ),
   }),
@@ -116,6 +120,7 @@ export const cloudProjectionEventReceipts = pgTable(
     eventId: uuid('event_id').notNull(),
     edgeId: uuid('edge_id').notNull(),
     localSequence: integer('local_sequence').notNull(),
+    recoveryEpoch: integer('recovery_epoch').notNull().default(0),
     outcome: text('outcome').notNull(),
     processedAt: timestamp('processed_at', { withTimezone: true }).notNull(),
   },
@@ -131,6 +136,7 @@ export const cloudProjectionCheckpoints = pgTable(
     projectionVersion: integer('projection_version').notNull(),
     edgeId: uuid('edge_id').notNull(),
     lastLocalSequence: integer('last_local_sequence').notNull(),
+    lastRecoveryEpoch: integer('last_recovery_epoch').notNull().default(0),
     lastEventId: uuid('last_event_id').notNull(),
     degraded: boolean('degraded').notNull().default(false),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull(),
@@ -163,6 +169,7 @@ export const cloudOrderOperationalSummaries = pgTable(
     cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
     lastEventId: uuid('last_event_id').notNull(),
     lastLocalSequence: integer('last_local_sequence').notNull(),
+    lastRecoveryEpoch: integer('last_recovery_epoch').notNull().default(0),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull(),
   },
   (table) => ({ pk: primaryKey({ columns: [table.projectionVersion, table.orderId] }) }),
@@ -187,6 +194,7 @@ export const cloudPaymentSummaries = pgTable(
     voidedAt: timestamp('voided_at', { withTimezone: true }),
     lastEventId: uuid('last_event_id').notNull(),
     lastLocalSequence: integer('last_local_sequence').notNull(),
+    lastRecoveryEpoch: integer('last_recovery_epoch').notNull().default(0),
   },
   (table) => ({ pk: primaryKey({ columns: [table.projectionVersion, table.paymentId] }) }),
 );
@@ -207,6 +215,7 @@ export const cloudClosedSaleSummaries = pgTable(
     closedAt: timestamp('closed_at', { withTimezone: true }).notNull(),
     sourceEventId: uuid('source_event_id').notNull(),
     lastLocalSequence: integer('last_local_sequence').notNull(),
+    lastRecoveryEpoch: integer('last_recovery_epoch').notNull().default(0),
   },
   (table) => ({ pk: primaryKey({ columns: [table.projectionVersion, table.orderId] }) }),
 );
@@ -234,6 +243,7 @@ export const cloudCashSessionSummaries = pgTable(
     closedBy: uuid('closed_by'),
     lastEventId: uuid('last_event_id').notNull(),
     lastLocalSequence: integer('last_local_sequence').notNull(),
+    lastRecoveryEpoch: integer('last_recovery_epoch').notNull().default(0),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull(),
   },
   (table) => ({ pk: primaryKey({ columns: [table.projectionVersion, table.cashSessionId] }) }),
@@ -256,6 +266,7 @@ export const cloudCashMovements = pgTable(
     occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull(),
     sourceEventId: uuid('source_event_id').notNull(),
     localSequence: integer('local_sequence').notNull(),
+    recoveryEpoch: integer('recovery_epoch').notNull().default(0),
   },
   (table) => ({ pk: primaryKey({ columns: [table.projectionVersion, table.cashMovementId] }) }),
 );
@@ -504,3 +515,23 @@ export const cloudEdgeControlStateAcks = pgTable(
   },
   (table) => ({ pk: primaryKey({ columns: [table.edgeId, table.documentType, table.revision] }) }),
 );
+
+export const cloudRecoveryAuthorizations = pgTable('cloud_recovery_authorizations', {
+  authorizationId: uuid('authorization_id').primaryKey(),
+  tenantId: uuid('tenant_id').notNull(),
+  locationId: uuid('location_id').notNull(),
+  sourceEdgeId: uuid('source_edge_id').notNull(),
+  targetEdgeId: uuid('target_edge_id').notNull(),
+  backupId: uuid('backup_id').notNull(),
+  recoveryEpoch: integer('recovery_epoch').notNull(),
+  purpose: text('purpose').notNull(),
+  kid: text('kid').notNull(),
+  envelope: jsonb('envelope').notNull(),
+  status: text('status').notNull(),
+  commandId: uuid('command_id').notNull(),
+  issuedByAdminUserId: uuid('issued_by_admin_user_id').notNull(),
+  issuedAt: timestamp('issued_at', { withTimezone: true }).notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  consumedAt: timestamp('consumed_at', { withTimezone: true }),
+  consumedCommandId: uuid('consumed_command_id'),
+});

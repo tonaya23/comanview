@@ -189,6 +189,7 @@ function ControlPlane({ onError }: { onError(value: string | null): void }) {
   const [planCapabilities, setPlanCapabilities] = useState<CapabilityCode[]>(['CORE_POS']);
   const [planDeviceLimits,setPlanDeviceLimits]=useState({POS:'',WAITER:'',KDS:''});
   const [installationAuthorization,setInstallationAuthorization]=useState<string|null>(null);
+  const [recoveryAuthorization,setRecoveryAuthorization]=useState<string|null>(null);
   const [installationAuthorizationStatuses,setInstallationAuthorizationStatuses]=useState<Record<string,InstallationAuthorizationStatus|null>>({});
   const [installationAuthorizationTarget,setInstallationAuthorizationTarget]=useState<CanonicalCloudLocation|null>(null);
   const [installationAuthorizationError,setInstallationAuthorizationError]=useState<string|null>(null);
@@ -450,6 +451,7 @@ function ControlPlane({ onError }: { onError(value: string | null): void }) {
           <h2>Locations de {tenant.displayName}</h2>
           {locations.map((location) => {
             const active = edges[location.locationId]?.find((edge) => edge.status === 'ACTIVE');
+            const replaced = edges[location.locationId]?.find((edge) => edge.status === 'REPLACED');
             const pending = pendingReplacements[location.locationId];
             const license = licenses[location.locationId];
             const assignedPlan = license ? plans.find((plan) => plan.planId === license.planId) ?? null : null;
@@ -614,6 +616,14 @@ function ControlPlane({ onError }: { onError(value: string | null): void }) {
                   )}
                 </div>
                 {active && license && <button className="secondary" onClick={() => {setInstallationAuthorizationTarget(location);setInstallationAuthorizationError(null);}}>Autorizar instalación inicial</button>}
+                {active&&replaced&&<button className="secondary" onClick={()=>{
+                  const backupId=window.prompt('Backup ID verificado que se restaurará en el Edge nuevo');if(!backupId)return;
+                  const reason=window.prompt('Motivo de recuperación de hardware');if(!reason)return;
+                  void client.issueRecoveryAuthorization(location.locationId,{commandId:crypto.randomUUID(),
+                    sourceEdgeId:replaced.edgeId,targetEdgeId:active.edgeId,backupId,reason})
+                    .then(result=>setRecoveryAuthorization(JSON.stringify(result.authorization)))
+                    .catch(error=>onError(message(error)));
+                }}>Autorizar recuperación</button>}
                 {installationAuthorizationStatuses[location.locationId]&&<span className="authorization-summary">
                   <span>Autorización inicial</span><Status value={installationAuthorizationStatuses[location.locationId]!.status}/>
                   <small>Expira {date(installationAuthorizationStatuses[location.locationId]!.expiresAt)}</small>
@@ -719,6 +729,12 @@ function ControlPlane({ onError }: { onError(value: string | null): void }) {
           <button onClick={() => setInstallationAuthorization(null)}>Ya la guardé</button>
         </div>
       )}
+      {recoveryAuthorization&&<div className="secret-once" role="alert">
+        <strong>Autorización de recuperación firmada (cópiala ahora)</strong>
+        <textarea readOnly value={recoveryAuthorization} aria-label="Autorización de recuperación firmada" />
+        <span>Es temporal, de un solo uso y está ligada al Edge y backup indicados.</span>
+        <button onClick={()=>setRecoveryAuthorization(null)}>Ya la guardé</button>
+      </div>}
       {installationAuthorizationTarget && <InstallationAuthorizationPanel
         locationName={installationAuthorizationTarget.displayName??'Location sin nombre'}
         status={installationAuthorizationStatuses[installationAuthorizationTarget.locationId]??null}

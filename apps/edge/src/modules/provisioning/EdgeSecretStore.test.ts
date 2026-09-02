@@ -17,7 +17,9 @@ describe('EdgeSecretStore', () => {
     const path = join(directory, 'edge-secret.json'); const store = new DevelopmentFileEdgeSecretStore(path);
     const value = { active: { credentialId: crypto.randomUUID(), credential: 'a'.repeat(43) },
       pending: { credentialId: crypto.randomUUID(), credential: 'b'.repeat(43), rotationId: crypto.randomUUID() } };
+    await expect(store.hasPersistedState()).resolves.toBe(false);
     await store.save(value); await expect(store.load()).resolves.toEqual(value);
+    await expect(store.hasPersistedState()).resolves.toBe(true);
     expect((await readFile(path, 'utf8'))).toContain('"pending"');
   });
   it('rejects the development plaintext adapter in production', () => {

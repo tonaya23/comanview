@@ -200,7 +200,7 @@ export class SyncWorker {
 
   private toEnvelope(
     event: SyncOutboxEvent,
-    identity: { edgeId: string; tenantId: string; locationId: string },
+    identity: { edgeId: string; tenantId: string; locationId: string; recoveryEpoch: number },
   ): SyncEventEnvelope {
     const payload: unknown = JSON.parse(event.payload);
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
@@ -220,6 +220,7 @@ export class SyncWorker {
       edgeId: identity.edgeId,
       occurredAt: event.occurredAt.toISOString(),
       localSequence: event.localSequence,
+      recoveryEpoch: event.recoveryEpoch,
       aggregateVersion: event.aggregateVersion,
       payload: payload as Record<string, unknown>,
     };

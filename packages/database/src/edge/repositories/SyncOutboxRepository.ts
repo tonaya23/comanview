@@ -9,6 +9,7 @@ export interface EdgeInstallationIdentity {
   edgeId: string;
   tenantId: string;
   locationId: string;
+  recoveryEpoch: number;
 }
 
 export interface DurableEdgeIdentity extends EdgeInstallationIdentity {
@@ -31,6 +32,7 @@ export interface SyncOutboxEvent {
   payload: string;
   occurredAt: Date;
   localSequence: number;
+  recoveryEpoch: number;
   attemptCount: number;
 }
 
@@ -62,6 +64,7 @@ export class SyncOutboxRepository {
           edgeId: existing.edgeId,
           tenantId: existing.tenantId,
           locationId: existing.locationId,
+          recoveryEpoch: existing.recoveryEpoch,
         };
       }
       const edgeId = input.configuredEdgeId ?? EntityId.generate().toString();
@@ -75,19 +78,19 @@ export class SyncOutboxRepository {
           createdAt: new Date(),
         })
         .run();
-      return { edgeId, tenantId: input.tenantId, locationId: input.locationId };
+      return { edgeId, tenantId: input.tenantId, locationId: input.locationId, recoveryEpoch: 0 };
     });
   }
 
   getIdentity(): EdgeInstallationIdentity {
     const row = this.db.select().from(schema.edgeInstallations).get();
     if (!row) throw new Error('Edge identity has not been initialized.');
-    return row;
+    return { edgeId: row.edgeId, tenantId: row.tenantId, locationId: row.locationId, recoveryEpoch: row.recoveryEpoch };
   }
 
   findIdentity(): DurableEdgeIdentity | null {
     const row = this.db.select().from(schema.edgeInstallations).get();
-    return row ? { edgeId: row.edgeId, tenantId: row.tenantId, locationId: row.locationId,
+    return row ? { edgeId: row.edgeId, tenantId: row.tenantId, locationId: row.locationId, recoveryEpoch: row.recoveryEpoch,
       provisioningState: row.provisioningState, credentialId: row.credentialId,
       provisioningAttemptId: row.provisioningAttemptId } : null;
   }
@@ -122,7 +125,7 @@ export class SyncOutboxRepository {
           set: { tenantId: input.tenantId, locationId: input.locationId, provisioningState: 'PROVISIONING',
             credentialId: journal.credentialId, provisioningAttemptId: journal.attemptId, provisionedAt: now } }).run();
       tx.update(schema.edgeProvisioningJournal).set({ state: 'EXCHANGED', updatedAt: now }).run();
-      return { edgeId: journal.edgeId, tenantId: input.tenantId, locationId: input.locationId,
+      return { edgeId: journal.edgeId, tenantId: input.tenantId, locationId: input.locationId, recoveryEpoch: 0,
         provisioningState: 'PROVISIONING', credentialId: journal.credentialId,
         provisioningAttemptId: journal.attemptId };
     });
@@ -153,7 +156,7 @@ export class SyncOutboxRepository {
             eq(schema.eventLog.syncStatus, 'SYNCING'),
           ),
         )
-        .orderBy(asc(schema.eventLog.localSequence), asc(schema.eventLog.id))
+        .orderBy(asc(schema.eventLog.recoveryEpoch), asc(schema.eventLog.localSequence), asc(schema.eventLog.id))
         .limit(limit)
         .all();
       const eligible: typeof unresolved = [];
@@ -189,6 +192,7 @@ export class SyncOutboxRepository {
         payload: row.payload,
         occurredAt: row.occurredAt,
         localSequence: row.localSequence ?? 0,
+        recoveryEpoch: row.recoveryEpoch,
         attemptCount: row.attemptCount + 1,
       }));
     });

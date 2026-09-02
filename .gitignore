@@ -55,6 +55,9 @@ Thumbs.db
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+*.cvbackup
+*.pre-recovery-*
+**/.recovery-staging/
 
 # Test coverage
 coverage/

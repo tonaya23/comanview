@@ -16,6 +16,11 @@ export function getDatabase(): EdgeDatabase {
   return dbHandle.db;
 }
 
+export function getRawDatabase(): EdgeDatabaseHandle['sqlite'] {
+  if (!dbHandle) throw new Error('Database not initialized');
+  return dbHandle.sqlite;
+}
+
 export function closeDatabase(): void {
   if (dbHandle) {
     dbHandle.close();

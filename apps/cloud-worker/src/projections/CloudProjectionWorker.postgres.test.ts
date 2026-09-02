@@ -89,6 +89,7 @@ describe.skipIf(!databaseUrl)('Cloud projection worker with PostgreSQL', () => {
       aggregateId: string;
       payload: Record<string, unknown>;
       schemaVersion?: number;
+      recoveryEpoch?:number;
     },
   ): SyncEventEnvelope {
     return {
@@ -103,6 +104,7 @@ describe.skipIf(!databaseUrl)('Cloud projection worker with PostgreSQL', () => {
       edgeId: edge.edgeId,
       occurredAt: new Date(Date.UTC(2026, 7, 27, 12, 0, input.sequence)).toISOString(),
       localSequence: input.sequence,
+      recoveryEpoch:input.recoveryEpoch??0,
       payload: input.payload,
     };
   }
@@ -112,6 +114,34 @@ describe.skipIf(!databaseUrl)('Cloud projection worker with PostgreSQL', () => {
     expect(result.integrityRejected).toEqual([]);
     expect(result.accepted).toHaveLength(events.length);
   }
+
+  it('orders equal local sequences across recovery epochs and advances the checkpoint lexicographically', async () => {
+    const edge = await createEdge();
+    const aggregateId = randomUUID();
+    await ingest([
+      event(edge, { sequence: 1, recoveryEpoch: 0, eventType: 'LEGACY_UNKNOWN', aggregateId, payload: {} }),
+      event(edge, { sequence: 1, recoveryEpoch: 1, eventType: 'RECOVERED_UNKNOWN', aggregateId, payload: {} }),
+    ]);
+    const worker = new CloudProjectionWorker(
+      projectionRepository,
+      workerConfig({ batchSize: 10 }),
+      randomUUID(),
+      logger,
+    );
+    const now = new Date('2026-09-01T12:00:00.000Z');
+    expect(await worker.runOnce(now)).toBe(1);
+    expect(await worker.runOnce(new Date(now.getTime() + 1))).toBe(1);
+    const checkpoint = await database.pool.query<{
+      last_recovery_epoch: number;
+      last_local_sequence: number;
+    }>(
+      `SELECT last_recovery_epoch, last_local_sequence
+       FROM cloud_projection_checkpoints
+       WHERE edge_id = $1 AND projection_version = $2`,
+      [edge.edgeId, projectionVersion],
+    );
+    expect(checkpoint.rows[0]).toEqual({ last_recovery_epoch: 1, last_local_sequence: 1 });
+  });
 
   it('projects Order, Payment and closed Sale without mixing tip into sale amount', async () => {
     const edge = await createEdge();

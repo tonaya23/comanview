@@ -15,6 +15,7 @@ import {
   IssuedInstallationAuthorizationSchema,
   InstallationAuthorizationAckRequestSchema,
   LatestInstallationAuthorizationResponseSchema,
+  IssueRecoveryAuthorizationRequestSchema,IssuedRecoveryAuthorizationSchema,ConsumeRecoveryAuthorizationRequestSchema,
 } from '@comanview/contracts';
 import type { EdgeAuthenticator } from '../auth/EdgeAuthenticator.js';
 import type { CloudAdminAuthService, CloudAdminPrincipal } from '../admin/CloudAdminAuthService.js';
@@ -22,6 +23,7 @@ import { accessScope, requireCloudPermission } from '../admin/CloudAdminAuthServ
 import { assertCloudAdminSameOrigin, authenticateCloudAdmin } from '../admin/routes.js';
 import { CloudError } from '../app/CloudError.js';
 import { assignmentResponse, CloudLicensingService, planResponse } from './CloudLicensingService.js';
+import type { CloudRecoveryService } from '../recovery/CloudRecoveryService.js';
 
 const LocationParams = z.object({ locationId: z.string().uuid() });
 
@@ -29,6 +31,7 @@ export function registerCloudLicensingRoutes(app: FastifyInstance, input: {
   auth: CloudAdminAuthService;
   authenticator: EdgeAuthenticator;
   service: CloudLicensingService;
+  recovery?: CloudRecoveryService;
 }): void {
   app.get('/admin/v1/plans', async (request) => {
     const principal = await authenticateCloudAdmin(request, input.auth);
@@ -104,6 +107,19 @@ export function registerCloudLicensingRoutes(app: FastifyInstance, input: {
     );
     return EdgeControlStateResponseSchema.parse(await input.service.controlState(edge.edgeId));
   });
+  if(input.recovery){
+    app.post('/admin/v1/locations/:locationId/recovery-authorizations',async(request,reply)=>{
+      const principal=await writePrincipal(request,input.auth,CLOUD_PERMISSIONS.CLOUD_RECOVERY_AUTHORIZE);
+      const {locationId}=LocationParams.parse(request.params);const current=await input.service.getLocationAssignment(locationId);
+      if(!current||!canAccessTenant(principal,current.tenantId))throw notFound();
+      reply.status(201);return IssuedRecoveryAuthorizationSchema.parse(await input.recovery!.issue({locationId,
+        ...IssueRecoveryAuthorizationRequestSchema.parse(request.body)},actor(principal)));
+    });
+    app.post('/edge/v1/recovery-authorizations/acks',async(request,reply)=>{
+      const edge=await input.authenticator.authenticate(request.headers['x-comanview-edge-id'],request.headers.authorization);
+      await input.recovery!.consume(edge.edgeId,ConsumeRecoveryAuthorizationRequestSchema.parse(request.body));reply.status(204).send();
+    });
+  }
   app.post('/edge/v1/control-state/acks', async (request, reply) => {
     const edge = await input.authenticator.authenticate(
       request.headers['x-comanview-edge-id'], request.headers.authorization,

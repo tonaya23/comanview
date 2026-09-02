@@ -15,6 +15,7 @@ export interface ClaimedCloudEvent {
   locationId: string;
   edgeId: string;
   localSequence: number;
+  recoveryEpoch: number;
   payload: Record<string, unknown>;
   occurredAt: Date;
   processingAttemptCount: number;
@@ -27,6 +28,7 @@ interface EventContext {
   edgeId: string;
   aggregateId: string;
   localSequence: number;
+  recoveryEpoch: number;
   occurredAt: Date;
 }
 
@@ -126,6 +128,7 @@ export class CloudProjectionRepository {
         location_id: string;
         edge_id: string;
         local_sequence: number;
+        recovery_epoch: number;
         payload: Record<string, unknown>;
         occurred_at: Date;
         processing_attempt_count: number;
@@ -146,7 +149,8 @@ export class CloudProjectionRepository {
                SELECT 1
                FROM cloud_sync_inbox earlier
                WHERE earlier.edge_id = inbox.edge_id
-                 AND earlier.local_sequence < inbox.local_sequence
+                 AND (earlier.recovery_epoch < inbox.recovery_epoch OR
+                   (earlier.recovery_epoch = inbox.recovery_epoch AND earlier.local_sequence < inbox.local_sequence))
                  AND NOT EXISTS (
                    SELECT 1
                    FROM cloud_projection_event_receipts earlier_receipt
@@ -155,7 +159,7 @@ export class CloudProjectionRepository {
                      AND earlier_receipt.event_id = earlier.event_id
                  )
              )
-           ORDER BY inbox.edge_id, inbox.local_sequence
+           ORDER BY inbox.edge_id, inbox.recovery_epoch, inbox.local_sequence
            FOR UPDATE OF inbox SKIP LOCKED
            LIMIT $4
          )
@@ -191,6 +195,7 @@ export class CloudProjectionRepository {
         locationId: row.location_id,
         edgeId: row.edge_id,
         localSequence: row.local_sequence,
+        recoveryEpoch: row.recovery_epoch,
         payload: row.payload,
         occurredAt: row.occurred_at,
         processingAttemptCount: row.processing_attempt_count,
@@ -388,8 +393,8 @@ export class CloudProjectionRepository {
   ): Promise<void> {
     await client.query(
       `INSERT INTO cloud_projection_event_receipts
-         (projection_name, projection_version, event_id, edge_id, local_sequence, outcome, processed_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+         (projection_name, projection_version, event_id, edge_id, local_sequence, recovery_epoch, outcome, processed_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        ON CONFLICT (projection_name, projection_version, event_id) DO NOTHING`,
       [
         input.projectionName,
@@ -397,19 +402,25 @@ export class CloudProjectionRepository {
         input.event.eventId,
         input.event.edgeId,
         input.event.localSequence,
+        input.event.recoveryEpoch,
         input.outcome,
         input.now,
       ],
     );
     await client.query(
       `INSERT INTO cloud_projection_checkpoints
-         (projection_name, projection_version, edge_id, last_local_sequence, last_event_id, degraded, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+         (projection_name, projection_version, edge_id, last_local_sequence, last_recovery_epoch, last_event_id, degraded, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        ON CONFLICT (projection_name, projection_version, edge_id)
        DO UPDATE SET
-         last_local_sequence = GREATEST(cloud_projection_checkpoints.last_local_sequence, EXCLUDED.last_local_sequence),
+         last_recovery_epoch = GREATEST(cloud_projection_checkpoints.last_recovery_epoch, EXCLUDED.last_recovery_epoch),
+         last_local_sequence = CASE WHEN EXCLUDED.last_recovery_epoch > cloud_projection_checkpoints.last_recovery_epoch
+           THEN EXCLUDED.last_local_sequence WHEN EXCLUDED.last_recovery_epoch = cloud_projection_checkpoints.last_recovery_epoch
+           THEN GREATEST(cloud_projection_checkpoints.last_local_sequence, EXCLUDED.last_local_sequence)
+           ELSE cloud_projection_checkpoints.last_local_sequence END,
          last_event_id = CASE
-           WHEN EXCLUDED.last_local_sequence >= cloud_projection_checkpoints.last_local_sequence
+           WHEN EXCLUDED.last_recovery_epoch > cloud_projection_checkpoints.last_recovery_epoch OR
+             (EXCLUDED.last_recovery_epoch = cloud_projection_checkpoints.last_recovery_epoch AND EXCLUDED.last_local_sequence >= cloud_projection_checkpoints.last_local_sequence)
              THEN EXCLUDED.last_event_id
            ELSE cloud_projection_checkpoints.last_event_id
          END,
@@ -420,6 +431,7 @@ export class CloudProjectionRepository {
         input.projectionVersion,
         input.event.edgeId,
         input.event.localSequence,
+        input.event.recoveryEpoch,
         input.event.eventId,
         input.degraded,
         input.now,
@@ -458,8 +470,8 @@ export class CloudProjectionRepository {
               `INSERT INTO cloud_order_operational_summaries
              (projection_version, order_id, tenant_id, location_id, edge_id, order_type,
               order_channel, status, table_ids, created_at, last_event_id,
-              last_local_sequence, updated_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,'OPEN',$8::jsonb,$9,$10,$11,$12)
+              last_local_sequence, last_recovery_epoch, updated_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,'OPEN',$8::jsonb,$9,$10,$11,$12,$13)
            ON CONFLICT (projection_version, order_id) DO NOTHING`,
               [
                 version,
@@ -473,6 +485,7 @@ export class CloudProjectionRepository {
                 event.occurredAt,
                 event.eventId,
                 event.localSequence,
+                event.recoveryEpoch,
                 now,
               ],
             )
@@ -541,8 +554,8 @@ export class CloudProjectionRepository {
               `INSERT INTO cloud_cash_session_summaries
              (projection_version, cash_session_id, cash_register_id, tenant_id, location_id,
               edge_id, business_date, currency, status, opening_float_amount, opened_at,
-              last_event_id, last_local_sequence, updated_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'OPEN',$9,$10,$11,$12,$13)
+              last_event_id, last_local_sequence, last_recovery_epoch, updated_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'OPEN',$9,$10,$11,$12,$13,$14)
            ON CONFLICT (projection_version, cash_session_id) DO NOTHING`,
               [
                 version,
@@ -557,6 +570,7 @@ export class CloudProjectionRepository {
                 event.occurredAt,
                 event.eventId,
                 event.localSequence,
+                event.recoveryEpoch,
                 now,
               ],
             )
@@ -588,7 +602,8 @@ export class CloudProjectionRepository {
     const edgeParameter = tenantParameter + 2;
     const result = await client.query(
       `UPDATE cloud_order_operational_summaries
-       SET ${mutationSql}, last_event_id = $3, last_local_sequence = $4, updated_at = $5
+       SET ${mutationSql}, last_event_id = $3, last_local_sequence = $4, updated_at = $5,
+         last_recovery_epoch = $${edgeParameter + 1}
        WHERE projection_version = $1 AND order_id = $2
          AND tenant_id = $${tenantParameter}
          AND location_id = $${locationParameter}
@@ -603,6 +618,7 @@ export class CloudProjectionRepository {
         event.tenantId,
         event.locationId,
         event.edgeId,
+        event.recoveryEpoch,
       ],
     );
     if (result.rowCount !== 1) {
@@ -630,8 +646,8 @@ export class CloudProjectionRepository {
       `INSERT INTO cloud_payment_summaries
          (projection_version, payment_id, order_id, cash_session_id, tenant_id, location_id,
           edge_id, method, amount_applied, tip_amount, currency, status, completed_at,
-          last_event_id, last_local_sequence)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'COMPLETED',$12,$13,$14)
+          last_event_id, last_local_sequence, last_recovery_epoch)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'COMPLETED',$12,$13,$14,$15)
        ON CONFLICT (projection_version, payment_id) DO NOTHING`,
       [
         version,
@@ -648,6 +664,7 @@ export class CloudProjectionRepository {
         event.occurredAt,
         event.eventId,
         event.localSequence,
+        event.recoveryEpoch,
       ],
     );
     if (inserted.rowCount !== 1) {
@@ -674,7 +691,8 @@ export class CloudProjectionRepository {
   ): Promise<void> {
     const payment = await client.query<{ amount_applied: string; tip_amount: string }>(
       `UPDATE cloud_payment_summaries
-       SET status = 'VOIDED', voided_at = $3, last_event_id = $4, last_local_sequence = $5
+       SET status = 'VOIDED', voided_at = $3, last_event_id = $4, last_local_sequence = $5,
+         last_recovery_epoch = $10
        WHERE projection_version = $1 AND payment_id = $2 AND status = 'COMPLETED'
          AND order_id = $6 AND tenant_id = $7 AND location_id = $8 AND edge_id = $9
        RETURNING amount_applied, tip_amount`,
@@ -688,6 +706,7 @@ export class CloudProjectionRepository {
         event.tenantId,
         event.locationId,
         event.edgeId,
+        event.recoveryEpoch,
       ],
     );
     const row = payment.rows[0];
@@ -734,15 +753,16 @@ export class CloudProjectionRepository {
          AND receipt.projection_version = $2
          AND receipt.outcome IN ('DEAD_LETTER', 'SKIPPED_UNHANDLED')
          AND inbox.aggregate_id = $3
-         AND inbox.local_sequence < $4
-         AND inbox.tenant_id = $5
-         AND inbox.location_id = $6
-         AND inbox.edge_id = $7
+         AND (inbox.recovery_epoch < $4 OR (inbox.recovery_epoch = $4 AND inbox.local_sequence < $5))
+         AND inbox.tenant_id = $6
+         AND inbox.location_id = $7
+         AND inbox.edge_id = $8
        LIMIT 1`,
       [
         projectionName,
         version,
         event.aggregateId,
+        event.recoveryEpoch,
         event.localSequence,
         event.tenantId,
         event.locationId,
@@ -755,8 +775,8 @@ export class CloudProjectionRepository {
       `INSERT INTO cloud_closed_sale_summaries
          (projection_version, order_id, tenant_id, location_id, edge_id, sale_amount,
           tip_amount, charged_total, currency, completeness_status, closed_at,
-          source_event_id, last_local_sequence)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+          source_event_id, last_local_sequence, last_recovery_epoch)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
        ON CONFLICT (projection_version, order_id) DO UPDATE SET
          sale_amount = EXCLUDED.sale_amount,
          tip_amount = EXCLUDED.tip_amount,
@@ -765,7 +785,8 @@ export class CloudProjectionRepository {
          completeness_status = EXCLUDED.completeness_status,
          closed_at = EXCLUDED.closed_at,
          source_event_id = EXCLUDED.source_event_id,
-         last_local_sequence = EXCLUDED.last_local_sequence`,
+         last_local_sequence = EXCLUDED.last_local_sequence,
+         last_recovery_epoch = EXCLUDED.last_recovery_epoch`,
       [
         version,
         event.aggregateId,
@@ -780,6 +801,7 @@ export class CloudProjectionRepository {
         event.occurredAt,
         event.eventId,
         event.localSequence,
+        event.recoveryEpoch,
       ],
     );
   }
@@ -795,8 +817,8 @@ export class CloudProjectionRepository {
       `INSERT INTO cloud_cash_movements
          (projection_version, cash_movement_id, cash_session_id, tenant_id, location_id,
           edge_id, movement_type, amount, currency, reason, actor_user_id, occurred_at,
-          source_event_id, local_sequence)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+          source_event_id, local_sequence, recovery_epoch)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
        ON CONFLICT (projection_version, cash_movement_id) DO NOTHING`,
       [
         version,
@@ -813,6 +835,7 @@ export class CloudProjectionRepository {
         event.occurredAt,
         event.eventId,
         event.localSequence,
+        event.recoveryEpoch,
       ],
     );
     if (inserted.rowCount !== 1) {
@@ -824,7 +847,8 @@ export class CloudProjectionRepository {
     const result = await client.query(
       `UPDATE cloud_cash_session_summaries
        SET ${column} = ${column} + $3,
-           last_event_id = $4, last_local_sequence = $5, updated_at = $6
+           last_event_id = $4, last_local_sequence = $5, updated_at = $6,
+           last_recovery_epoch = $10
        WHERE projection_version = $1 AND cash_session_id = $2
          AND tenant_id = $7 AND location_id = $8 AND edge_id = $9`,
       [
@@ -837,6 +861,7 @@ export class CloudProjectionRepository {
         event.tenantId,
         event.locationId,
         event.edgeId,
+        event.recoveryEpoch,
       ],
     );
     if (result.rowCount !== 1) {
@@ -858,7 +883,7 @@ export class CloudProjectionRepository {
        SET status = 'CLOSED', business_date = $3, currency = $4,
            expected_cash_amount = $5, counted_cash_amount = $6, difference_amount = $7,
            closed_at = $8, closed_by = $9, last_event_id = $10,
-           last_local_sequence = $11, updated_at = $12
+           last_local_sequence = $11, updated_at = $12, last_recovery_epoch = $16
        WHERE projection_version = $1 AND cash_session_id = $2
          AND tenant_id = $13 AND location_id = $14 AND edge_id = $15`,
       [
@@ -877,6 +902,7 @@ export class CloudProjectionRepository {
         event.tenantId,
         event.locationId,
         event.edgeId,
+        event.recoveryEpoch,
       ],
     );
     if (result.rowCount !== 1) {

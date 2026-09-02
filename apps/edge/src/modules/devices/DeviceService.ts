@@ -7,6 +7,8 @@ import { hashPairingCode, verifyInstallationAuthorization } from '@comanview/lic
 import type { AuthenticatedActor } from '../../app/authContext.js';
 import { AppError } from '../../app/errorHandler.js';
 import type { EdgeLicenseManager } from '../licensing/EdgeLicenseManager.js';
+import { addRevokedDevice, type RecoverySecurityStore } from '../backup/RecoverySecurityStore.js';
+import type { BackupManager } from '../backup/BackupManager.js';
 
 const TTL=10*60_000, MAX_ATTEMPTS=5;
 const hash=(v:string)=>createHash('sha256').update(v,'utf8').digest('hex');
@@ -16,7 +18,8 @@ const SILENT_LOG:DeviceBootstrapLog={warn:()=>undefined};
 export class DeviceService {
   constructor(private readonly repository:DeviceRepository,
     private readonly licensing:EdgeLicenseManager, private readonly context:{edgeId:string;tenantId:string;locationId:string},
-    private readonly publicKeyring:Readonly<Record<string,string>>,private readonly log:DeviceBootstrapLog=SILENT_LOG) {}
+    private readonly publicKeyring:Readonly<Record<string,string>>,private readonly log:DeviceBootstrapLog=SILENT_LOG,
+    private readonly recoverySecurityStore?:RecoverySecurityStore,private readonly backupManager?:BackupManager) {}
   createPairing(input:{deviceId:string;deviceType:DeviceType;displayName:string;credential:string},now=new Date()) {
     const registered=this.repository.registeredIdentity(input.deviceId,this.context.tenantId,this.context.locationId);
     if(registered?.device.status==='REVOKED'&&registered.credentialHashes.some((encoded)=>verifyDeviceCredential(input.credential,encoded))) {
@@ -84,8 +87,13 @@ export class DeviceService {
     catch(error){this.mapStateError(error);}
     return this.device(this.repository.getPairing(input.pairingId)!.device);
   }
-  revoke(deviceId:string,reason:string,commandId:string,actor:AuthenticatedActor,now=new Date()) {
+  async revoke(deviceId:string,reason:string,commandId:string,actor:AuthenticatedActor,now=new Date()) {
     if(this.repository.auditEntityForCommand(commandId,'DEVICE_REVOKED')===deviceId)return {revoked:true as const};
+    const registered=this.repository.registeredIdentity(deviceId,this.context.tenantId,this.context.locationId);
+    if(!registered||registered.device.status!=='ACTIVE')throw new AppError('DEVICE_NOT_AUTHORIZED',403,'Device is not active.');
+    if(this.recoverySecurityStore)await this.recoverySecurityStore.mutate(floor=>{
+      if(floor.recoveryState!=='NORMAL')throw new AppError('RECOVERY_IN_PROGRESS',409,'Recovery is in progress.');
+      return addRevokedDevice(floor,deviceId);});
     try { this.repository.revoke({deviceId,tenantId:this.context.tenantId,locationId:this.context.locationId,now,
       audit:this.auditEntry('DEVICE_REVOKED','DEVICE',deviceId,'USER',reason,now,actor,undefined,commandId)}); }
     catch(error){this.mapStateError(error);} return {revoked:true as const};
@@ -93,7 +101,7 @@ export class DeviceService {
   cancel(pairingId:string,commandId:string,actor:AuthenticatedActor,now=new Date()){
     if(this.repository.auditEntityForCommand(commandId,'DEVICE_PAIRING_CANCELLED')===pairingId)return {cancelled:true as const};
     if(!this.repository.cancel({pairingId,now,audit:this.auditEntry('DEVICE_PAIRING_CANCELLED','PAIRING',pairingId,'USER','Pairing cancelado localmente.',now,actor,undefined,commandId)})) throw new AppError('PAIRING_ALREADY_CONSUMED',409,'Pairing is no longer pending.');return {cancelled:true as const};}
-  readiness(){const s=this.repository.readinessSnapshot(this.context.tenantId,this.context.locationId);const effective=this.licensing.effectiveCapabilities();
+  async readiness(){const s=this.repository.readinessSnapshot(this.context.tenantId,this.context.locationId);const effective=this.licensing.effectiveCapabilities();
     const c=(key:string,ready:boolean,code:string,detail:string)=>({key,state:ready?'READY' as const:'NOT_READY' as const,code,detail});
     const components=[c('EDGE',true,'EDGE_UP','Edge service operativo.'),c('DATABASE',true,'DATABASE_OK','SQLite accesible.'),c('TENANT_LOCATION',Boolean(this.context.tenantId&&this.context.locationId),'BOUND','Binding persistido.'),
       {key:'LICENSE',state:['NO_VALID_LICENSE','POST_GRACE_BLOCKED','SUSPENDED_BLOCKED','TERMINATED_BLOCKED'].includes(effective.mode)?'NOT_READY' as const:effective.cloudReachable?'READY' as const:'DEGRADED' as const,code:effective.reasonCode,detail:`Modo ${effective.mode}.`},
@@ -102,8 +110,14 @@ export class DeviceService {
       c('PRINTING',s.printTargets>0||!effective.capabilities.includes('PRINTING'),'PRINT_TARGET_MISSING',`${s.printTargets} destinos.`),c('DEVICES',s.activeDevices>0,'DEVICE_MISSING',`${s.activeDevices} dispositivos activos.`),
       c('BOOTSTRAP',s.installation?.bootstrapStatus==='COMPLETED','BOOTSTRAP_PENDING',s.installation?.bootstrapStatus??'PENDING'),
       {key:'SYNC',state:s.sync?.lastSuccessfulSyncAt?'READY' as const:'DEGRADED' as const,code:s.sync?.lastSuccessfulSyncAt?'SYNC_VERIFIED':'SYNC_NOT_VERIFIED',detail:'Sync no bloquea operación local.'},
-      {key:'BACKUP',state:'PENDING_PHASE' as const,code:'PENDING_1V',detail:'Backup/Recovery se implementará en Fase 1V.'}];
-    return {technicalHealth:'READY' as const,operationalReadiness:components.filter(x=>!['SYNC','BACKUP'].includes(x.key)).every(x=>x.state==='READY')?'READY' as const:'NOT_READY' as const,productionReadiness:'NOT_READY' as const,licensingStatus:effective.mode,components}; }
+      ];
+    const backup=this.backupManager?await this.backupManager.status():null;
+    components.push(backup?{key:'BACKUP',state:backup.recoveryState!=='NORMAL'?'NOT_READY' as const:
+      backup.recoveryPreparedness==='READY'?'READY' as const:backup.recoveryPreparedness,
+      code:backup.recoveryState==='RECOVERY_REQUIRED'?'RECOVERY_REQUIRED':backup.recoveryPreparedness==='READY'?'BACKUP_PROTECTED':'BACKUP_PROTECTION_INCOMPLETE',
+      detail:backup.recoveryPreparedness==='READY'?'Backup verificado, externo y Recovery Key custodiada.':'La operación continúa, pero la preparación de recuperación está incompleta.'}:
+      {key:'BACKUP',state:'NOT_READY' as const,code:'BACKUP_UNAVAILABLE',detail:'Backup/Recovery no está disponible.'});
+    return {technicalHealth:backup?.recoveryState==='RECOVERY_REQUIRED'?'NOT_READY' as const:'READY' as const,operationalReadiness:components.filter(x=>!['SYNC','BACKUP'].includes(x.key)).every(x=>x.state==='READY')?'READY' as const:'NOT_READY' as const,productionReadiness:components.every(x=>x.state==='READY')?'READY' as const:'NOT_READY' as const,licensingStatus:effective.mode,components}; }
   private requirePending(id:string,now:Date){const row=this.repository.getPairing(id);if(!row)throw new AppError('DEVICE_NOT_PAIRED',404,'Pairing not found.');if(row.pairing.expiresAt<=now)throw new AppError('PAIRING_EXPIRED',409,'Pairing expired.');if(row.pairing.status!=='PENDING')throw new AppError('PAIRING_ALREADY_CONSUMED',409,'Pairing is no longer pending.');if(row.pairing.lockedUntil&&row.pairing.lockedUntil>now)throw new AppError('PAIRING_RATE_LIMITED',429,'Pairing is temporarily locked.');return row;}
   private verifyCode(pairing:{pairingId:string;codeHash:string},code:string,now:Date){if(!safeEqual(pairing.codeHash,hashPairingCode(pairing.pairingId,code))){const attempts=this.repository.recordFailedAttempt(pairing.pairingId,now,MAX_ATTEMPTS);if(attempts>=MAX_ATTEMPTS)this.repository.appendAudit(this.auditEntry('DEVICE_PAIRING_RATE_LIMITED','PAIRING',pairing.pairingId,'SYSTEM','Pairing bloqueado temporalmente tras intentos inválidos.',now,null,undefined,null,'REJECTED'));throw new AppError(attempts>=MAX_ATTEMPTS?'PAIRING_RATE_LIMITED':'PAIRING_CODE_INVALID',attempts>=MAX_ATTEMPTS?429:401,'Pairing code is invalid.');}}
   private pairing(row:{pairing:any;device:any},now:Date){return {pairingId:row.pairing.pairingId,status:row.pairing.expiresAt<=now&&row.pairing.status==='PENDING'?'EXPIRED':row.pairing.status,device:this.device(row.device),expiresAt:row.pairing.expiresAt.toISOString()};}

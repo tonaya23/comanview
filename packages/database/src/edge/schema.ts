@@ -12,6 +12,7 @@ export const eventLog = sqliteTable('event_log', {
   payload: text('payload').notNull(), // JSON
   occurredAt: integer('occurred_at', { mode: 'timestamp_ms' }).notNull(),
   localSequence: integer('local_sequence'),
+  recoveryEpoch: integer('recovery_epoch').notNull().default(0),
   commandId: text('command_id'),
   syncStatus: text('sync_status').notNull().default('PENDING'),
   attemptCount: integer('attempt_count').notNull().default(0),
@@ -33,6 +34,42 @@ export const edgeInstallations = sqliteTable('edge_installations', {
   provisioningAttemptId: text('provisioning_attempt_id'),
   provisionedAt: integer('provisioned_at', { mode: 'timestamp_ms' }),
   activatedAt: integer('activated_at', { mode: 'timestamp_ms' }),
+  recoveryEpoch: integer('recovery_epoch').notNull().default(0),
+});
+
+export const backupRecords = sqliteTable('backup_records', {
+  backupId: text('backup_id').primaryKey(),
+  tenantId: text('tenant_id').notNull(),
+  locationId: text('location_id').notNull(),
+  sourceEdgeId: text('source_edge_id').notNull(),
+  recoveryEpoch: integer('recovery_epoch').notNull(),
+  status: text('status').notNull(),
+  trigger: text('trigger').notNull(),
+  destinationType: text('destination_type').notNull(),
+  artifactPath: text('artifact_path').notNull(),
+  formatVersion: integer('format_version').notNull(),
+  schemaVersion: integer('schema_version').notNull(),
+  applicationVersion: text('application_version').notNull(),
+  businessDate: text('business_date'),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  completedAt: integer('completed_at', { mode: 'timestamp_ms' }),
+  verifiedAt: integer('verified_at', { mode: 'timestamp_ms' }),
+  sizeBytes: integer('size_bytes'),
+  ciphertextSha256: text('ciphertext_sha256'),
+  failureCode: text('failure_code'),
+  failureDetail: text('failure_detail'),
+  commandId: text('command_id'),
+});
+
+export const backupRuntime = sqliteTable('backup_runtime', {
+  singletonKey: text('singleton_key').primaryKey(),
+  nextPeriodicBackupAt: integer('next_periodic_backup_at', { mode: 'timestamp_ms' }),
+  lastAttemptAt: integer('last_attempt_at', { mode: 'timestamp_ms' }),
+  lastSuccessfulBackupAt: integer('last_successful_backup_at', { mode: 'timestamp_ms' }),
+  lastVerifiedBackupId: text('last_verified_backup_id'),
+  lastFailureCode: text('last_failure_code'),
+  workerStatus: text('worker_status').notNull().default('IDLE'),
+  updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
 });
 
 export const edgeProvisioningJournal = sqliteTable('edge_provisioning_journal', {

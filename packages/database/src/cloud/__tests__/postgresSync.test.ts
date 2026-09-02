@@ -48,6 +48,7 @@ describe.skipIf(!databaseUrl)('Cloud PostgreSQL Inbox integration', () => {
       edgeId,
       occurredAt: '2026-08-27T12:00:00.000Z',
       localSequence: 1,
+      recoveryEpoch: 0,
       aggregateVersion: 1,
       payload: { orderId: '01991a00-0000-7000-8000-000000000945' },
     };
@@ -73,6 +74,10 @@ describe.skipIf(!databaseUrl)('Cloud PostgreSQL Inbox integration', () => {
         },
       ],
     });
+    const recoveredEpoch=await repository.ingestBatch('01991a00-0000-7000-8000-000000000950','1',[{
+      ...event,eventId:'01991a00-0000-7000-8000-000000000950',recoveryEpoch:1,
+    }]);
+    expect(recoveredEpoch.accepted).toEqual(['01991a00-0000-7000-8000-000000000950']);
     expect(await repository.countInboxEvents()).toBeGreaterThanOrEqual(1);
 
     await repository.saveHeartbeat({
@@ -105,6 +110,7 @@ describe.skipIf(!databaseUrl)('Cloud PostgreSQL Inbox integration', () => {
       edgeId,
       occurredAt: '2026-08-27T12:01:00.000Z',
       localSequence: 2,
+      recoveryEpoch: 0,
       aggregateVersion: 1,
       payload: { orderId: '01991a00-0000-7000-8000-000000000953' },
     };

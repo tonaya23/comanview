@@ -10,7 +10,7 @@ import type { NewAuditEntry } from '../repositories/AuditRepository.js';
 import { prepareDevelopmentDatabase } from '../prepareDevelopmentDatabase.js';
 
 const here=dirname(fileURLToPath(import.meta.url));
-const migrations=['0000_initial.sql','0001_payments_cash.sql','0002_order_item_special_instructions.sql','0003_printing.sql','0004_kds.sql','0005_local_auth.sql','0006_audit_log.sql','0007_cash_operations_closure.sql','0008_tables_waiter.sql','0009_operational_realtime.sql','0010_sync_foundation.sql','0011_edge_provisioning.sql','0012_signed_licensing_configuration.sql','0013_device_pairing_readiness.sql'];
+const migrations=['0000_initial.sql','0001_payments_cash.sql','0002_order_item_special_instructions.sql','0003_printing.sql','0004_kds.sql','0005_local_auth.sql','0006_audit_log.sql','0007_cash_operations_closure.sql','0008_tables_waiter.sql','0009_operational_realtime.sql','0010_sync_foundation.sql','0011_edge_provisioning.sql','0012_signed_licensing_configuration.sql','0013_device_pairing_readiness.sql','0014_backup_recovery.sql'];
 const ids={tenant:'01991a00-0000-7000-8000-000000000301',location:'01991a00-0000-7000-8000-000000000302',edge:'01991a00-0000-7000-8000-000000000303',pairing:'01991a00-0000-7000-8000-000000000304',device:'01991a00-0000-7000-8000-000000000305',owner:'01991a00-0000-7000-8000-000000000306',auth:'01991a00-0000-7000-8000-000000000307'};
 
 function setup(){const sqlite=new Database(':memory:');sqlite.pragma('foreign_keys=ON');for(const name of migrations)sqlite.exec(readFileSync(join(here,`../../../../../migrations/edge/${name}`),'utf8'));return {sqlite,repo:new DeviceRepository(drizzle(sqlite,{schema}))};}

@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { execFile } from 'node:child_process';
 
@@ -14,10 +14,16 @@ export interface StoredEdgeSecrets {
 export interface EdgeSecretStore {
   load(): Promise<StoredEdgeSecrets>;
   save(value: StoredEdgeSecrets): Promise<void>;
+  hasPersistedState(): Promise<boolean>;
 }
 
 abstract class FileSecretStore implements EdgeSecretStore {
   constructor(protected readonly path: string) {}
+  async hasPersistedState():Promise<boolean>{
+    return stat(this.path).then(value=>value.isFile()).catch((error:NodeJS.ErrnoException)=>{
+      if(error.code==='ENOENT')return false;throw error;
+    });
+  }
   async load(): Promise<StoredEdgeSecrets> {
     try { return validate(JSON.parse((await this.decode(await readFile(this.path))).toString('utf8'))); }
     catch (error) {

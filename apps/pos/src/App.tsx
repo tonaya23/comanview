@@ -90,11 +90,14 @@ export function App() {
   const [deviceAdminLoading,setDeviceAdminLoading]=useState(false);
   const [deviceAdminError,setDeviceAdminError]=useState<string|null>(null);
   const [deviceAdminNotice,setDeviceAdminNotice]=useState<string|null>(null);
-  const [deviceAdminBusy,setDeviceAdminBusy]=useState<`approve:${string}`|`cancel:${string}`|`revoke:${string}`|'refresh'|null>(null);
+  const [deviceAdminBusy,setDeviceAdminBusy]=useState<`approve:${string}`|`cancel:${string}`|`revoke:${string}`|'refresh'|'backup-local'|'backup-off-device'|'backup-config'|'recovery-key'|'restore'|null>(null);
   const [approvalPairingId,setApprovalPairingId]=useState(''); const [approvalCode,setApprovalCode]=useState('');
   const pairingGenerationRef=useRef(0);
   const deviceIdentityRef=useRef<ClientDeviceIdentity|null>(null);
   const [connection, setConnection] = useState<ConnectionState>('CHECKING');
+  const [recoveryRequired,setRecoveryRequired]=useState(false);
+  const [emergencyRecovery,setEmergencyRecovery]=useState({backupId:'',artifactPath:'',recoveryKey:'',authorization:''});
+  const [emergencyRecoveryBusy,setEmergencyRecoveryBusy]=useState(false);
   const [categories, setCategories] = useState<CategoryResponse[]>([]);
   const [products, setProducts] = useState<ProductResponse[]>([]);
   const [tables, setTables] = useState<RestaurantTableResponse[]>([]);
@@ -245,9 +248,11 @@ export function App() {
   const refreshConnection = useCallback(async () => {
     try {
       const health = await edge.getHealth();
+      setRecoveryRequired(health.recoveryState==='RECOVERY_REQUIRED');
       setConnection(health.status === 'UP' ? 'CONNECTED' : 'DISCONNECTED');
       return health.status === 'UP';
     } catch {
+      setRecoveryRequired(false);
       setConnection('DISCONNECTED');
       return false;
     }
@@ -1042,6 +1047,10 @@ export function App() {
   async function approveDevice(){if(deviceAdminBusy)return;const action=`approve:${approvalPairingId}` as const;setDeviceAdminBusy(action);setDeviceAdminError(null);setDeviceAdminNotice(null);try{await edge.approvePairing({commandId:crypto.randomUUID(),pairingId:approvalPairingId,pairingCode:approvalCode});clearPairingApproval(setApprovalPairingId,setApprovalCode);setDeviceAdminNotice('Dispositivo aprobado correctamente.');setDeviceAdmin(await loadDeviceAdminState(edge));}catch(problem){if(isGlobalDeviceAdminError(problem))setError(deviceAdminErrorMessage(problem));else setDeviceAdminError(deviceAdminErrorMessage(problem));}finally{setDeviceAdminBusy(null);}}
   async function cancelDevicePairing(request:PairingStatusResponse){if(deviceAdminBusy)return;const action=`cancel:${request.pairingId}` as const;setDeviceAdminBusy(action);setDeviceAdminError(null);setDeviceAdminNotice(null);try{await edge.cancelPairing(request.pairingId,{commandId:crypto.randomUUID()});if(approvalPairingId===request.pairingId)clearPairingApproval(setApprovalPairingId,setApprovalCode);setDeviceAdminNotice('Solicitud cancelada. El historial permanece disponible en Edge.');setDeviceAdmin(await loadDeviceAdminState(edge));}catch(problem){if(isGlobalDeviceAdminError(problem))setError(deviceAdminErrorMessage(problem));else setDeviceAdminError(deviceAdminErrorMessage(problem));}finally{setDeviceAdminBusy(null);}}
   async function revokeDevice(device:Device){if(deviceAdminBusy)return;const action=`revoke:${device.deviceId}` as const;setDeviceAdminBusy(action);setDeviceAdminError(null);setDeviceAdminNotice(null);try{await edge.revokeDevice(device.deviceId,{commandId:crypto.randomUUID(),reason:'Revocación administrativa local'});setDeviceAdminNotice(`${device.displayName} fue revocado. Sus sesiones activas quedaron cerradas.`);setDeviceAdmin(await loadDeviceAdminState(edge));}catch(problem){if(isGlobalDeviceAdminError(problem))setError(deviceAdminErrorMessage(problem));else setDeviceAdminError(deviceAdminErrorMessage(problem));}finally{setDeviceAdminBusy(null);}}
+  async function createBackup(destinationType:'LOCAL'|'OFF_DEVICE'){setDeviceAdminBusy(destinationType==='LOCAL'?'backup-local':'backup-off-device');setDeviceAdminError(null);try{await edge.createBackup({commandId:crypto.randomUUID(),destinationType});setDeviceAdminNotice(destinationType==='LOCAL'?'Backup local creado y verificado correctamente.':'Backup externo creado y verificado correctamente.');setDeviceAdmin(await loadDeviceAdminState(edge));}catch(problem){setDeviceAdminError(deviceAdminErrorMessage(problem));}finally{setDeviceAdminBusy(null);}}
+  async function configureOffDeviceBackup(directoryPath:string){setDeviceAdminBusy('backup-config');setDeviceAdminError(null);try{await edge.configureOffDeviceBackup({commandId:crypto.randomUUID(),directoryPath});setDeviceAdminNotice('Destino externo configurado.');setDeviceAdmin(await loadDeviceAdminState(edge));}catch(problem){setDeviceAdminError(deviceAdminErrorMessage(problem));}finally{setDeviceAdminBusy(null);}}
+  async function exportRecoveryKey(){setDeviceAdminBusy('recovery-key');setDeviceAdminError(null);try{const result=await edge.exportRecoveryKey({commandId:crypto.randomUUID(),confirmation:'EXPORT_RECOVERY_KEY'});setDeviceAdminNotice('Recovery Key entregada una sola vez. Guárdala fuera de este equipo.');setDeviceAdmin(await loadDeviceAdminState(edge));return result.recoveryKey;}catch(problem){setDeviceAdminError(deviceAdminErrorMessage(problem));throw problem;}finally{setDeviceAdminBusy(null);}}
+  async function restoreBackup(backupId:string){setDeviceAdminBusy('restore');setDeviceAdminError(null);try{await edge.restoreBackup({commandId:crypto.randomUUID(),backupId,confirmation:'RESTORE_VERIFIED_BACKUP'});setDeviceAdminNotice('Recuperación programada. Edge se reiniciará para aplicar y validar la copia.');}catch(problem){setDeviceAdminError(deviceAdminErrorMessage(problem));throw problem;}finally{setDeviceAdminBusy(null);}}
 
   async function logout() {
     try {
@@ -1057,6 +1066,14 @@ export function App() {
 
   const deviceOnboardingState=getDeviceOnboardingState(deviceIdentity,pairing);
 
+  async function emergencyRestore(event:FormEvent){event.preventDefault();setEmergencyRecoveryBusy(true);setLoginError(null);try{
+    const authorization=emergencyRecovery.authorization.trim()?JSON.parse(emergencyRecovery.authorization):undefined;
+    await edge.emergencyRestore({commandId:crypto.randomUUID(),backupId:emergencyRecovery.backupId,
+      artifactPath:emergencyRecovery.artifactPath,recoveryKey:emergencyRecovery.recoveryKey,
+      confirmation:'RESTORE_VERIFIED_BACKUP',...(authorization?{recoveryAuthorization:authorization}:{})});
+    setLoginError('Copia validada. Reinicia Edge para completar la recuperación.');
+  }catch(problem){setLoginError(getErrorMessage(problem));}finally{setEmergencyRecoveryBusy(false);}}
+
   if (authChecking) {
     return (
       <main className="pos-login-shell">
@@ -1069,6 +1086,16 @@ export function App() {
   }
 
   if (!authUser) {
+    if(recoveryRequired)return <main className="pos-login-shell"><form className="pos-login-card recovery-card" onSubmit={event=>void emergencyRestore(event)}>
+      <div className="brand pos-login-brand"><span className="brand-mark">C</span><div><strong>ComanView</strong><span>Recuperación local</span></div></div>
+      <div className="inline-alert inline-alert--error" role="alert"><strong>Recuperación requerida</strong><span>La base operacional no es segura. No se creó una base vacía y las ventas permanecen bloqueadas.</span></div>
+      <label>Backup ID<input required value={emergencyRecovery.backupId} onChange={event=>setEmergencyRecovery({...emergencyRecovery,backupId:event.target.value})}/></label>
+      <label>Ruta del backup<input required value={emergencyRecovery.artifactPath} onChange={event=>setEmergencyRecovery({...emergencyRecovery,artifactPath:event.target.value})}/></label>
+      <label>Recovery Key<input required type="password" autoComplete="off" value={emergencyRecovery.recoveryKey} onChange={event=>setEmergencyRecovery({...emergencyRecovery,recoveryKey:event.target.value})}/></label>
+      <label>Recovery Authorization <small>Solo para reemplazo de hardware</small><textarea value={emergencyRecovery.authorization} onChange={event=>setEmergencyRecovery({...emergencyRecovery,authorization:event.target.value})}/></label>
+      <button className="danger-button" disabled={emergencyRecoveryBusy}>{emergencyRecoveryBusy?'Validando…':'Validar e iniciar recuperación'}</button>
+      <div className="pin-feedback" role="status">{loginError??'La Recovery Key y la autorización nunca se guardan en el navegador.'}</div>
+    </form></main>;
     return (
       <main className="pos-login-shell">
         <form className="pos-login-card" onSubmit={(event) => void login(event)}>
@@ -1240,6 +1267,7 @@ export function App() {
         approvalPairingId={approvalPairingId} approvalCode={approvalCode} onApprovalPairingId={setApprovalPairingId}
         onApprovalCode={setApprovalCode} onApprove={()=>void approveDevice()} onCancel={cancelDevicePairing}
         onRevoke={revokeDevice} onRefresh={()=>void refreshDeviceAdmin('refresh')}
+        onCreateBackup={createBackup} onConfigureOffDevice={configureOffDeviceBackup} onExportRecoveryKey={exportRecoveryKey} onRestoreBackup={restoreBackup}
         onClose={()=>{if(!deviceAdminBusy){setDeviceAdminOpen(false);setDeviceAdminError(null);setDeviceAdminNotice(null);}}}/>
       }
       {connection === 'DISCONNECTED' && (

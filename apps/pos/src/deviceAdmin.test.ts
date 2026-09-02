@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { renderToString } from 'react-dom/server';
 import { createElement } from 'react';
 import type { EdgeClient } from '@comanview/client-sdk';
-import type { Device, InstallationReadiness, PairingStatusResponse } from '@comanview/contracts';
+import type { Device, InstallationReadiness, PairingStatusResponse,BackupProtectionStatus } from '@comanview/contracts';
 import { DeviceAdminPanel, focusPairingApproval } from './DeviceAdminPanel.js';
 import { clearPairingApproval, deviceAdminErrorMessage, deviceDisplayName, deviceInstallationPresentation, effectivePairingStatus, groupPairings, loadDeviceAdminState, shouldClearPairingApproval } from './deviceAdmin.js';
 import { EdgeClientError } from '@comanview/client-sdk';
@@ -18,17 +18,19 @@ describe('POS Device administration', () => {
     };
     const client: Pick<
       EdgeClient,
-      'getDevices' | 'getPendingPairings' | 'getInstallationReadiness'
+      'getDevices' | 'getPendingPairings' | 'getInstallationReadiness' | 'getBackupStatus'
     > = {
       getDevices: vi.fn(async () => ({ data: [] })),
       getPendingPairings: vi.fn(async () => ({ data: [] })),
       getInstallationReadiness: vi.fn(async () => readiness),
+      getBackupStatus:vi.fn(async()=>backup()),
     };
 
     await expect(loadDeviceAdminState(client)).resolves.toEqual({
       devices: [],
       pairings: [],
       readiness: expect.objectContaining({ technicalHealth: 'READY' }),
+      backup:expect.objectContaining({recoveryState:'NORMAL'}),
     });
     expect(client.getDevices).toHaveBeenCalledOnce();
     expect(client.getPendingPairings).toHaveBeenCalledOnce();
@@ -104,6 +106,8 @@ describe('POS Device administration', () => {
     expect(deviceDisplayName(first,[first,second])).toBe('POS principal · POS · …000721');
     expect(deviceAdminErrorMessage(new EdgeClientError('raw','DEVICE_LIMIT_REACHED',409)))
       .toBe('Se alcanzó el límite de dispositivos activos para este tipo.');
+    expect(deviceAdminErrorMessage(new EdgeClientError('raw','BACKUP_DESTINATION_UNAVAILABLE',409)))
+      .toContain('destino externo no está disponible');
   });
 
   it('keeps contextual feedback visible and disables pairing actions while approval is pending', () => {
@@ -140,6 +144,25 @@ describe('POS Device administration', () => {
     const setId=vi.fn(),setCode=vi.fn();clearPairingApproval(setId,setCode);
     expect(setId).toHaveBeenCalledWith('');expect(setCode).toHaveBeenCalledWith('');
   });
+
+  it('shows honest backup readiness and exposes restore only for verified artifacts',()=>{
+    const verified={backupId:'01991a00-0000-7000-8000-000000000499',status:'VERIFIED' as const,trigger:'MANUAL' as const,
+      destinationType:'LOCAL' as const,createdAt:'2026-09-01T12:00:00.000Z',completedAt:'2026-09-01T12:00:01.000Z',
+      verifiedAt:'2026-09-01T12:00:01.000Z',sizeBytes:1024,failureCode:null};
+    const html=renderToString(createElement(DeviceAdminPanel,panelProps({state:{devices:[],pairings:[],readiness:readiness(),
+      backup:{...backup(),localBackupStatus:'READY',lastVerifiedBackup:verified,recentBackups:[verified]}}})));
+    expect(html).toContain('Backup y recuperación');expect(html).toContain('Preparar restauración');
+    expect(html).toContain('Destino off-device');expect(html).toContain('Sin configurar');
+    expect(html).toContain('Crear backup local');expect(html).toContain('Crear backup externo');
+    expect(html).toMatch(/disabled=""[^>]*>Crear backup externo<\/button>/);
+  });
+
+  it('enables the external backup action once its destination is configured',()=>{
+    const html=renderToString(createElement(DeviceAdminPanel,panelProps({state:{devices:[],pairings:[],readiness:readiness(),
+      backup:{...backup(),offDeviceBackupStatus:'NOT_READY'}}})));
+    expect(html).toContain('Crear backup externo');
+    expect(html).not.toMatch(/disabled=""[^>]*>Crear backup externo<\/button>/);
+  });
 });
 
 function device(deviceId:string,displayName:string,status:Device['status']):Device{return {deviceId,displayName,type:'POS',status,
@@ -147,8 +170,11 @@ function device(deviceId:string,displayName:string,status:Device['status']):Devi
   revokedAt:status==='REVOKED'?'2026-08-29T12:02:00.000Z':null};}
 function pairing(pairingId:string,value:Device,status:PairingStatusResponse['status'],expiresAt:string):PairingStatusResponse{return {pairingId,status,device:value,expiresAt};}
 function readiness():InstallationReadiness{return {technicalHealth:'READY',operationalReadiness:'READY',productionReadiness:'NOT_READY',licensingStatus:'VALID',components:[]};}
-function panelProps(overrides:Partial<Parameters<typeof DeviceAdminPanel>[0]>={}) { return {
+function backup():BackupProtectionStatus{return {recoveryState:'NORMAL',localBackupStatus:'NOT_READY',offDeviceBackupStatus:'NOT_CONFIGURED',workerStatus:'IDLE',lastSuccessfulBackup:null,lastVerifiedBackup:null,lastFailure:null,recoveryKeyAvailable:true,recoveryKeyExported:false,recoveryPreparedness:'NOT_READY',nextPeriodicBackupAt:null,recentBackups:[]};}
+function panelProps(overrides:any={}) { return {
   state:null,loading:false,error:null,notice:null,busyAction:null,currentDeviceId:null,canPair:true,canRevoke:true,
   approvalPairingId:'',approvalCode:'',onApprovalPairingId:vi.fn(),onApprovalCode:vi.fn(),onApprove:vi.fn(),
-  onCancel:vi.fn(async()=>undefined),onRevoke:vi.fn(async()=>undefined),onRefresh:vi.fn(),onClose:vi.fn(),...overrides,
+  onCancel:vi.fn(async()=>undefined),onRevoke:vi.fn(async()=>undefined),onRefresh:vi.fn(),
+  onCreateBackup:vi.fn(async()=>undefined),onConfigureOffDevice:vi.fn(async()=>undefined),onExportRecoveryKey:vi.fn(async()=>'key'),onRestoreBackup:vi.fn(async()=>undefined),
+  onClose:vi.fn(),...overrides,...(overrides.state?{state:{...overrides.state,backup:overrides.state.backup??backup()}}:{}),
 }; }

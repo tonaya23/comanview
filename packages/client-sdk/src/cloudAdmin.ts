@@ -49,6 +49,8 @@ import {
   type IssueInstallationAuthorizationRequest,
   type IssuedInstallationAuthorization,
   type InstallationAuthorizationStatus,
+  IssueRecoveryAuthorizationRequestSchema,IssuedRecoveryAuthorizationSchema,
+  type IssuedRecoveryAuthorization,
 } from '@comanview/contracts';
 
 interface Schema<T> { parse(value: unknown): T }
@@ -98,6 +100,7 @@ export interface CloudAdminClient {
   createPlan(input: { commandId: string; code: string; displayName: string; capabilities: CapabilityCode[]; deviceLimits:DeviceLimits; reason: string }): Promise<CloudPlan>;
   issueInstallationAuthorization(locationId:string,input:IssueInstallationAuthorizationRequest):Promise<IssuedInstallationAuthorization>;
   getLatestInstallationAuthorization(locationId:string):Promise<{authorization:InstallationAuthorizationStatus|null}>;
+  issueRecoveryAuthorization(locationId:string,input:{commandId:string;sourceEdgeId:string;targetEdgeId:string;backupId:string;reason:string}):Promise<IssuedRecoveryAuthorization>;
   getLocationLicense(locationId: string): Promise<LocationLicenseAssignment>;
   assignLocationLicense(locationId: string, input: { commandId: string; expectedRevision: number; planId: string; declaredState: LicenseDeclaredState; configuration: EdgeConfiguration; reason: string }): Promise<LocationLicenseAssignment>;
   updateLocationLicenseState(locationId: string, input: { commandId: string; expectedRevision: number; declaredState: LicenseDeclaredState; reason: string }): Promise<LocationLicenseAssignment>;
@@ -158,6 +161,7 @@ export function createCloudAdminClient(options: CloudAdminClientOptions = {}): C
     createPlan: (input) => request('/admin/v1/plans', CloudPlanSchema, { method: 'POST', body: JSON.stringify(input) }),
     issueInstallationAuthorization:(locationId,input)=>request(`/admin/v1/locations/${locationId}/installation-authorizations`,IssuedInstallationAuthorizationSchema,{method:'POST',body:JSON.stringify(input)}),
     getLatestInstallationAuthorization:(locationId)=>request(`/admin/v1/locations/${locationId}/installation-authorizations/latest`,LatestInstallationAuthorizationResponseSchema),
+    issueRecoveryAuthorization:(locationId,input)=>request(`/admin/v1/locations/${locationId}/recovery-authorizations`,IssuedRecoveryAuthorizationSchema,{method:'POST',body:JSON.stringify(IssueRecoveryAuthorizationRequestSchema.parse(input))}),
     getLocationLicense: (locationId) => request(`/admin/v1/locations/${locationId}/license`, LocationLicenseAssignmentSchema),
     assignLocationLicense: (locationId, input) => request(`/admin/v1/locations/${locationId}/license`, LocationLicenseAssignmentSchema, { method: 'PUT', body: JSON.stringify(input) }),
     updateLocationLicenseState: (locationId, input) => request(`/admin/v1/locations/${locationId}/license/state`, LocationLicenseAssignmentSchema, { method: 'PATCH', body: JSON.stringify(input) }),

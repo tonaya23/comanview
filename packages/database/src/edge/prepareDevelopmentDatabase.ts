@@ -44,6 +44,9 @@ const licensingConfigurationMigrationPath = fileURLToPath(
 const devicePairingMigrationPath = fileURLToPath(
   new URL('../../../../migrations/edge/0013_device_pairing_readiness.sql', import.meta.url),
 );
+const backupRecoveryMigrationPath = fileURLToPath(
+  new URL('../../../../migrations/edge/0014_backup_recovery.sql', import.meta.url),
+);
 const defaultDatabasePath = fileURLToPath(
   new URL('../../../../apps/edge/edge-dev.db', import.meta.url),
 );
@@ -102,6 +105,8 @@ export function prepareDevelopmentDatabase(
     if (!hasControlRuntime) sqlite.exec(readFileSync(licensingConfigurationMigrationPath, 'utf8'));
     const hasDeviceCredentials = sqlite.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='device_credentials'").get();
     if (!hasDeviceCredentials) sqlite.exec(readFileSync(devicePairingMigrationPath, 'utf8'));
+    const hasBackupRecords = sqlite.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='backup_records'").get();
+    if (!hasBackupRecords) sqlite.exec(readFileSync(backupRecoveryMigrationPath, 'utf8'));
 
     const seed = sqlite.transaction(() => {
       const insertCategory = sqlite.prepare(

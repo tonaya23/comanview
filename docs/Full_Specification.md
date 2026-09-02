@@ -15426,6 +15426,15 @@ Preservar suficientes puntos de recuperación.
 
 Considerar capacidad disponible de almacenamiento.
 
+**Implementación 1V:** 24 copias recientes, 7 buckets diarios y 4 semanales, deduplicando un artifact que satisfaga varios buckets. El último artifact `VERIFIED` nunca se elimina por un intento posterior fallido.
+
+El upgrade local de una instalación 1U establecida a 1V se resuelve antes del startup operacional:
+preflight readonly, safety snapshot SQLite consistente y cifrado, migration incremental 0014,
+inicialización/fusión monotónica del Security Floor y validación. Es reintentable mediante un journal
+de lifecycle protegido, no necesita Cloud ni preparación de desarrollo y no implementa OTA. Una
+transición incompleta no se anuncia sana; estados ambiguos fallan cerrado. El procedimiento técnico
+y las restricciones de reanudación están en §11.11 de `Master_Technical_Specification.md`.
+
 ## 11.16 Backup local y backup externo
 
 ComanView deberá contemplar al menos dos niveles de protección:
@@ -15479,6 +15488,8 @@ Full recoverable Edge backup exists
 Esta distinción es obligatoria.
 
 ## 11.18 Backup Cloud
+
+**Estado 1V:** el formato cifrado está implementado para `LOCAL` y filesystem `OFF_DEVICE`. Object storage Cloud queda diferido; no se presenta Sync ni una abstracción vacía como Cloud Backup. `OFF_DEVICE` expresa un destino configurado separado, pero V1 no certifica que el path resida en otro disco físico.
 
 Cuando exista conectividad, Edge deberá poder enviar backups o paquetes de recuperación hacia almacenamiento protegido.
 
@@ -15877,6 +15888,29 @@ Resume operation
 ```
 
 La recuperación SHOULD evitar reconstrucción manual de información crítica.
+
+En un restore autorizado hacia hardware nuevo, todos los Devices, credentials y sesiones contenidos en el snapshot quedan revocados. Esto evita que una copia anterior resucite un Device revocado después de haberse creado; los terminales del reemplazo deben emparejarse nuevamente. El Security Floor del mismo Edge aplica además sus máximos monotónicos y un filtro acotado de revocaciones con comportamiento fail-closed.
+
+El journal no puede convertir un fallo pre-swap en una fase post-swap. El hash del staging verificado
+demuestra el swap incluso si el rename precedió al guardado de `SWAPPED`; `VALIDATING` requiere esa DB
+o el comprobante de recovery del Audit Log confirmado en la misma transacción que epoch/revocaciones.
+Una fase sin evidencia suficiente, incluido un journal antiguo sin hash, permanece fail-closed.
+
+El Security Floor gobierna Licensing efectivo, no solamente persiste máximos. Revisiones antiguas
+no se activan; una misma revisión no reduce sticky state. Una revisión LICENSE estrictamente superior,
+firmada, válida temporalmente y ligada al Edge, puede autorizar reactivación mediante la ruta central
+protegida. Mutaciones genéricas, restore, merge y ACK no pueden hacerlo. El floor conserva únicamente
+revisión/hash/restricción y evidencia mínima de preparación; el documento se prepara no-current en
+SQLite, se confirma la decisión externa y después se activa. Startup reanuda una activación interrumpida
+con evidencia coincidente; una copia antigua nunca sustituye esa decisión. No se altera la monotonicidad
+absoluta de epoch, revocaciones, binding o Recovery Key.
+
+Las escrituras del floor se serializan entre escritores y rechazan snapshots stale o regresiones de
+seguridad, incluso mediante `save`. Restore conserva su journal hasta persistir también en el floor
+las revocaciones de SQLite; solo después permite `COMPLETED` y startup normal. El retry vuelve a aplicar
+esa fusión idempotente. Production Readiness no puede ser `READY` con `BACKUP_PROTECTION_INCOMPLETE`:
+requiere copias LOCAL/OFF_DEVICE vigentes, clave disponible/exportada, recovery NORMAL y worker no
+degradado, conforme a §11.10.1 de `Master_Technical_Specification.md`.
 
 ## 11.29 Reemplazo de Edge
 

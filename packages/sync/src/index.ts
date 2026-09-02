@@ -31,10 +31,11 @@ export const SyncEventEnvelopeSchema = z.object({
   edgeId: z.string().uuid(),
   occurredAt: z.string().datetime(),
   localSequence: z.number().int().nonnegative(),
+  recoveryEpoch: z.number().int().nonnegative().default(0),
   aggregateVersion: z.number().int().nonnegative().nullable(),
   payload: JsonObjectSchema,
 });
-export type SyncEventEnvelope = z.infer<typeof SyncEventEnvelopeSchema>;
+export type SyncEventEnvelope = z.input<typeof SyncEventEnvelopeSchema>;
 
 export const SyncBatchRequestSchema = z.object({
   protocolVersion: z.literal(SYNC_PROTOCOL_VERSION),

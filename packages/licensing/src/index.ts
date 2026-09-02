@@ -20,6 +20,10 @@ import {
   InstallationAuthorizationPayloadSchema,
   type InstallationAuthorizationEnvelope,
   type InstallationAuthorizationPayload,
+  RecoveryAuthorizationEnvelopeSchema,
+  RecoveryAuthorizationPayloadSchema,
+  type RecoveryAuthorizationEnvelope,
+  type RecoveryAuthorizationPayload,
 } from '@comanview/contracts';
 
 export const LICENSE_DOCUMENT_DURATION_MS = 7 * 24 * 60 * 60 * 1_000;
@@ -58,6 +62,31 @@ function zInstallationHeader(value:unknown):{typ:'comanview-installation-authori
   const h=value as Record<string,unknown>;
   if(h['typ']!=='comanview-installation-authorization'||h['formatVersion']!==1||h['alg']!=='EdDSA'||typeof h['kid']!=='string'||!h['kid']) throw new Error('INSTALLATION_AUTHORIZATION_INVALID_HEADER');
   return h as ReturnType<typeof zInstallationHeader>;
+}
+
+export function signRecoveryAuthorization(payload: RecoveryAuthorizationPayload, kid: string,
+  privateKeyPem: string): RecoveryAuthorizationEnvelope {
+  const protectedValue=base64urlJson({typ:'comanview-recovery-authorization',formatVersion:1,alg:'EdDSA',kid});
+  const payloadValue=base64urlJson(payload);
+  return {protected:protectedValue,payload:payloadValue,
+    signature:sign(null,Buffer.from(`${protectedValue}.${payloadValue}`,'ascii'),
+      createPrivateKey(privateKeyPem)).toString('base64url')};
+}
+
+export function verifyRecoveryAuthorization(input:unknown,publicKeyring:Readonly<Record<string,string>>):
+  {payload:RecoveryAuthorizationPayload;kid:string} {
+  const envelope=RecoveryAuthorizationEnvelopeSchema.parse(input);
+  const raw=parseBase64urlJson(envelope.protected);
+  if(!raw||typeof raw!=='object')throw new Error('RECOVERY_AUTHORIZATION_INVALID_HEADER');
+  const header=raw as Record<string,unknown>;
+  if(header['typ']!=='comanview-recovery-authorization'||header['formatVersion']!==1||
+    header['alg']!=='EdDSA'||typeof header['kid']!=='string'||!header['kid'])
+    throw new Error('RECOVERY_AUTHORIZATION_INVALID_HEADER');
+  const key=publicKeyring[header['kid']];
+  if(!key)throw new Error('RECOVERY_AUTHORIZATION_UNKNOWN_KID');
+  if(!verify(null,Buffer.from(`${envelope.protected}.${envelope.payload}`,'ascii'),createPublicKey(key),
+    Buffer.from(envelope.signature,'base64url')))throw new Error('RECOVERY_AUTHORIZATION_INVALID_SIGNATURE');
+  return {payload:RecoveryAuthorizationPayloadSchema.parse(parseBase64urlJson(envelope.payload)),kid:header['kid']};
 }
 
 function parseBase64urlJson(value: string): unknown {

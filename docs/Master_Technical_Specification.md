@@ -3794,7 +3794,138 @@ Validate backup
 
 La arquitectura SHOULD permitir recuperación Offline cuando exista un backup válido, pero MUST exigir una autorización de recuperación verificable localmente. Copiar un backup MUST NOT permitir clonar libremente una instalación productiva. Un Recovery Package MAY combinar Backup, Metadata, Integrity Proof y Recovery Authorization.
 
+### 11.10.1 Implementación 1V
+
+`BackupManager` usa `better-sqlite3 Database.backup()` bajo WAL. El artifact v1 contiene manifest no secreto y `database.enc`; el payload se cifra con una DEK aleatoria AES-256-GCM y la DEK se envuelve con una Recovery Key de 256 bits. El estado local de esa clave y el Security Floor se protege con DPAPI en Windows productivo; development/test exige un modo explícito.
+
+El Security Floor externo contiene solamente binding de instalación, `recoveryEpoch`, máximas revisiones firmadas, sticky licensing, un Bloom filter acotado de Devices revocados y el journal mínimo de recovery. No contiene estado transaccional. Su ausencia ante una DB con schema 1V, o su corrupción, entra fail-closed en `RECOVERY_REQUIRED`; el archivo corrupto se preserva. Una DB legacy pre-1V con credencial Edge durable puede migrar una vez sin ser confundida con instalación nueva. Restore realiza verify/decrypt en staging, preserva DB/WAL/SHM anteriores, hace swap por fases durable, valida integridad y fusiona el floor monotónicamente. El Bloom filter es acotado y deliberadamente fail-closed: un falso positivo puede exigir re-pair de un Device, nunca reactivar uno revocado. En hardware replacement invalida documentos firmados del Edge origen y todos los Devices, credentials y sesiones restaurados; el nuevo Edge debe converger a sus documentos firmados y emparejar Devices de nuevo.
+
+Sync identifica el orden local mediante `(edgeId, recoveryEpoch, localSequence)`; datos anteriores usan epoch `0`. Tras restore, eventos todavía no sincronizados se asignan al nuevo epoch conservando `eventId`, mientras historia y receipts Cloud anteriores permanecen intactos.
+
+Todas las escrituras del Security Floor pasan por una primitive central: `mutate` transforma el estado
+vigente bajo exclusión, y `save` compara el checksum de origen de la copia derivada con el estado vigente.
+Ambas rechazan retrocesos de epoch, versiones, revisiones, sticky Licensing, revocaciones, binding y
+Recovery Key/exportación. Una cola por ruta canónica y un lock entre procesos (`proper-lockfile`, lease
+30 s con renovación cada 10 s) protegen lectura/modificación/escritura y recuperación de corrupción.
+Un lock ocupado falla cerrado; uno abandonado permite reintento tras expirar. No se elimina manualmente
+un lock activo. Una pérdida de lease detiene el escritor. El temporal de cada escritura es único y se
+sincroniza antes del rename. No se agrega estado operacional ni se cambia el formato del artifact.
+Los ACK demorados solo retiran el ACK exacto que confirmaron, sobre el floor más reciente.
+
+La monotonicidad de Licensing está vinculada a la revisión firmada: una revisión inferior nunca es
+current/efectiva; una igual no retira sticky state ni sustituye una decisión con hash distinto. Solo
+`applySignedLicenseTransition` puede cambiar sticky state con una revisión estrictamente superior,
+tras verificar Ed25519/kid, binding exacto y vigencia dentro del lock. Esto permite la reactivación
+firmada aprobada en 1U; no hace TERMINATED/SUSPENDED irreversibles ante una nueva decisión válida.
+`mutate`/`save` genéricos no pueden retirar restricciones aunque aumenten la revisión, ni crear,
+reemplazar o borrar la evidencia de esa decisión. Epoch, revocaciones, binding y claves mantienen
+su monotonicidad absoluta.
+
+El floor añade únicamente `licenseDecision` (revisión, hash del envelope, restricción asociada) y
+`licensePending` (revisión/hash de preparación). El documento completo permanece en SQLite. Bajo el
+mismo lock, el escritor registra preparación, guarda el documento no-current, confirma la decisión
+del floor y activa SQLite sin awaits intermedios. Una preparación interrumpida no concede autoridad:
+su documento no-current no aumenta máximos mediante merge y puede reintentarse por pull. Si la decisión
+ya se confirmó, startup autentica el envelope preparado con ese hash y termina idempotentemente su
+activación antes de validar el estado productivo. No se requiere Cloud para terminar esa ventana.
+Un snapshot antiguo puede carecer del documento autorizado: se invalida lo anterior, se conserva el
+floor y no se concede FULL; una recepción posterior válida puede recuperar el documento exacto.
+Restore/merge jamás equivale a una nueva decisión comercial firmada ni revive sticky de una revisión
+obsoleta por encima de una reactivación ya autorizada y persistida.
+
+EffectiveCapabilities/Orders consultan una vista autenticada del floor, no solo `is_current`. Esa vista
+se invalida cuando cambia el archivo protegido (también por otro proceso); sin una vista vigente no
+se concede una licencia current. Los ACK de LICENSE no confirman revisiones inferiores al floor ni
+hashes distintos de su decisión. Las garantías existentes de turno y operaciones protegidas siguen
+siendo excepciones operacionales explícitas, no reactivaciones comerciales.
+
+En restore, primero se confirma SQLite con sus revocaciones y restricciones; después se fusiona y
+persiste el floor externo, conservando el journal `SWAPPED`/`VALIDATING`. Solo entonces se retira el
+journal y se declara `NORMAL`/`COMPLETED`. Una interrupción entre esas etapas repite SQL y fusión
+idempotentes al reiniciar. Esto incluye las revocaciones de todos los Devices/credentials/sesiones de
+hardware replacement antes de que el guard productivo valide SQLite contra el floor, sin debilitarlo.
+
+El journal de restore incluye el SHA-256 del staging verificado y sincronizado. Solo esa copia aislada
+se consolida a SQLite sin WAL antes de calcular el hash; la DB fuente no se altera. Las fases conservan
+estos significados: `PREPARING` registra staging/evidencia e intención, y puede haber preservación parcial
+de la DB anterior; `QUIESCED` confirma que terminó esa preservación, no que ocurrió el swap; `SWAPPED`
+confirma que la DB activa coincide con el snapshot esperado; `VALIDATING` permite iniciar o reintentar la
+transacción sobre esa DB. Ningún catch adelanta la fase durable: conserva journal y `RECOVERY_REQUIRED`.
+Ante un crash entre rename físico y `SWAPPED`, solo se reconoce el swap si falta staging y la DB activa
+coincide con el hash esperado, sin sidecars ambiguos y con schema/integridad válidos. Si existen ambas DB,
+faltan evidencias o no coinciden, falla cerrado; nunca sustituye una evidencia preservada.
+
+La transacción de validación inserta `RECOVERY_VALIDATED` en el Audit Log existente usando `recoveryId`
+como identificador único. El comprobante vincula recovery, backup, hash del staging, binding y epoch, y se
+confirma atómicamente con epoch/revocaciones/Licensing. Un retry `VALIDATING` exige el snapshot pristine
+o ese comprobante exacto con binding/epoch consistentes; no basta el nombre de la fase. Después vuelve a
+validar schema/integridad y fusionar el floor antes de retirar el journal y publicar `NORMAL`/`COMPLETED`.
+No duplica el comprobante al reiniciar. Journals previos sin hash y estados ambiguos permanecen en
+`RECOVERY_REQUIRED`; requieren volver a preparar un restore verificado, no asumir que el swap ocurrió.
+Un error posterior a guardar el journal tampoco elimina staging aún referenciado o cuya referencia no
+puede comprobarse. No se agregan tablas/migrations, datos operacionales al floor ni otro protocolo de backup.
+
+Production Readiness requiere recuperación `NORMAL`, backup LOCAL y OFF_DEVICE verificados vigentes
+(máximo 4 horas; el externo debe corresponder al destino configurado), Recovery Key disponible y
+exportada, y worker no `DEGRADED`. Un worker `RUNNING` puede seguir protegido por copias vigentes.
+`BACKUP_PROTECTION_INCOMPLETE` nunca agrega `READY` a producción; la falta de protección no bloquea
+por sí sola la operación offline ni cambia las demás condiciones operacionales de readiness.
+
+La superficie de emergencia se expone solo en loopback cuando una instalación establecida no puede abrir SQLite. Requiere el artifact y la Recovery Key; hardware replacement requiere además `RecoveryAuthorization` Cloud firmada y single-use. Una barrera común impide solapar backup y preparación de restore; el safety backup interno es best-effort y nunca permite carreras con otra copia. Las operaciones normales de backup/restore permanecen RBAC-protected y auditadas. Cloud object storage no se simula en 1V: solo `LOCAL` y filesystem `OFF_DEVICE` están implementados. `OFF_DEVICE` significa un path configurado distinto; V1 no afirma que esté en otro disco físico porque el filesystem no ofrece una comprobación portable y fiable para todos los destinos.
+
 ## 11.11 Migrations
+
+### Upgrade productivo local 1U → 1V
+
+El lifecycle de `buildApp` ejecuta `prepareProductionRecoveryUpgrade` después de resolver un restore
+pendiente y **antes de `initDatabase`, repositorios, workers o listen**. El entry point real activa esta
+comprobación; `NODE_ENV=production` también la exige al invocar `buildApp` directamente. No usa Cloud,
+`dev:prepare`, provisioning nuevo ni el laboratorio. El servicio 1U debe estar detenido y el nuevo servicio
+debe conservar la misma cuenta Windows/DPAPI, rutas de DB, credenciales y Security Floor. El paquete
+desplegado debe incluir los SQL históricos de `migrations/edge` junto con los módulos compilados.
+
+El preflight abre SQLite con `readonly` y `fileMustExist`, exige `integrity_check` y `foreign_key_check`,
+y compara el schema real con el producido por los SQL inmutables 0000–0013/0014. No basta encontrar
+`recovery_epoch`. Los esquemas parciales, desconocidos o personalizados requieren diagnóstico, no una
+migration tentativa. El `user_version` legacy 0 se acepta solo junto con ese schema conocido; la
+transición registra 14. Comprueba identidad ACTIVE, binding Edge/Tenant/Location real, credencial durable
+activa correspondiente al `credential_id` y epoch legacy 0. Un floor previo se conserva y fusiona, nunca
+se reemplaza por el contenido más antiguo de SQLite.
+
+Antes de mutar SQLite se toma un writer lock (`BEGIN IMMEDIATE`) y se revalida el estado. Se persiste
+un `upgradeJournal` pequeño en el Security Floor DPAPI: versión del journal, schemas 13/14, ruta de DB,
+identificador/ruta del safety snapshot, hash de 0014 y fase `PREPARING`/`SNAPSHOT_READY`. La escritura
+del floor sincroniza el archivo temporal antes del rename. Este journal no contiene datos operacionales.
+La Recovery Key queda protegida antes de crear el snapshot. Una conexión readonly separada utiliza
+`Database.backup()` para obtener un snapshot WAL consistente, que reutiliza el artifact AES-256-GCM de
+1V con schema 13, bajo `.upgrade-1v` junto a la DB. Se verifica antes de autorizar la migration. El fallo
+de snapshot aborta; no hay copia ingenua de DB/WAL ni fallback a una DB vacía. Estos artifacts de schema
+13 son evidencia de mantenimiento, no se aceptan en los endpoints normales de restore 1V; no se borran
+automáticamente. No se deben eliminar floor, journal o snapshots para intentar desbloquear el startup.
+
+El runner ejecuta el SQL incremental 0014 existente dentro de una transacción, sin alterar migrations
+históricas. El harness comparte el ejecutor SQL sobre sus copias aisladas, pero conserva su propio
+preflight de laboratorio. El commit SQLite precede a la inicialización final del floor; `SNAPSHOT_READY`
+permite reconocer exactamente la ventana post-migration/pre-floor. Al reintentar se autentica el
+snapshot y se comparan sus columnas operacionales legacy con la DB, en streaming, sin guardar una
+segunda base operacional en el floor. Se conservan IDs, Orders, Payments, Cash, Event Log y Audit.
+
+La fusión toma máximos de signed revisions, sticky SUSPENDED/TERMINATED y revocaciones tanto del
+snapshot como del floor externo y la DB vigente; propaga las restricciones más fuertes a Devices,
+credentials, sesiones y documentos actuales. No incrementa el epoch por un upgrade: legacy permanece
+en 0. Valida schema 14, integridad, binding, epoch, floor persistido, Licensing, revocaciones y estructuras
+de repositorios 1V antes de retirar el journal y declarar `UPGRADE COMPLETED`. El floor registra
+`minimumSchemaVersion=14`, que rechaza un rollback posterior a schema 13 incluso con epoch 0.
+
+Un restart en `PREPARING` puede crear un nuevo snapshot; en `SNAPSHOT_READY` revalida la evidencia y
+migra solo si todavía existe schema 13. Si ya existe schema 14 continúa la inicialización/verificación,
+sin reaplicar 0014. Con journal retirado y floor válido, startup es idempotente. Missing/corrupt DB,
+snapshot inválido, downgrade, binding incompatible, floor inválido o schema 14 sin floor ni journal
+válido producen `RECOVERY_REQUIRED` y un código diagnóstico seguro, sin abrir repositorios operacionales.
+Una interrupción con journal válido permite retry al reiniciar; un estado ambiguo requiere diagnóstico
+local. Un FIRST_BOOT genuino no crea DB desde este mecanismo y sigue el provisioning existente.
+
+Este lifecycle es independiente del medio de distribución del software. No implementa OTA ni 1W.
 
 Todos los cambios de DB utilizarán migrations versionadas.
 
@@ -6017,6 +6148,8 @@ Los límites firmados por tipo son `POS/WAITER/KDS: integer | null`. Un document
 conserva Devices existentes pero bloquea nuevos pairings. La identidad browser vive en IndexedDB;
 clonado de perfil y XSS same-origin son limitaciones conocidas de V1.
 
-Installation Readiness se deriva del estado durable y se mantiene separado de `/health`. Backup
-permanece `PENDING_1V`, por lo cual Production Readiness no puede ser READY en 1U. El procedimiento,
-threat model y deuda de validación manual están en `docs/Development_Device_Pairing.md`.
+Installation Readiness se deriva del estado durable y se mantiene separado de `/health`. En 1U Backup
+permanecía `PENDING_1V`; desde 1V se deriva de artifacts `VERIFIED`, antigüedad, destino off-device y
+evidencia de exportación de Recovery Key. La ausencia de esas protecciones mantiene Production Readiness
+en `NOT_READY`/degradado sin bloquear la operación. El procedimiento y threat model de Device Pairing
+permanecen en `docs/Development_Device_Pairing.md`.

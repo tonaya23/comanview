@@ -9,6 +9,7 @@ import {
   CloudLicensingRepository,
   CloudReadRepository,
   CloudSyncRepository,
+  CloudRecoveryRepository,
   createCloudDatabase,
 } from '@comanview/database';
 import {
@@ -40,6 +41,8 @@ import {
 import { CloudLicensingService } from './licensing/CloudLicensingService.js';
 import { registerCloudLicensingRoutes } from './licensing/routes.js';
 import { LicensingConflictError } from '@comanview/database';
+import { RecoveryAuthorizationConflictError } from '@comanview/database';
+import { CloudRecoveryService } from './recovery/CloudRecoveryService.js';
 
 const RawSyncBatchSchema = z.object({
   protocolVersion: z.string(),
@@ -61,6 +64,7 @@ export interface BuildCloudAppOptions {
   admin?: CloudAdminRouteDependencies;
   controlPlane?: CloudControlPlaneService;
   licensing?: CloudLicensingService;
+  recovery?: CloudRecoveryService;
 }
 
 export function buildCloudApp(options: BuildCloudAppOptions) {
@@ -95,6 +99,9 @@ export function buildCloudApp(options: BuildCloudAppOptions) {
     }
     if (error instanceof LicensingConflictError) {
       return reply.status(409).send({ error: error.code, message: 'Licensing state changed or does not allow this operation.' });
+    }
+    if(error instanceof RecoveryAuthorizationConflictError){
+      return reply.status(409).send({error:error.code,message:'Recovery authorization state does not allow this operation.'});
     }
     const requestError = error as Error & { statusCode?: number };
     if (typeof requestError.statusCode === 'number' && requestError.statusCode < 500) {
@@ -148,6 +155,7 @@ export function buildCloudApp(options: BuildCloudAppOptions) {
     if (options.controlPlane) registerCloudControlPlaneRoutes(app, { auth: options.admin.auth, service: options.controlPlane });
     if (options.licensing) registerCloudLicensingRoutes(app, {
       auth: options.admin.auth, authenticator, service: options.licensing,
+      ...(options.recovery?{recovery:options.recovery}:{}),
     });
   }
 
@@ -165,6 +173,8 @@ async function start(): Promise<void> {
   const licensing = config.licensing
     ? new CloudLicensingService(licensingRepository, config.licensing)
     : undefined;
+  const recovery=licensing&&config.licensing
+    ?new CloudRecoveryService(new CloudRecoveryRepository(database.pool),config.licensing):undefined;
   const controlPlane = new CloudControlPlaneService(
     new CloudControlPlaneRepository(database.pool), config.provisioning, () => new Date(),
     licensing ? async (locationId) => {
@@ -181,6 +191,7 @@ async function start(): Promise<void> {
     admin: { auth: adminAuth, read: cloudRead, config: config.admin },
     controlPlane,
     ...(licensing ? { licensing } : {}),
+    ...(recovery ? { recovery } : {}),
   });
   app.addHook('onClose', () => database.close());
   try {

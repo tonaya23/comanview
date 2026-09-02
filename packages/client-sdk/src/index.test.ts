@@ -313,6 +313,17 @@ describe('createEdgeClient', () => {
     })).resolves.toEqual({ cancelled: true });
   });
 
+  it('uses Bearer for normal restore but keeps the localhost emergency recovery request token-free',async()=>{
+    const fetchMock=vi.fn(async(input:string,init?:{headers?:Record<string,string>})=>{
+      if(input.endsWith('/recovery/restore'))expect(init?.headers?.['authorization']).toBe('Bearer owner-session');
+      else expect(init?.headers?.['authorization']).toBeUndefined();
+      return jsonResponse({scheduled:true,recoveryState:'RECOVERY_IN_PROGRESS'},202);
+    });
+    const client=createEdgeClient({baseUrl:'http://localhost:3000',fetch:fetchMock as EdgeFetch,getAccessToken:()=> 'owner-session'});
+    const common={commandId:'01991a00-0000-7000-8000-000000000501',backupId:'01991a00-0000-7000-8000-000000000502',confirmation:'RESTORE_VERIFIED_BACKUP' as const};
+    await client.restoreBackup(common);await client.emergencyRestore({...common,artifactPath:'C:\\Backups\\backup.cvbackup',recoveryKey:'a'.repeat(43)});
+  });
+
   it('requests and validates the Edge health endpoint', async () => {
     const fetchMock = vi.fn(async () =>
       jsonResponse({

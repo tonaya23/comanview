@@ -14,6 +14,7 @@ function claimed(overrides: Partial<ClaimedCloudEvent> = {}): ClaimedCloudEvent 
     locationId: '01991a00-0000-7000-8000-000000000302',
     edgeId: '01991a00-0000-7000-8000-000000000903',
     localSequence: 2,
+    recoveryEpoch: 0,
     payload: {
       paymentId: '01991a00-0000-7000-8000-000000000904',
       cashSessionId: '01991a00-0000-7000-8000-000000000905',

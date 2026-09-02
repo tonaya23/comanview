@@ -9,6 +9,8 @@ import {
   generateDeviceCredential,
   hashDeviceCredential,
   verifyDeviceCredential,
+  BASE_ROLE_PERMISSIONS,
+  PERMISSIONS,
 } from './index.js';
 
 describe('local authentication primitives', () => {
@@ -39,6 +41,12 @@ describe('local authentication primitives', () => {
     expect(verifyDeviceCredential(generateDeviceCredential(),hash)).toBe(false);
   });
 });
+
+describe('backup and recovery RBAC',()=>{it('allows OWNER recovery execution while MANAGER is limited to view/create',()=>{
+  expect(BASE_ROLE_PERMISSIONS.OWNER).toContain(PERMISSIONS.RECOVERY_EXECUTE);
+  expect(BASE_ROLE_PERMISSIONS.MANAGER).toEqual(expect.arrayContaining([PERMISSIONS.BACKUP_VIEW,PERMISSIONS.BACKUP_CREATE,PERMISSIONS.RECOVERY_VIEW]));
+  expect(BASE_ROLE_PERMISSIONS.MANAGER).not.toContain(PERMISSIONS.RECOVERY_EXECUTE);
+});});
 
 describe('Cloud Admin password hashing', () => {
   it('uses a separate versioned credential format and verifies safely', async () => {

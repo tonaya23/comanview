@@ -14,11 +14,11 @@
 
 import fastify, { LogController } from 'fastify';
 import websocket from '@fastify/websocket';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { serializerCompiler, validatorCompiler, ZodTypeProvider } from 'fastify-type-provider-zod';
-import { initDatabase, closeDatabase } from './infrastructure/database.js';
-import { errorHandler } from './app/errorHandler.js';
+import { initDatabase, closeDatabase, getRawDatabase } from './infrastructure/database.js';
+import { errorHandler,AppError } from './app/errorHandler.js';
 import {
   CashRepository,
   CatalogRepository,
@@ -31,6 +31,7 @@ import {
   SyncOutboxRepository,
   EdgeControlRepository,
   DeviceRepository,
+  BackupRepository,
 } from '@comanview/database';
 import { loadEdgeSyncConfig, type EdgeSyncConfig } from '@comanview/config';
 import { DebugPrinterAdapter, PrintWorker, type PrinterAdapter } from '@comanview/printing';
@@ -68,7 +69,15 @@ import { EdgeLicenseManager } from './modules/licensing/EdgeLicenseManager.js';
 import { ControlStateWorker } from './modules/licensing/ControlStateWorker.js';
 import { licensingRoutes } from './modules/licensing/routes.js';
 import { DeviceService } from './modules/devices/DeviceService.js';
+import { EntityId } from '@comanview/domain';
 import { deviceRoutes } from './modules/devices/routes.js';
+import { BackupManager, BackupWorker } from './modules/backup/BackupManager.js';
+import { backupRoutes } from './modules/backup/routes.js';
+import { createRecoverySecurityStore, MemoryRecoverySecurityStore, type RecoverySecurityStore } from './modules/backup/RecoverySecurityStore.js';
+import { RecoveryCoordinator,completePendingRecoveryAtStartup } from './modules/backup/RecoveryCoordinator.js';
+import { assessStartupDatabase } from './modules/backup/StartupRecoveryGuard.js';
+import { buildRecoveryRequiredApp } from './modules/backup/RecoveryRequiredApp.js';
+import { prepareProductionRecoveryUpgrade } from './modules/backup/ProductionRecoveryUpgrade.js';
 
 export interface BuildAppOptions {
   printerAdapter?: PrinterAdapter;
@@ -81,6 +90,11 @@ export interface BuildAppOptions {
   edgeSecretStore?: EdgeSecretStore;
   controlTransport?: HttpControlTransport;
   startControlWorker?: boolean;
+  startBackupWorker?: boolean;
+  recoverySecurityStore?: RecoverySecurityStore;
+  establishedInstallationEvidence?: boolean;
+  enforceEstablishedInstallationSafety?: boolean;
+  onPostZBackup?: () => void;
 }
 
 export async function buildApp(dbPath: string = ':memory:', options: BuildAppOptions = {}) {
@@ -97,6 +111,25 @@ export async function buildApp(dbPath: string = ':memory:', options: BuildAppOpt
   await app.register(websocket);
 
   // Initialize DB
+  const recoverySecurityStore=options.recoverySecurityStore??(dbPath===':memory:'||process.env['NODE_ENV']==='test'||process.env['VITEST']==='true'
+    ?new MemoryRecoverySecurityStore():createRecoverySecurityStore());
+  if(dbPath!==':memory:'){
+    await completePendingRecoveryAtStartup({dbPath:resolve(dbPath),store:recoverySecurityStore});
+    if(process.env['NODE_ENV']==='production'||options.enforceEstablishedInstallationSafety||
+      options.establishedInstallationEvidence||(await recoverySecurityStore.load()).upgradeJournal){
+      const upgrade=await prepareProductionRecoveryUpgrade({dbPath:resolve(dbPath),store:recoverySecurityStore,
+        edgeSecretStore:options.edgeSecretStore??createEdgeSecretStore()});
+      if(upgrade.state==='RECOVERY_REQUIRED')throw new AppError('RECOVERY_REQUIRED',503,
+        `Productive upgrade/startup stopped: ${upgrade.code??'UPGRADE_FAILED'}.`);
+      if(upgrade.state==='UPGRADED')app.log.info({fromSchema:13,toSchema:14},'UPGRADE COMPLETED');
+      if(upgrade.state==='FIRST_BOOT'&&process.env['NODE_ENV']==='production')
+        throw new Error('Edge is UNPROVISIONED. Complete durable provisioning before starting the service.');
+    }
+    const disposition=await assessStartupDatabase(resolve(dbPath),recoverySecurityStore,
+      options.establishedInstallationEvidence??false,options.enforceEstablishedInstallationSafety??false);
+    if(disposition==='RECOVERY_REQUIRED')throw new AppError('RECOVERY_REQUIRED',503,
+      'Operational database is unavailable; recovery is required.');
+  }
   const db = initDatabase(dbPath);
 
   // Setup Repositories
@@ -111,6 +144,7 @@ export async function buildApp(dbPath: string = ':memory:', options: BuildAppOpt
   const syncRepo = new SyncOutboxRepository(db);
   const controlRepo = new EdgeControlRepository(db);
   const deviceRepo = new DeviceRepository(db);
+  const backupRepo = new BackupRepository(db);
   const syncConfig = options.syncConfig ?? loadEdgeSyncConfig();
   const persistedIdentity = syncRepo.findIdentity();
   if (process.env['NODE_ENV'] === 'production' && !persistedIdentity) {
@@ -148,7 +182,7 @@ export async function buildApp(dbPath: string = ':memory:', options: BuildAppOpt
           syncConfig.requestTimeoutMs) : null);
   const licenseManager = new EdgeLicenseManager(controlRepo, controlTransport,
     syncConfig.licensing, { tenantId: edgeIdentity.tenantId, locationId: edgeIdentity.locationId,
-      edgeId: edgeIdentity.edgeId }, app.log);
+      edgeId: edgeIdentity.edgeId }, app.log,recoverySecurityStore,getRawDatabase());
   const controlWorker = new ControlStateWorker(licenseManager, syncConfig.licensing);
   const syncWorker = new SyncWorker(syncRepo, syncTransport, syncConfig, app.log,
     (revision) => licenseManager.noteDesiredRevision(revision));
@@ -160,15 +194,29 @@ export async function buildApp(dbPath: string = ':memory:', options: BuildAppOpt
   const kdsService = new KdsService(kdsRepo, tableRepo, realtimeHub, licenseManager);
   const orderService = new OrderService(orderRepo, catalogRepo, operationalContext,
     printService, kdsService, tableRepo, realtimeHub, licenseManager);
-  const cashService = new CashService(cashRepo, printRepo, operationalContext, licenseManager);
+  let requestPostZBackup=options.onPostZBackup??(()=>undefined);
+  const cashService = new CashService(cashRepo, printRepo, operationalContext, licenseManager,
+    ()=>requestPostZBackup());
   const paymentService = new PaymentService(orderRepo, cashRepo, auditRepo,
     operationalContext, realtimeHub, licenseManager);
   const authService = new AuthService(authRepo, operationalContext.tenantId,
     operationalContext.locationId);
   const authGuard = new AuthGuard(authService, options.authMode ?? 'enforced');
+  const backupManager=new BackupManager(backupRepo,db,getRawDatabase(),recoverySecurityStore,
+    {edgeId:edgeIdentity.edgeId,tenantId:operationalContext.tenantId,locationId:operationalContext.locationId},
+    process.env['COMANVIEW_BACKUP_LOCAL_DIR']??
+      (dbPath===':memory:'?resolve('.comanview/backups'):resolve(dirname(resolve(dbPath)),'backups')),
+    app.log);
+  await backupManager.initialize();
+  if(!options.onPostZBackup)requestPostZBackup=()=>{void backupManager.create({commandId:EntityId.generate().toString(),
+    destinationType:'LOCAL',trigger:'POST_Z',actor:null}).catch(()=>undefined);};
   const deviceService = new DeviceService(deviceRepo, licenseManager,
     { edgeId:edgeIdentity.edgeId,tenantId:operationalContext.tenantId,locationId:operationalContext.locationId },
-    syncConfig.licensing.publicKeyring,app.log);
+    syncConfig.licensing.publicKeyring,app.log,recoverySecurityStore,backupManager);
+  const backupWorker=new BackupWorker(backupManager);
+  const recoveryCoordinator=dbPath===':memory:'?undefined:new RecoveryCoordinator(backupRepo,backupManager,
+    recoverySecurityStore,resolve(dbPath),{edgeId:edgeIdentity.edgeId,tenantId:operationalContext.tenantId,
+      locationId:operationalContext.locationId},syncConfig.licensing.publicKeyring,()=>void app.close());
   const auditService = new AuditService(auditRepo);
   const tableService = new TableService(tableRepo, orderRepo, operationalContext);
   cashService.ensureDefaultRegister();
@@ -188,6 +236,7 @@ export async function buildApp(dbPath: string = ':memory:', options: BuildAppOpt
   if (options.startPrintWorker !== false) printWorker.start();
   if (options.startSyncWorker !== false) syncWorker.start();
   if (options.startControlWorker !== false) controlWorker.start();
+  if (options.startBackupWorker !== false) backupWorker.start();
 
   // Setup Routes
   app.register(authRoutes(authService, authGuard), { prefix: '/auth' });
@@ -202,6 +251,7 @@ export async function buildApp(dbPath: string = ':memory:', options: BuildAppOpt
   app.register(syncRoutes(syncWorker, authGuard));
   app.register(licensingRoutes(licenseManager, authGuard));
   app.register(deviceRoutes(deviceService, authGuard));
+  app.register(backupRoutes(backupManager,authGuard,recoveryCoordinator));
 
   // Health route
   app.get(
@@ -242,6 +292,7 @@ export async function buildApp(dbPath: string = ':memory:', options: BuildAppOpt
     printWorker.stop();
     syncWorker.stop();
     controlWorker.stop();
+    backupWorker.stop();
     closeDatabase();
   });
 
@@ -251,13 +302,23 @@ export async function buildApp(dbPath: string = ':memory:', options: BuildAppOpt
 // If executed directly, start the server
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
   const start = async () => {
-    // Development default path for testing Edge
-    const app = await buildApp(process.env['COMANVIEW_EDGE_DB_PATH'] ?? './edge-dev.db');
+    const dbPath=resolve(process.env['COMANVIEW_EDGE_DB_PATH'] ?? './edge-dev.db');
+    const recoverySecurityStore=createRecoverySecurityStore();
+    const syncConfig=loadEdgeSyncConfig();
+    const edgeSecretStore=createEdgeSecretStore();
+    const establishedInstallationEvidence=await edgeSecretStore.hasPersistedState();
     try {
+      const app = await buildApp(dbPath,{recoverySecurityStore,syncConfig,edgeSecretStore,establishedInstallationEvidence,
+        enforceEstablishedInstallationSafety:true});
       await app.listen({ port: 3000, host: '0.0.0.0' });
     } catch (err) {
-      app.log.error(err);
-      process.exit(1);
+      if(err instanceof AppError&&err.code==='RECOVERY_REQUIRED'){
+        const recoveryApp=await buildRecoveryRequiredApp({dbPath,securityStore:recoverySecurityStore,syncConfig,
+          requestRestart:()=>void recoveryApp.close()});
+        recoveryApp.log.error({code:'RECOVERY_REQUIRED',reason:err.message},'Operational database unavailable; recovery-only service started');
+        await recoveryApp.listen({port:3000,host:'127.0.0.1'});return;
+      }
+      console.error(err instanceof Error?err.message:'Edge startup failed');process.exit(1);
     }
   };
   start();

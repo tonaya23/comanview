@@ -160,31 +160,33 @@ export class CloudSyncRepository {
         const edges = [...new Set(newEvents.map((event) => event.edgeId))];
         const persistedSequences = new Map<string, string>();
         for (const edgeId of edges) {
-          const sequences = newEvents
-            .filter((event) => event.edgeId === edgeId)
-            .map((event) => event.localSequence);
+          const edgeEvents = newEvents.filter((event) => event.edgeId === edgeId);
+          const sequences = edgeEvents.map((event) => event.localSequence);
+          const epochs = [...new Set(edgeEvents.map((event) => event.recoveryEpoch ?? 0))];
           if (sequences.length === 0) continue;
           const rows = await tx
             .select({
               eventId: schema.cloudSyncInbox.eventId,
               localSequence: schema.cloudSyncInbox.localSequence,
+              recoveryEpoch: schema.cloudSyncInbox.recoveryEpoch,
             })
             .from(schema.cloudSyncInbox)
             .where(
               and(
                 eq(schema.cloudSyncInbox.edgeId, edgeId),
+                inArray(schema.cloudSyncInbox.recoveryEpoch, epochs),
                 inArray(schema.cloudSyncInbox.localSequence, sequences),
               ),
             );
           for (const row of rows) {
-            persistedSequences.set(`${edgeId}:${row.localSequence}`, row.eventId);
+            persistedSequences.set(`${edgeId}:${row.recoveryEpoch}:${row.localSequence}`, row.eventId);
           }
         }
 
         const integrityRejected: SyncIntegrityRejection[] = [];
         const batchSequences = new Map<string, string>();
         const candidates = newEvents.filter((event) => {
-          const key = `${event.edgeId}:${event.localSequence}`;
+          const key = `${event.edgeId}:${event.recoveryEpoch ?? 0}:${event.localSequence}`;
           const boundEventId = persistedSequences.get(key) ?? batchSequences.get(key);
           if (boundEventId && boundEventId !== event.eventId) {
             integrityRejected.push({
@@ -216,6 +218,7 @@ export class CloudSyncRepository {
                     edgeId: event.edgeId,
                     batchId,
                     localSequence: event.localSequence,
+                    recoveryEpoch: event.recoveryEpoch ?? 0,
                     payload: event.payload,
                     occurredAt: new Date(event.occurredAt),
                   })),
@@ -236,7 +239,7 @@ export class CloudSyncRepository {
         const nested = cause.cause as { code?: string; constraint?: string } | undefined;
         const code = cause.code ?? nested?.code;
         const constraint = cause.constraint ?? nested?.constraint;
-        if (code === '23505' && constraint === 'unq_cloud_sync_inbox_edge_sequence') {
+        if (code === '23505' && constraint === 'unq_cloud_sync_inbox_edge_epoch_sequence') {
           throw new CloudSyncSequenceConflictError();
         }
         throw error;

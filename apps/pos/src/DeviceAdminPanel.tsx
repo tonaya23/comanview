@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Device, PairingStatusResponse } from '@comanview/contracts';
 import { clearPairingApproval, deviceDisplayName, deviceInstallationPresentation, effectivePairingStatus, groupPairings, shouldClearPairingApproval, type DeviceAdminState } from './deviceAdmin.js';
 
-type BusyAction = `approve:${string}` | `cancel:${string}` | `revoke:${string}` | 'refresh' | null;
+type BusyAction = `approve:${string}` | `cancel:${string}` | `revoke:${string}` | 'refresh' | 'backup-local' | 'backup-off-device' | 'backup-config' | 'recovery-key' | 'restore' | null;
 
 export interface DeviceAdminPanelProps {
   state: DeviceAdminState | null;
@@ -21,6 +21,10 @@ export interface DeviceAdminPanelProps {
   onCancel(pairing: PairingStatusResponse): Promise<void>;
   onRevoke(device: Device): Promise<void>;
   onRefresh(): void;
+  onCreateBackup(destination:'LOCAL'|'OFF_DEVICE'):Promise<void>;
+  onConfigureOffDevice(path:string):Promise<void>;
+  onExportRecoveryKey():Promise<string>;
+  onRestoreBackup(backupId:string):Promise<void>;
   onClose(): void;
 }
 
@@ -28,12 +32,17 @@ const labels: Record<string,string> = {
   READY: 'Listo', NOT_READY: 'Pendiente', DEGRADED: 'Degradado', PENDING_PHASE: 'Fase pendiente',
   NOT_APPLICABLE: 'No aplica', ACTIVE: 'Activo', PENDING: 'Pendiente', REVOKED: 'Revocado',
   EXPIRED: 'Expirado', CANCELLED: 'Cancelado', VALID: 'Válida',
+  NORMAL:'Normal',RECOVERY_REQUIRED:'Recuperación requerida',RECOVERY_IN_PROGRESS:'Recuperando',
+  NOT_CONFIGURED:'Sin configurar',VERIFIED:'Verificado',FAILED:'Falló',CREATING:'Creando',DELETED:'Eliminado',
 };
 
 export function DeviceAdminPanel(props: DeviceAdminPanelProps) {
   const [confirmingCancel, setConfirmingCancel] = useState<PairingStatusResponse | null>(null);
   const [confirmingRevoke, setConfirmingRevoke] = useState<Device | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  const [offDevicePath,setOffDevicePath]=useState('');
+  const [exportedRecoveryKey,setExportedRecoveryKey]=useState<string|null>(null);
+  const [restoreBackupId,setRestoreBackupId]=useState<string|null>(null);
   const approvalFormRef = useRef<HTMLFormElement>(null);
   const approvalCodeRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
@@ -94,6 +103,33 @@ export function DeviceAdminPanel(props: DeviceAdminPanelProps) {
               <StatusBadge value={component.state}/>
             </div>)}
           </div>
+        </section>
+
+        <section className="admin-section" aria-labelledby="backup-title">
+          <div className="section-title-row"><div><h3 id="backup-title">Backup y recuperación</h3>
+            <p>Las copias son independientes de Sync. Configura el destino off-device fuera del almacenamiento operativo; ComanView no confirma que esté en otro disco físico.</p></div>
+            <StatusBadge value={props.state.backup.recoveryPreparedness}/></div>
+          <div className="readiness-summary">
+            <Summary label="Backup local" value={props.state.backup.localBackupStatus}/>
+            <Summary label="Destino off-device" value={props.state.backup.offDeviceBackupStatus}/>
+            <Summary label="Recovery Key" value={props.state.backup.recoveryKeyExported?'READY':'NOT_READY'}/>
+            <Summary label="Recovery" value={props.state.backup.recoveryState}/>
+          </div>
+          <p className="backup-last">Último verificado: {props.state.backup.lastVerifiedBackup?formatDate(props.state.backup.lastVerifiedBackup.verifiedAt!):'Todavía no existe una copia verificada.'}</p>
+          <div className="backup-actions">
+            <div className="backup-create-actions" aria-label="Crear backup manual">
+              <button type="button" className="primary-button" disabled={Boolean(props.busyAction)} onClick={()=>void props.onCreateBackup('LOCAL')}>{props.busyAction==='backup-local'?'Creando…':'Crear backup local'}</button>
+              <button type="button" className="secondary-button" disabled={Boolean(props.busyAction)||props.state.backup.offDeviceBackupStatus==='NOT_CONFIGURED'} onClick={()=>void props.onCreateBackup('OFF_DEVICE')}>{props.busyAction==='backup-off-device'?'Creando…':'Crear backup externo'}</button>
+            </div>
+            <label>Directorio off-device<input value={offDevicePath} onChange={event=>setOffDevicePath(event.target.value)} placeholder="E:\\ComanView-Backups"/></label>
+            <button type="button" className="secondary-button" disabled={Boolean(props.busyAction)||offDevicePath.trim().length<3} onClick={()=>void props.onConfigureOffDevice(offDevicePath)}>Configurar destino</button>
+            <button type="button" className="secondary-button" disabled={Boolean(props.busyAction)||props.state.backup.recoveryKeyExported} onClick={()=>void props.onExportRecoveryKey().then(setExportedRecoveryKey)}>Exportar Recovery Key una vez</button>
+          </div>
+          {exportedRecoveryKey?<div className="inline-alert inline-alert--warning" role="status"><strong>Guárdala ahora en un lugar seguro.</strong><code>{exportedRecoveryKey}</code><button type="button" onClick={()=>setExportedRecoveryKey(null)}>Ya la guardé</button></div>:null}
+          <details><summary>Backups recientes ({props.state.backup.recentBackups.length})</summary><div className="pairing-list">{props.state.backup.recentBackups.map(item=><article className="pairing-card" key={item.backupId}><div><strong>{item.destinationType==='LOCAL'?'Local':'Externo'}</strong><span>{formatDate(item.createdAt)} · {item.trigger}</span></div><StatusBadge value={item.status}/>{item.status==='VERIFIED'?<button type="button" className="text-danger-button" onClick={()=>setRestoreBackupId(item.backupId)}>Preparar restauración</button>:null}</article>)}</div></details>
+          {restoreBackupId?<ConfirmCard title="Restaurar backup verificado" confirmLabel="Restaurar y reiniciar" destructive
+            busy={props.busyAction==='restore'} description="La operación local se detendrá, conservará la base actual y validará la copia antes de activarla. Usa esta acción solo para recuperación."
+            onCancel={()=>setRestoreBackupId(null)} onConfirm={()=>void props.onRestoreBackup(restoreBackupId).then(()=>setRestoreBackupId(null))}/>:null}
         </section>
 
         <section className="admin-section" aria-labelledby="devices-title">

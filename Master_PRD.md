@@ -2573,6 +2573,16 @@ Validate backup
 
 La arquitectura SHOULD permitir recuperación Offline cuando exista un backup válido, pero MUST exigir una autorización de recuperación verificable localmente. Copiar un backup MUST NOT permitir clonar libremente una instalación productiva. Un Recovery Package MAY combinar Backup, Metadata, Integrity Proof y Recovery Authorization.
 
+### Política implementada en Fase 1V
+
+- Edge crea snapshots consistentes mediante la API nativa de backup de SQLite; una copia de archivo en uso no es válida.
+- Cada artifact usa una DEK aleatoria y AES-256-GCM; la DEK queda envuelta por una Recovery Key portable de 256 bits, protegida localmente con DPAPI en Windows productivo.
+- `LOCAL` y `OFF_DEVICE` comparten el mismo formato. Cloud object storage queda diferido; SYNC continúa sin ser Backup.
+- La retención conserva 24 recientes, 7 diarios y 4 semanales, con buckets deduplicados y protección absoluta del último `VERIFIED`.
+- Una instalación establecida mantiene fuera de SQLite un Security Floor monotónico. DB ausente o corrupta entra en `RECOVERY_REQUIRED` y nunca crea silenciosamente una DB vacía.
+- Restore conserva IDs de negocio, aplica el Security Floor, avanza `recoveryEpoch` y preserva la DB anterior. Hardware replacement exige una `RecoveryAuthorization` Ed25519 temporal, ligada al Edge origen/destino y al backup; además invalida todos los Devices y sesiones restaurados para que el equipo nuevo requiera emparejamiento local nuevo y nunca resucite una credencial histórica.
+- La ausencia de copia externa o evidencia de exportación de Recovery Key degrada Production Readiness, pero no bloquea la operación normal.
+
 ## 11.11 Migrations
 
 Todos los cambios de DB utilizarán migrations versionadas.
