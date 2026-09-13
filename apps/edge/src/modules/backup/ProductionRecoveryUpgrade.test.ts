@@ -13,6 +13,7 @@ import {
   BackupRepository,
   SyncOutboxRepository,
   inspectRecoveryUpgradeSchema,
+  inspectAdministrationSchema,
   applyRecoveryUpgradeMigration,
 } from '@comanview/database';
 import { prepareProductionRecoveryUpgrade } from './ProductionRecoveryUpgrade.js';
@@ -42,7 +43,7 @@ afterEach(async () => {
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
 });
 
-describe('hardware replacement through the complete 1V startup lifecycle', () => {
+describe('hardware replacement through the complete 1W startup lifecycle', () => {
   it.each(['normal', 'post-sqlite', 'post-floor', 'post-final'] as const)(
     'persists the restored security floor before normal startup (%s)',
     async (stage) => {
@@ -126,10 +127,12 @@ describe('hardware replacement through the complete 1V startup lifecycle', () =>
       await scheduleEmergencyRecovery(request);
       let interrupted = false,
         normalWasChecked = false;
-      const injected: RecoverySecurityStore = {
-        load: () => target.store.load(),
-        mutate: async (change) => {
-          const next = await target.store.mutate((current) => {
+      // Preserve the registered instance and its real locking/CAS/personnel writer.
+      // Inject only at public persistence boundaries, delegating to real methods.
+      const mutate = target.store.mutate.bind(target.store);
+      const save = target.store.save.bind(target.store);
+      const mutateFailure = vi.spyOn(target.store, 'mutate').mockImplementation(async (change) => {
+          const next = await mutate((current) => {
             const value = change(current);
             if (
               stage === 'post-sqlite' &&
@@ -152,14 +155,18 @@ describe('hardware replacement through the complete 1V startup lifecycle', () =>
             throw new Error('simulated post-floor interruption');
           }
           return next;
-        },
-        save: async (value) => {
+        });
+      const saveFailure = vi.spyOn(target.store, 'save').mockImplementation(async (value) => {
           if (value.recoveryState === 'NORMAL' && !value.journal) {
             expect(isDeviceRevokedByFloor(value, activeId)).toBe(true);
             expect(isDeviceRevokedByFloor(await target.store.load(), activeId)).toBe(true);
+            expect((await target.store.load()).personnel).toMatchObject({
+              initializationState: 'ACTIVE',
+              recoveryContext: { backupId, targetEdgeId: targetBinding.edgeId, recoveryEpoch: 1 },
+            });
             normalWasChecked = true;
           }
-          await target.store.save(value);
+          await save(value);
           if (
             stage === 'post-final' &&
             !interrupted &&
@@ -169,12 +176,13 @@ describe('hardware replacement through the complete 1V startup lifecycle', () =>
             interrupted = true;
             throw new Error('simulated post-final interruption');
           }
-        },
-      };
+        });
       const first = await completePendingRecoveryAtStartup({
         dbPath: target.dbPath,
-        store: injected,
+        store: target.store,
       });
+      mutateFailure.mockRestore();
+      saveFailure.mockRestore();
       if (stage === 'normal') {
         expect(first).toBe('COMPLETED');
         expect(normalWasChecked).toBe(true);
@@ -193,6 +201,13 @@ describe('hardware replacement through the complete 1V startup lifecycle', () =>
       expect(floor).toMatchObject({
         binding: targetBinding,
         recoveryEpoch: 1,
+        minimumSchemaVersion: 15,
+        personnel: {
+          initializationState: 'ACTIVE',
+          recoveryContext: { backupId, sourceEdgeId: binding.edgeId,
+            targetEdgeId: targetBinding.edgeId, recoveryEpoch: 1, restoreAuthorizationId: authorizationId },
+          ownerRecoveryAccess: { generation: 1, challenge: null, pendingConsumption: null },
+        },
         recoveryState: 'NORMAL',
         journal: null,
         recoveryKey: targetBefore.recoveryKey,
@@ -202,7 +217,7 @@ describe('hardware replacement through the complete 1V startup lifecycle', () =>
       });
       for (const id of [activeId, revokedId]) expect(isDeviceRevokedByFloor(floor, id)).toBe(true);
       inspect(target.dbPath, (db) => {
-        expect(inspectRecoveryUpgradeSchema(db)).toBe(14);
+        expect(inspectAdministrationSchema(db)).toBe(15);
         expect(db.prepare("SELECT count(*) n FROM devices WHERE status!='REVOKED'").get()).toEqual({
           n: 0,
         });

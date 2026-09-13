@@ -62,11 +62,9 @@ export function paymentRoutes(
       async (request, reply) => {
         const { id, paymentId } = request.params as { id: string; paymentId: string };
         const body = request.body as VoidPaymentRequest;
-        const operation = await authService.authorizeSingleOperation(
-          actorFrom(request),
-          PERMISSIONS.PAYMENT_VOID,
-          body.overridePin,
-        );
+        const operation = auth.bypassesAuthentication
+          ? operationFrom(request,PERMISSIONS.PAYMENT_VOID)
+          : await authService.authorizeSingleOperation(actorFrom(request),PERMISSIONS.PAYMENT_VOID,body.overridePin);
         reply.send(
           paymentService.voidPayment(
             id,

@@ -12,6 +12,8 @@ export const RestaurantTableSchema = z.object({
   locationId: z.string().uuid(),
   name: z.string().min(1),
   zone: z.string().nullable(),
+  zoneId: z.string().uuid().nullable().optional(),
+  version: z.number().int().positive().optional(),
   capacity: z.number().int().positive().nullable(),
   displayOrder: z.number().int(),
   active: z.boolean(),

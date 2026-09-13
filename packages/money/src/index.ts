@@ -8,3 +8,4 @@
 
 export * from './Money.js';
 export * from './rounding.js';
+export { calculateLineTax, type LineTaxAmounts } from './tax.js';

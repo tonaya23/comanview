@@ -22,3 +22,7 @@ export * from './provisioning.js';
 export * from './licensing.js';
 export * from './devices.js';
 export * from './backup.js';
+export * from './taxAdministration.js';
+export * from './personnelRecovery.js';
+export * from './personnelAdministration.js';
+export * from './restaurantAdministration.js';

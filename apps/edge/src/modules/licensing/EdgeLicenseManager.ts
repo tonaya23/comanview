@@ -20,7 +20,7 @@ import {
 } from '@comanview/licensing';
 import { AppError } from '../../app/errorHandler.js';
 import { ControlTransportError, type HttpControlTransport } from './HttpControlTransport.js';
-import { applySignedLicenseTransition, updateRecoverySecurityFloor, type RecoverySecurityStore } from '../backup/RecoverySecurityStore.js';
+import { applySignedLicenseTransition, updateRecoverySecurityFloor, performPersonnelSecurityOperation, type RecoverySecurityStore } from '../backup/RecoverySecurityStore.js';
 import type Database from 'better-sqlite3';
 import { activateLicense, stageLicense } from './LicensingSecurity.js';
 
@@ -175,6 +175,18 @@ export class EdgeLicenseManager {
         current.pendingRecoveryAuthorizationAck.authorizationId===ack.authorizationId?
           updateRecoverySecurityFloor(current,{pendingRecoveryAuthorizationAck:null}):current);}
       catch(error){const failure=safeControlFailure(error,'ACK_REQUEST');this.log.warn({component:'edge-control',operation:'recovery-ack',...failure},'Cloud recovery authorization ACK failed');}}
+    if(this.recoverySecurityStore&&this.sqlite){
+      const floor=await this.recoverySecurityStore.load(),pending=floor.personnel?.ownerRecoveryAccess.pendingConsumption;
+      if(pending&&floor.recoveryState==='NORMAL')try{
+        const row=this.sqlite.prepare('SELECT command_id AS commandId,consumed_at AS consumedAt,acknowledged_at AS acknowledgedAt FROM owner_recovery_acknowledgements WHERE authorization_id=? AND transition_id=?')
+          .get(pending.authorizationId,pending.transitionId) as {commandId:string;consumedAt:number;acknowledgedAt:number|null}|undefined;
+        if(row){
+          if(row.acknowledgedAt===null){await this.transport.acknowledgeOwnerRecovery({authorizationId:pending.authorizationId,commandId:row.commandId,consumedAt:new Date(row.consumedAt).toISOString()});
+            this.sqlite.prepare('UPDATE owner_recovery_acknowledgements SET acknowledged_at=? WHERE authorization_id=? AND transition_id=?').run(Date.now(),pending.authorizationId,pending.transitionId);}
+          await performPersonnelSecurityOperation(this.recoverySecurityStore,{kind:'ACK_OWNER_RECOVERY',sqlite:this.sqlite,authorizationId:pending.authorizationId});
+        }
+      }catch(error){const failure=safeControlFailure(error,'ACK_REQUEST');this.log.warn({component:'edge-control',operation:'owner-recovery-ack',...failure},'Cloud owner recovery ACK remains pending');}
+    }
   }
 
   checkpoint(): void {
@@ -326,8 +338,17 @@ export class EdgeLicenseManager {
   }
 
   currentConfiguration(): EdgeConfiguration {
-    return this.repository.currentDocument<ConfigurationDocumentPayload>('CONFIGURATION')
-      ?.payload.configuration ?? DEFAULT_CONFIGURATION;
+    const current=this.repository.currentDocument<ConfigurationDocumentPayload>('CONFIGURATION');
+    const floor=this.recoverySecurityStore?.licensingSnapshot?.();
+    // Restore can invalidate an older CONFIGURATION without retaining its newer
+    // payload in the security floor. Never grant default tips in that gap.
+    // Ordinary offline operation keeps using its already persisted valid document.
+    if(this.recoverySecurityStore&&(!floor||
+      (current?.revision??0)<floor.maximumSignedRevisions.CONFIGURATION))return {
+        payment:{tipsEnabled:false,tipPercentageOptionsBasisPoints:[]},
+        tipPolicy:{ownerConfigurable:false,allowPercentages:false,allowedPercentagesBasisPoints:[],allowFixedAmount:false},
+      };
+    return current?.payload.configuration ?? DEFAULT_CONFIGURATION;
   }
   currentDeviceLimits(): DeviceLimits | undefined {
     if (!this.config.enforcementEnabled) return { POS:null, WAITER:null, KDS:null };

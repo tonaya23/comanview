@@ -21287,3 +21287,25 @@ Edge será un Modular Monolith TypeScript sobre Node.js y SQLite que concentra l
 El principio rector de implementación será:
 
 Mantener simple la operación local, mantener fuerte la consistencia transaccional y permitir que la complejidad crezca únicamente en las fronteras donde realmente sea necesaria.
+
+## 12.146 Fase 1W — configuración operacional y seguridad de personal
+
+La administración normal del restaurante se ejecuta en el POS contra Edge y no mediante SQL, seeds o
+herramientas de desarrollo. Edge escribe perfil, jornada, moneda, fiscalidad, caja, estaciones,
+zonas/mesas, personal y preferencias delegadas; Cloud solo proyecta ese estado y conserva autoridad
+contractual/policy firmada.
+
+`business_date` se deriva en Edge de zona IANA y rollover versionados. La moneda no puede cambiar tras
+evidencia financiera. Los impuestos se calculan con aritmética racional exacta y HALF_UP por línea; las
+revisiones y snapshots preservan historia. Una edición explícita de DRAFT puede capturar configuración
+fiscal actual, pero ningún cambio externo reescribe Items, SENT u Orders históricas.
+
+Las operaciones de personal son transiciones especializadas crash-safe. El Security Floor externo
+solo contiene trust domain, máximos de revisiones, digest y lifecycle mínimo; nunca PII, roles ni hashes.
+Restore bloquea selectivamente credenciales/autorizaciones antiguas y hardware replacement exige
+recuperación firmada del OWNER contractual. Un estado incompleto o contradictorio no concede autoridad.
+
+La migración Edge 0015 y Cloud 0007 son incrementales. Startup/restore admiten 1V→1W con snapshot,
+baseline derivado, validación e idempotencia. Admin Local ofrece CRUD lógico sin borrado histórico y
+readiness distingue salud técnica, configuración, operación y backup. Quedan fuera de 1W catálogo
+comercial completo, multicaja simultánea, hardware físico, installer, OTA y fases posteriores.

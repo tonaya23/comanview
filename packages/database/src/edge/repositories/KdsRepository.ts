@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNotNull } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull,sql } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import {
   EntityId,
@@ -14,6 +14,7 @@ type DB = BetterSQLite3Database<typeof schema>;
 export interface KdsStationView {
   stationId: string;
   name: string;
+  purpose?:string|null;displayOrder?:number;
 }
 
 export interface KdsTicketItemView {
@@ -60,12 +61,15 @@ export class KdsRepository {
   constructor(private readonly db: DB) {}
 
   listStations(): KdsStationView[] {
+    try{return this.db.all<KdsStationView>(sql`SELECT id stationId,name,purpose,display_order displayOrder FROM stations WHERE active=1 AND kds_visible=1 ORDER BY display_order,id`);}
+    catch{
     return this.db
       .select({ stationId: schema.stations.id, name: schema.stations.name })
       .from(schema.stations)
       .where(eq(schema.stations.active, true))
       .orderBy(asc(schema.stations.name))
       .all();
+    }
   }
 
   listTickets(stationId: string, status?: OrderItemPrepStatus): KdsTicketView[] {

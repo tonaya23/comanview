@@ -6153,3 +6153,41 @@ permanecía `PENDING_1V`; desde 1V se deriva de artifacts `VERIFIED`, antigüeda
 evidencia de exportación de Recovery Key. La ausencia de esas protecciones mantiene Production Readiness
 en `NOT_READY`/degradado sin bloquear la operación. El procedimiento y threat model de Device Pairing
 permanecen en `docs/Development_Device_Pairing.md`.
+
+## 16.2 Restaurant Administration y Personnel Security (Fase 1W)
+
+Edge schema 15 agrega perfil de negocio, configuración operacional, revisiones fiscales, caja lógica,
+Station, Zone/Table y estado de seguridad de personal. El upgrade productivo soportado es 14→15:
+preflight, snapshot consistente, migration incremental, baseline derivado únicamente de evidencia
+coherente, reserva/inicialización monotónica del Security Floor y validación antes del startup normal.
+Es reintentable, rechaza downgrade y los estados ambiguos fallan cerrados. Restore migra staging y
+reconcilia configuración y personal antes de completar el lifecycle.
+
+Los writers Edge-authoritative usan transacción SQLite con receipt de `commandId`, `expectedVersion`,
+Audit y Event/Outbox. Cloud schema 7 mantiene proyecciones read-only y nunca sobrescribe configuración
+local por timestamp. Payloads de personal solo contienen descriptores públicos; PIN, hashes, tokens y
+secretos están prohibidos.
+
+`operationalTimezone` es IANA y Edge calcula `business_date` de forma determinista, incluido DST. La
+moneda se bloquea por evidencia financiera. TaxProfile conserva revisiones inmutables y el cálculo
+exacto HALF_UP por línea para TAX_ADDED/TAX_INCLUDED. Los snapshots de DRAFT solo cambian por comando
+explícito sobre el Item; SENT/history permanecen inmutables.
+
+Personnel Security usa `credentialRevision`, `authorizationRevision`, `sessionRevision`,
+`trustDomainId`, intent/receipt y `transitionDigest`. El protocolo durable reserva primero el floor,
+bloquea al User durante estados parciales y converge mediante reconciliation; nunca baja máximos ni
+promueve payload restaurado. Same-Edge restore clasifica usuarios individualmente. Hardware replacement
+rota trust domain y solo recupera al OWNER contractual exacto con `OwnerRecoveryAuthorization` Ed25519,
+binding completo, expiración corta y consumo local único; el resultado exige login ordinario.
+
+Admin Local vive en POS y consume `/administration`, `/administration/taxes` y
+`/administration/personnel`. Las mutations aplican RBAC por operación. Readiness incluye configuración
+administrativa y salud del Personnel Security sin ocultar `BACKUP_PROTECTION_INCOMPLETE`.
+
+Las preferencias de propina persistidas nunca son autoridad: cada evaluación las limita por la
+política Cloud vigente. Si todos los porcentajes locales seleccionados fueron retirados, se usan
+las opciones actuales permitidas por Cloud; una selección local explícitamente vacía permanece
+vacía. No se reescribe la intención guardada. Pagos valida esta configuración efectiva. Offline
+conserva la última configuración válida disponible; si restore descarta una revisión antigua y falta
+la revisión conocida por el Security Floor, no se habilitan propinas por defaults hasta recuperar
+una configuración válida compatible. Esto no cambia Entitlements, Guaranteed Shift ni cálculo CASH.

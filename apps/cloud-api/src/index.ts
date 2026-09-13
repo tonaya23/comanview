@@ -10,6 +10,7 @@ import {
   CloudReadRepository,
   CloudSyncRepository,
   CloudRecoveryRepository,
+  CloudPersonnelRecoveryRepository,
   createCloudDatabase,
 } from '@comanview/database';
 import {
@@ -174,7 +175,7 @@ async function start(): Promise<void> {
     ? new CloudLicensingService(licensingRepository, config.licensing)
     : undefined;
   const recovery=licensing&&config.licensing
-    ?new CloudRecoveryService(new CloudRecoveryRepository(database.pool),config.licensing):undefined;
+    ?new CloudRecoveryService(new CloudRecoveryRepository(database.pool),config.licensing,()=>new Date(),new CloudPersonnelRecoveryRepository(database.pool)):undefined;
   const controlPlane = new CloudControlPlaneService(
     new CloudControlPlaneRepository(database.pool), config.provisioning, () => new Date(),
     licensing ? async (locationId) => {

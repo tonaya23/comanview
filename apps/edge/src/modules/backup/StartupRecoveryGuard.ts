@@ -7,7 +7,7 @@ export type StartupDatabaseDisposition='FIRST_BOOT'|'NORMAL'|'RECOVERY_REQUIRED'
 export async function assessStartupDatabase(dbPath:string,store:RecoverySecurityStore,
   establishedInstallationEvidence=false,enforceCurrentSchemaFloor=false):Promise<StartupDatabaseDisposition>{
   const floor=await store.load();
-  if(floor.upgradeJournal||floor.recoveryState==='RECOVERY_IN_PROGRESS')return 'RECOVERY_REQUIRED';
+  if(floor.upgradeJournal||floor.administrationUpgradeJournal||floor.recoveryState==='RECOVERY_IN_PROGRESS')return 'RECOVERY_REQUIRED';
   const exists=await stat(dbPath).then(x=>x.isFile()).catch((error:NodeJS.ErrnoException)=>{
     if(error.code==='ENOENT')return false;throw error;});
   if(!exists){
@@ -19,6 +19,8 @@ export async function assessStartupDatabase(dbPath:string,store:RecoverySecurity
     const sqlite=new Database(dbPath,{readonly:true,fileMustExist:true});
     try{const integrity=sqlite.pragma('quick_check') as Array<{quick_check:string}>;
       if(integrity.length!==1||integrity[0]?.quick_check!=='ok')throw new Error('SQLITE_CORRUPT');
+      if(floor.minimumSchemaVersion===15&&(sqlite.pragma('user_version',{simple:true})!==15||floor.personnel?.initializationState!=='ACTIVE'))
+        throw new Error('PERSONNEL_SECURITY_NOT_INITIALIZED');
       const hasRecoveryEpoch=Boolean(sqlite.prepare(`SELECT 1 FROM pragma_table_info('edge_installations')
         WHERE name='recovery_epoch'`).get());
       if(!floor.installationEstablished&&(establishedInstallationEvidence||enforceCurrentSchemaFloor)&&hasRecoveryEpoch)

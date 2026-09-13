@@ -51,7 +51,9 @@ describe.skipIf(!databaseUrl)('Cloud PostgreSQL signed licensing', () => {
       VALUES($1,$2,repeat('a',64),'ACTIVE',$3,$3)`, [ids.credential,ids.edge,now]);
   });
 
-  afterAll(async () => { await cleanup(); await database.close(); });
+  afterAll(async () => {
+    try { await cleanup(); } finally { await database.close(); }
+  });
 
   it('assigns a plan, emits separate signed streams, enforces OCC and stores idempotent ACK', async () => {
     const plan = await service.createPlan({ commandId: '01991a00-3000-7000-8000-000000000012',
@@ -132,6 +134,9 @@ describe.skipIf(!databaseUrl)('Cloud PostgreSQL signed licensing', () => {
   });
 
   async function cleanup() {
+    // Consuming the installation authorization establishes the Cloud-owned mapping.
+    // Remove this fixture's dependent row before its referenced authorization.
+    await database.pool.query('DELETE FROM cloud_contractual_owners WHERE tenant_id=$1',[ids.tenant]);
     await database.pool.query('DELETE FROM cloud_installation_authorizations WHERE tenant_id=$1',[ids.tenant]);
     await database.pool.query('DELETE FROM cloud_edge_control_state_acks WHERE edge_id=$1',[ids.edge]);
     await database.pool.query('DELETE FROM cloud_signed_control_documents WHERE tenant_id=$1',[ids.tenant]);

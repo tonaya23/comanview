@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNull, lte } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, lte, sql } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import * as schema from '../schema.js';
 import { insertAuditEntry, type NewAuditEntry } from './AuditRepository.js';
@@ -100,6 +100,7 @@ export class DeviceRepository {
     });
   }
   completeBootstrap(input:{ pairingId:string; credentialId:string; authorizationId:string; cloudAckCommandId:string; owner:{id:string;displayName:string;pinHash:string}; now:Date; audit:NewAuditEntry }):void {
+    if(this.db.get(sql`SELECT 1 FROM pragma_table_info('users') WHERE name='credential_revision'`))throw new Error('PERSONNEL_SECURITY_WRITER_REQUIRED');
     this.db.transaction((tx)=>{
       const state=tx.select().from(schema.installationState).get();
       if(!state||state.bootstrapStatus!=='PENDING') throw new Error('INSTALLATION_BOOTSTRAP_CLOSED');

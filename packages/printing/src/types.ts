@@ -76,6 +76,9 @@ export interface StationTicketPayload extends BasePrintPayload {
 export interface PrecheckPayload extends BasePrintPayload {
   kind: 'PRECHECK';
   subtotal: PrintMoneySnapshot;
+  /** Absent on durable legacy jobs: never reconstruct them from current tax configuration. */
+  taxTotal?: PrintMoneySnapshot;
+  total?: PrintMoneySnapshot;
   paidAmount: PrintMoneySnapshot;
   balanceDue: PrintMoneySnapshot;
   tipTotal: PrintMoneySnapshot;
@@ -84,6 +87,8 @@ export interface PrecheckPayload extends BasePrintPayload {
 export interface CustomerReceiptPayload extends BasePrintPayload {
   kind: 'CUSTOMER_RECEIPT';
   subtotal: PrintMoneySnapshot;
+  taxTotal?: PrintMoneySnapshot;
+  total?: PrintMoneySnapshot;
   paidAmount: PrintMoneySnapshot;
   balanceDue: PrintMoneySnapshot;
   tipTotal: PrintMoneySnapshot;

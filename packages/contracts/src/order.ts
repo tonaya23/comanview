@@ -20,6 +20,9 @@ export const ProductSnapshotSchema = z.object({
   basePrice: MoneySchema,
   taxRateBasisPoints: z.number().int(),
   taxCalculationMode: z.enum(['TAX_INCLUDED', 'TAX_ADDED']),
+  taxPolicyVersion: z.union([z.literal(0), z.literal(1)]).optional(),
+  taxProfileId: z.string().uuid().nullable().optional(),
+  taxProfileRevision: z.number().int().positive().nullable().optional(),
   stationId: z.string().uuid().nullable(),
   selectedModifiers: z.array(SelectedModifierSchema),
 });
@@ -27,11 +30,20 @@ export const ProductSnapshotSchema = z.object({
 export const OrderItemSchema = z.object({
   id: z.string().uuid(),
   productSnapshot: ProductSnapshotSchema,
+  // Authoritative, per-line rounded amounts from Edge. Optional only for legacy responses.
+  quantity: z.number().int().positive().optional(),
+  lineBase: MoneySchema.optional(),
+  lineTax: MoneySchema.optional(),
+  lineTotal: MoneySchema.optional(),
   specialInstructions: z.string().max(500).nullable(),
   status: OrderItemSendStatusSchema,
   prepStatus: z.enum(['PENDING', 'PREPARING', 'READY']).default('PENDING'),
   addedAt: z.string(),
   sentAt: z.string().nullable(),
+}).superRefine((item, context) => {
+  if (item.productSnapshot.taxPolicyVersion === 1 && (!item.lineBase || !item.lineTax || !item.lineTotal ||
+    !item.quantity || !item.productSnapshot.taxProfileId || !item.productSnapshot.taxProfileRevision))
+    context.addIssue({ code: 'custom', message: 'Fiscal policy 1 requires the captured revision and authoritative line amounts.' });
 });
 
 export const RoundSchema = z.object({
@@ -54,6 +66,7 @@ export const OrderSchema = z.object({
   items: z.array(OrderItemSchema),
   rounds: z.array(RoundSchema),
   subtotal: MoneySchema,
+  taxTotal: MoneySchema.optional(),
   total: MoneySchema,
   paidAmount: MoneySchema,
   balanceDue: MoneySchema,
@@ -99,6 +112,7 @@ export type CloseOrderRequest = z.infer<typeof CloseOrderRequestSchema>;
 
 export const CancelOrderRequestSchema = z.object({
   expectedVersion: z.number().int(),
+  emptyCounterOnly: z.literal(true).optional(),
 });
 export type CancelOrderRequest = z.infer<typeof CancelOrderRequestSchema>;
 

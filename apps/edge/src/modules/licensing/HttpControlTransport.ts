@@ -44,6 +44,7 @@ export class HttpControlTransport {
   async acknowledgeRecovery(body:unknown):Promise<void>{
     return this.postAck('/edge/v1/recovery-authorizations/acks',body);
   }
+  async acknowledgeOwnerRecovery(body:unknown):Promise<void>{return this.postAck('/edge/v1/owner-recovery-authorizations/acks',body);}
   private async postAck(path:string,body:unknown):Promise<void>{
     let response: Response;
     try {

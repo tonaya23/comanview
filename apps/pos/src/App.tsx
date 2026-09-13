@@ -25,6 +25,7 @@ import type {
 import { OperationalRealtimeMessageSchema, PermissionCodes } from '@comanview/contracts';
 import {
   ALL_CATEGORIES,
+  canCreateAnotherCounterOrder,
   canEditDraftItem,
   formatMoney,
   getActiveModifierGroups,
@@ -60,6 +61,8 @@ import { clearPairingApproval, deviceAdminErrorMessage, isGlobalDeviceAdminError
   type DeviceAdminState } from './deviceAdmin.js';
 import { DeviceAdminPanel } from './DeviceAdminPanel.js';
 import { CashMovementTypeSelector } from './CashMovementTypeSelector.js';
+import { AdministrationPanel } from './AdministrationPanel.js';
+import { discardCounterSale, isDiscardableCounterSale, openCurrentCounterSale } from './counterSales.js';
 
 const sessionTokenStorageKey = 'comanview.pos.sessionToken';
 const edge = createEdgeClient({
@@ -86,6 +89,7 @@ export function App() {
   const [pairingPending,setPairingPending]=useState(false);
   const [bootstrapPending,setBootstrapPending]=useState(false);
   const [deviceAdminOpen,setDeviceAdminOpen]=useState(false);
+  const [administrationOpen,setAdministrationOpen]=useState(false);
   const [deviceAdmin,setDeviceAdmin]=useState<DeviceAdminState|null>(null);
   const [deviceAdminLoading,setDeviceAdminLoading]=useState(false);
   const [deviceAdminError,setDeviceAdminError]=useState<string|null>(null);
@@ -102,6 +106,10 @@ export function App() {
   const [products, setProducts] = useState<ProductResponse[]>([]);
   const [tables, setTables] = useState<RestaurantTableResponse[]>([]);
   const [showOpenTables, setShowOpenTables] = useState(false);
+  const [openCounterOrders, setOpenCounterOrders] = useState<OrderResponse[]>([]);
+  const [showOpenCounterOrders, setShowOpenCounterOrders] = useState(false);
+  const [counterError,setCounterError]=useState<string|null>(null);
+  const counterBusy=useRef(false);
   const [openTablesError, setOpenTablesError] = useState<string | null>(null);
   const [selectedCategoryId, setSelectedCategoryId] = useState(ALL_CATEGORIES);
   const [productSearch, setProductSearch] = useState('');
@@ -242,6 +250,13 @@ export function App() {
   const updateOrder = useCallback((next: OrderResponse) => {
     setOrder(next);
     window.localStorage.setItem(currentOrderStorageKey, next.id);
+    if (next.orderType === 'COUNTER') {
+      setOpenCounterOrders((current) =>
+        next.status === 'OPEN'
+          ? [next, ...current.filter(({ id }) => id !== next.id)]
+          : current.filter(({ id }) => id !== next.id),
+      );
+    }
     setConnection('CONNECTED');
   }, []);
 
@@ -261,7 +276,7 @@ export function App() {
   const refreshOperationalState = useCallback(async () => {
     if (!authUser) return;
     try {
-      const [nextCategories, nextProducts, nextTables, currentCash, config, licenseStatus] = await Promise.all([
+      const [nextCategories, nextProducts, nextTables, nextCounterOrders, currentCash, config, licenseStatus] = await Promise.all([
         authUser.permissions.includes(PermissionCodes.CATALOG_VIEW)
           ? edge.getCategories()
           : Promise.resolve([]),
@@ -270,6 +285,9 @@ export function App() {
           : Promise.resolve([]),
         authUser.permissions.includes(PermissionCodes.ORDER_VIEW)
           ? edge.getTables()
+          : Promise.resolve([]),
+        authUser.permissions.includes(PermissionCodes.ORDER_VIEW)
+          ? edge.getOpenCounterOrders()
           : Promise.resolve([]),
         authUser.permissions.includes(PermissionCodes.CASH_SESSION_VIEW)
           ? edge.getCurrentCashSession()
@@ -282,6 +300,7 @@ export function App() {
       setCategories(nextCategories);
       setProducts(nextProducts);
       setTables(nextTables);
+      setOpenCounterOrders(nextCounterOrders);
       setCashSession(currentCash.session);
       setPaymentConfig(config);
       setLicensing(licenseStatus);
@@ -546,6 +565,11 @@ export function App() {
   }
 
   async function createOrder() {
+    if(counterBusy.current)return;
+    if (!canCreateAnotherCounterOrder(order)) {
+      setNotice('La venta actual ya está vacía. Úsala o descártala antes de crear otra.');
+      return;
+    }
     if (
       order?.status === 'OPEN' &&
       order.items.length > 0 &&
@@ -553,11 +577,55 @@ export function App() {
     )
       return;
     const currency = products.find((product) => product.active)?.basePrice.currency ?? 'MXN';
-    await mutate(
+    counterBusy.current=true;
+    setPendingAction('create-order');
+    try {
+      const current=await edge.getOpenCounterOrders();
+      setOpenCounterOrders(current);
+      if(current.some(isDiscardableCounterSale)){
+        setCounterError(null);setShowOpenCounterOrders(true);
+        setNotice('Hay una venta vacía abierta. Selecciónala para continuar o descartarla.');
+        return;
+      }
+      await mutate(
       'create-order',
-      () => edge.createOrder({ orderType: 'COUNTER', channel: 'POS', currency }),
+      () => edge.createOrder({ commandId:crypto.randomUUID(),orderType: 'COUNTER', channel: 'POS', currency }),
       'Nueva venta creada en Edge.',
     );
+    }catch(problem){setError(getErrorMessage(problem));}
+    finally{counterBusy.current=false;setPendingAction(null);}
+  }
+
+  async function openCounterOrder(next: OrderResponse) {
+    if(counterBusy.current)return;
+    counterBusy.current=true;setPendingAction('open-counter');setCounterError(null);
+    try{updateOrder(await openCurrentCounterSale(edge,next.id));setShowOpenCounterOrders(false);setNotice('Venta abierta recuperada.');}
+    catch(problem){setCounterError(problem instanceof EdgeClientError?getErrorMessage(problem):'Esta venta ya no está abierta. Actualiza la lista.');}
+    finally{counterBusy.current=false;setPendingAction(null);}
+  }
+
+  async function refreshCounterSales(){
+    if(counterBusy.current)return;
+    counterBusy.current=true;setPendingAction('list-counter');setCounterError(null);
+    try{setOpenCounterOrders(await edge.getOpenCounterOrders());}
+    catch(problem){setCounterError(getErrorMessage(problem));}
+    finally{counterBusy.current=false;setPendingAction(null);}
+  }
+
+  async function cancelEmptyCounterOrder() {
+    if (!order || !isDiscardableCounterSale(order)||counterBusy.current) return;
+    counterBusy.current=true;setPendingAction('cancel-empty-counter');clearFeedback();
+    try{
+      const result=await discardCounterSale(edge,order,cancelled=>{
+        setOrder(null);orderRef.current=null;window.localStorage.removeItem(currentOrderStorageKey);
+        setOpenCounterOrders(current=>current.filter(x=>x.id!==cancelled.id));
+        setNotice('Venta vacía cancelada.');
+      });
+      if(result.remaining)setOpenCounterOrders(result.remaining);
+      setCounterError(result.refreshFailed?'La venta fue cancelada. No se pudo actualizar la lista; pulsa Actualizar.':null);
+      setShowOpenCounterOrders(true);
+    }catch(problem){setError(getErrorMessage(problem));}
+    finally{counterBusy.current=false;setPendingAction(null);}
   }
 
   async function openTableOrder(orderId: string, tableNames: string[]) {
@@ -1200,7 +1268,8 @@ export function App() {
             <button type="button" onClick={() => void logout()}>
               Cerrar sesión
             </button>
-            {hasPermission(PermissionCodes.DEVICE_VIEW)&&<button type="button" onClick={()=>void openDeviceAdmin()}>Administración</button>}
+            {(hasPermission(PermissionCodes.ADMINISTRATION_VIEW)||hasPermission(PermissionCodes.PERSONNEL_VIEW))&&<button type="button" onClick={()=>setAdministrationOpen(true)}>Restaurante</button>}
+            {hasPermission(PermissionCodes.DEVICE_VIEW)&&<button type="button" onClick={()=>void openDeviceAdmin()}>Dispositivos y respaldo</button>}
           </div>
           <button
             className={`cash-status ${cashSession ? 'cash-status--open' : ''}`}
@@ -1270,6 +1339,7 @@ export function App() {
         onCreateBackup={createBackup} onConfigureOffDevice={configureOffDeviceBackup} onExportRecoveryKey={exportRecoveryKey} onRestoreBackup={restoreBackup}
         onClose={()=>{if(!deviceAdminBusy){setDeviceAdminOpen(false);setDeviceAdminError(null);setDeviceAdminNotice(null);}}}/>
       }
+      {administrationOpen&&authUser&&<AdministrationPanel edge={edge} currentUserId={authUser.id} permissions={authUser.permissions} onClose={()=>setAdministrationOpen(false)}/>}
       {connection === 'DISCONNECTED' && (
         <div className="critical-banner" role="alert">
           <strong>Edge no está disponible.</strong> Ninguna operación financiera se confirma sin la
@@ -1432,6 +1502,14 @@ export function App() {
               <button
                 type="button"
                 className="open-tables-button"
+                disabled={isBusy || connection !== 'CONNECTED'}
+                onClick={() => {setShowOpenCounterOrders(true);void refreshCounterSales();}}
+              >
+                Ventas abiertas · <span>{openCounterOrders.length}</span>
+              </button>
+              <button
+                type="button"
+                className="open-tables-button"
                 disabled={
                   isBusy || connection !== 'CONNECTED' || !hasPermission(PermissionCodes.ORDER_VIEW)
                 }
@@ -1483,7 +1561,16 @@ export function App() {
                 {order.items.length === 0 && (
                   <div className="order-empty compact">
                     <strong>La venta está vacía</strong>
-                    <p>Selecciona un producto.</p>
+                    <p>Selecciona un producto o descarta esta venta.</p>
+                    {hasPermission(PermissionCodes.ORDER_CANCEL) && isDiscardableCounterSale(order) && (
+                      <button
+                        type="button"
+                        disabled={isBusy}
+                        onClick={() => void cancelEmptyCounterOrder()}
+                      >
+                        Descartar venta vacía
+                      </button>
+                    )}
                   </div>
                 )}
                 {draftItems.length > 0 && (
@@ -1525,7 +1612,7 @@ export function App() {
                         <div className="order-item-actions">
                           <strong>
                             {formatMoney(
-                              getSnapshotTotal(item.productSnapshot),
+                              item.lineTotal?.amount ?? getSnapshotTotal(item.productSnapshot),
                               item.productSnapshot.basePrice.currency,
                             )}
                           </strong>
@@ -1593,7 +1680,7 @@ export function App() {
                         </div>
                         <strong>
                           {formatMoney(
-                            getSnapshotTotal(item.productSnapshot),
+                            item.lineTotal?.amount ?? getSnapshotTotal(item.productSnapshot),
                             item.productSnapshot.basePrice.currency,
                           )}
                         </strong>
@@ -1655,6 +1742,10 @@ export function App() {
                   <strong>{order.rounds.length}</strong>
                 </div>
                 <div className="financial-lines">
+                  {order.taxTotal && <>
+                    <div><span>Base</span><strong>{formatMoney(order.subtotal.amount, order.currency)}</strong></div>
+                    <div><span>Impuestos</span><strong>{formatMoney(order.taxTotal.amount, order.currency)}</strong></div>
+                  </>}
                   <div>
                     <span>Total</span>
                     <strong>{formatMoney(order.total.amount, order.total.currency)}</strong>
@@ -1818,6 +1909,29 @@ export function App() {
             </div>
             <div className="modal-error-slot" role="alert">
               {openTablesError ?? '\u00a0'}
+            </div>
+          </section>
+        </div>
+      )}
+
+      {showOpenCounterOrders && (
+        <div className="modal-backdrop">
+          <section className="payment-modal open-tables-modal" role="dialog" aria-modal="true" aria-labelledby="open-counter-orders-title">
+            <div className="modal-heading">
+              <div><span className="eyebrow">Mostrador</span><h2 id="open-counter-orders-title">Ventas abiertas</h2></div>
+              <button type="button" onClick={() => setShowOpenCounterOrders(false)}>×</button>
+            </div>
+            <p className="open-tables-help">Recupera una venta o abre una vacía para descartarla de forma segura.</p>
+            {counterError&&<p role="alert">{counterError}</p>}
+            <button type="button" disabled={isBusy} onClick={()=>void refreshCounterSales()}>Actualizar</button>
+            <div className="open-table-account-list">
+              {openCounterOrders.map((candidate) => (
+                <button key={candidate.id} type="button" disabled={isBusy} onClick={() => void openCounterOrder(candidate)}>
+                  <span><strong>{candidate.items.length === 0 ? 'Venta vacía' : `${candidate.items.length} productos`}</strong><small>{new Date(candidate.createdAt).toLocaleString('es-MX')}</small></span>
+                  <b>{formatMoney(candidate.balanceDue.amount, candidate.balanceDue.currency)}</b>
+                </button>
+              ))}
+              {openCounterOrders.length === 0 && <div className="open-tables-empty">No hay ventas de mostrador abiertas.</div>}
             </div>
           </section>
         </div>
@@ -2039,8 +2153,9 @@ export function App() {
             </div>
             <form onSubmit={(event) => void openCash(event)}>
               <label>
-                Business date
-                <input value={getLocalBusinessDate()} readOnly />
+                Fecha de referencia del dispositivo
+                <input type="date" value={getLocalBusinessDate()} readOnly />
+                <small>Edge determina el día de negocio según la zona horaria y la hora de inicio configuradas.</small>
               </label>
               <label>
                 Fondo inicial

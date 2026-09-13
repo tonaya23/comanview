@@ -79,6 +79,8 @@ export function renderEscPosTicket(job: PrintJob): Uint8Array {
   if (payload.kind !== 'STATION_TICKET') {
     line();
     line(`SUBTOTAL: ${money(payload.subtotal)}`);
+    if (payload.taxTotal) line(`TAX: ${money(payload.taxTotal)}`);
+    if (payload.total) line(`TOTAL: ${money(payload.total)}`);
     line(`PAID: ${money(payload.paidAmount)}`);
     line(`BALANCE: ${money(payload.balanceDue)}`);
     line(`TIPS: ${money(payload.tipTotal)}`);

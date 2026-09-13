@@ -6,6 +6,7 @@ export type KdsPreparationStatus = z.infer<typeof KdsPreparationStatusSchema>;
 export const KdsStationSchema = z.object({
   stationId: z.string().uuid(),
   name: z.string().min(1),
+  purpose:z.string().nullable().optional(),displayOrder:z.number().int().optional(),
 });
 export type KdsStationResponse = z.infer<typeof KdsStationSchema>;
 

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent, type KeyboardEvent } from 'react';
+import { TimeZoneField } from '@comanview/ui';
 import {
   CloudAdminClientError,
   createCloudAdminClient,
@@ -309,10 +310,7 @@ function ControlPlane({ onError }: { onError(value: string | null): void }) {
             Nombre
             <input value={locationName} onChange={(event) => setLocationName(event.target.value)} />
           </label>
-          <label>
-            Timezone IANA
-            <input value={timezone} onChange={(event) => setTimezone(event.target.value)} />
-          </label>
+          <TimeZoneField value={timezone} onChange={setTimezone}/>
           <button
             className="primary"
             disabled={!tenant}
@@ -560,6 +558,9 @@ function ControlPlane({ onError }: { onError(value: string | null): void }) {
                                     Math.round(value * 100),
                                   ),
                                 },
+                                tipPolicy:{ownerConfigurable:window.confirm('¿Permitir que el Owner elija preferencias dentro de esta lista?'),
+                                  allowPercentages:percentages.length>0,allowedPercentagesBasisPoints:percentages.map(value=>Math.round(value*100)),
+                                  allowFixedAmount:window.confirm('¿Permitir propina de monto fijo?')},
                               },
                               reason: 'Payment tip configuration changed from Super Admin',
                             })
@@ -603,6 +604,7 @@ function ControlPlane({ onError }: { onError(value: string | null): void }) {
                                   tipsEnabled: true,
                                   tipPercentageOptionsBasisPoints: [1000, 1500, 2000],
                                 },
+                                tipPolicy:{ownerConfigurable:true,allowPercentages:true,allowedPercentagesBasisPoints:[1000,1500,2000],allowFixedAmount:true},
                               },
                               reason: 'Initial license assignment from Super Admin',
                             })

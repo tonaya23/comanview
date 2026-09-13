@@ -4020,3 +4020,26 @@ Toda la arquitectura de ComanView deberá preservar simultáneamente cuatro prop
 La complejidad Cloud o administrativa nunca debe convertirse en una dependencia crítica para vender, preparar, imprimir o cobrar localmente.
 
 Estas propiedades tienen prioridad sobre decisiones de implementación secundarias.
+
+# 17. Administración del restaurante y configuración operacional (Fase 1W)
+
+La configuración cotidiana de una instalación legítimamente provisionada pertenece al OWNER y se
+realiza desde Administración dentro del POS. Edge es la autoridad de perfil operativo, zona horaria
+IANA, corte de jornada, moneda, impuestos, personal, caja predeterminada, zonas/mesas, estaciones y
+preferencias de propina; Cloud conserva la autoridad contractual y la política firmada que delimita
+las propinas. La operación local no depende de Internet.
+
+La moneda se fija antes de actividad financiera y después es inmutable. `business_date` lo calcula
+Edge con la política versionada. Los impuestos usan revisiones inmutables, basis points enteros y
+redondeo HALF_UP por línea. Los Items conservan snapshot; únicamente una edición explícita de un
+DRAFT puede reconstruirlo con la revisión vigente. SENT e historia cerrada nunca se reinterpretan.
+
+El personal usa roles V1 y revisiones independientes de credencial, autorización y sesión. El
+Security Floor externo guarda solo máximos monotónicos, trust domain y transiciones pendientes con
+digest no secreto. Restore nunca revive PINs, roles ni sesiones antiguos; hardware replacement exige
+una autorización Cloud firmada y de un solo uso para recuperar al OWNER contractual exacto.
+
+Los comandos administrativos requieren sesión/Device, permiso, binding, `commandId`, OCC, Audit y
+Event atómicos. No hay borrado físico de entidades con historia. Readiness separa salud técnica,
+configuración administrativa, operación y protección de backup; 1W no declara soporte multicaja
+simultáneo, configuración física de impresoras, catálogo completo, installer ni OTA.

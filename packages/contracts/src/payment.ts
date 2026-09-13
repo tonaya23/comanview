@@ -58,5 +58,7 @@ export type VoidPaymentRequest = z.infer<typeof VoidPaymentRequestSchema>;
 export const PaymentConfigSchema = z.object({
   tipsEnabled: z.boolean(),
   percentageOptionsBasisPoints: z.array(z.number().int().nonnegative()),
+  fixedAmountEnabled: z.boolean(),
+  ownerConfigurable: z.boolean(),
 });
 export type PaymentConfigResponse = z.infer<typeof PaymentConfigSchema>;

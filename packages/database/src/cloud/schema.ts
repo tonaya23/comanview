@@ -535,3 +535,20 @@ export const cloudRecoveryAuthorizations = pgTable('cloud_recovery_authorization
   consumedAt: timestamp('consumed_at', { withTimezone: true }),
   consumedCommandId: uuid('consumed_command_id'),
 });
+
+export const cloudContractualOwners=pgTable('cloud_contractual_owners',{
+  locationId:uuid('location_id').primaryKey(),tenantId:uuid('tenant_id').notNull(),ownerUserId:uuid('owner_user_id').notNull(),
+  installationAuthorizationId:uuid('installation_authorization_id').notNull(),createdAt:timestamp('created_at',{withTimezone:true}).notNull(),
+});
+export const cloudOwnerRecoveryAuthorizations=pgTable('cloud_owner_recovery_authorizations',{
+  authorizationId:uuid('authorization_id').primaryKey(),tenantId:uuid('tenant_id').notNull(),locationId:uuid('location_id').notNull(),targetEdgeId:uuid('target_edge_id').notNull(),
+  ownerUserId:uuid('owner_user_id').notNull(),recoveryEpoch:integer('recovery_epoch').notNull(),trustDomainId:uuid('trust_domain_id').notNull(),accessGeneration:bigint('access_generation',{mode:'number'}).notNull(),
+  challengeId:uuid('challenge_id').notNull(),requestDigest:text('request_digest').notNull(),kid:text('kid').notNull(),envelope:jsonb('envelope').notNull(),status:text('status').notNull(),
+  commandId:uuid('command_id').notNull(),issuedByAdminUserId:uuid('issued_by_admin_user_id').notNull(),issuedAt:timestamp('issued_at',{withTimezone:true}).notNull(),
+  expiresAt:timestamp('expires_at',{withTimezone:true}).notNull(),consumedAt:timestamp('consumed_at',{withTimezone:true}),consumedCommandId:uuid('consumed_command_id'),
+});
+export const cloudRestaurantAdministrationProjection=pgTable('cloud_restaurant_administration_projection',{
+  locationId:uuid('location_id').notNull(),entityType:text('entity_type').notNull(),entityId:uuid('entity_id').notNull(),tenantId:uuid('tenant_id').notNull(),
+  sourceEdgeId:uuid('source_edge_id').notNull(),publicState:jsonb('public_state').notNull(),lastEventId:uuid('last_event_id').notNull(),
+  lastLocalSequence:bigint('last_local_sequence',{mode:'number'}).notNull(),lastRecoveryEpoch:integer('last_recovery_epoch').notNull(),updatedAt:timestamp('updated_at',{withTimezone:true}).notNull(),
+},table=>({pk:primaryKey({columns:[table.locationId,table.entityType,table.entityId]})}));

@@ -74,13 +74,19 @@ const schemas = {
   }),
 } as const;
 
-export const knownProjectionEventTypes = new Set(Object.keys(schemas));
+export const knownProjectionEventTypes = new Set([...Object.keys(schemas),'TAX_CONFIGURATION_CHANGED','RESTAURANT_ADMINISTRATION_CHANGED','PERSONNEL_CHANGED']);
 
 export function toProjectionAction(event: ClaimedCloudEvent): ProjectionAction | null {
   if (event.schemaVersion !== 1) {
     throw new Error(`Unsupported event schema version ${event.schemaVersion}.`);
   }
   switch (event.eventType) {
+    case 'TAX_CONFIGURATION_CHANGED':
+    case 'RESTAURANT_ADMINISTRATION_CHANGED':
+    case 'PERSONNEL_CHANGED': {
+      assertPublicAdministrationPayload(event.payload);
+      return {type:'ADMINISTRATION_CHANGED',entityType:event.aggregateType,publicState:event.payload};
+    }
     case 'ORDER_CREATED': {
       const payload = schemas.ORDER_CREATED.parse(event.payload);
       return {
@@ -183,4 +189,11 @@ export function toProjectionAction(event: ClaimedCloudEvent): ProjectionAction |
     default:
       return null;
   }
+}
+
+function assertPublicAdministrationPayload(value:Record<string,unknown>):void{
+  const forbidden=/(pin(hash|value)?|password|credential(hash|value|secret)?|secret|recovery.?key|private.?key)$/i;
+  const walk=(item:unknown,key='')=>{if(forbidden.test(key))throw new Error('Administration projection contains forbidden credential material.');
+    if(Array.isArray(item))for(const child of item)walk(child);else if(item&&typeof item==='object')for(const [name,child] of Object.entries(item))walk(child,name);};
+  walk(value);
 }

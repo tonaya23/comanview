@@ -26,6 +26,8 @@ import type { EdgeOperationalContext } from '../../../app/operationalContext.js'
 import { AppError } from '../../../app/errorHandler.js';
 import type { AuthorizedOperation } from '../../../app/authContext.js';
 import type { EdgeLicenseManager } from '../../licensing/EdgeLicenseManager.js';
+import type { AdministrationService } from '../../administration/AdministrationService.js';
+import { assertBusinessDate } from '@comanview/domain';
 
 const moneyJson = (money: Money) => money.toJSON();
 
@@ -36,6 +38,7 @@ export class CashService {
     private readonly context: EdgeOperationalContext,
     private readonly licensing?: EdgeLicenseManager,
     private readonly onPostZ?: () => void,
+    private readonly administration?: AdministrationService,
   ) {}
 
   ensureDefaultRegister(): void {
@@ -53,20 +56,39 @@ export class CashService {
     );
   }
 
+  private currentRegisterId():EntityId{
+    const id=this.administration?.operational().defaultCashRegisterId??this.context.cashRegisterId;
+    if(this.administration&&!this.administration.operational().defaultCashRegisterId)
+      throw new AppError('DEFAULT_CASH_REGISTER_REQUIRED',409,'Configura una caja predeterminada.');
+    return EntityId.fromString(id);
+  }
+
+  private runtimeCash(now:Date,submittedDate:string){
+    const register=this.cashRepo.getRegister(this.currentRegisterId());
+    if(!register||!register.active)throw new AppError('DEFAULT_CASH_REGISTER_REQUIRED',409,'La caja predeterminada no está activa.');
+    if(!this.administration)return{register,currency:this.context.currency,businessDate:submittedDate,policyJson:undefined};
+    const config=this.administration.operational();
+    if(!config.currency)throw new AppError('CURRENCY_REQUIRED',409,'Configura explícitamente la moneda.');
+    if(register.currency!==config.currency)throw new AppError('CASH_REGISTER_CURRENCY_MISMATCH',409,'La caja no coincide con la moneda del Location.');
+    if(!config.timeZone||!config.rollover||config.businessDayVersion<1)throw new AppError('BUSINESS_DAY_POLICY_REQUIRED',409,'Configura la zona horaria y corte del día de negocio.');
+    const policy={operationalTimezone:config.timeZone,rollover:config.rollover,version:config.businessDayVersion};
+    try{return{register,currency:config.currency,businessDate:assertBusinessDate(policy,now,submittedDate),policyJson:JSON.stringify(policy)};}
+    catch(error){const code=error instanceof Error?error.message:'BUSINESS_DAY_POLICY_REQUIRED';throw new AppError(code,409,'La fecha de negocio debe ser calculada por Edge.');}
+  }
+
   getCurrentSession(): CurrentCashSessionResponse {
-    const session = this.cashRepo.getOpenSession(
-      EntityId.fromString(this.context.cashRegisterId),
-    );
+    const session = this.cashRepo.getOpenSession(this.currentRegisterId());
     return { session: session ? this.mapSession(session) : null };
   }
 
   openSession(request: OpenCashSessionRequest, operation: AuthorizedOperation): CashSessionResponse {
+    const runtime=this.runtimeCash(operation.requestedAt,request.businessDate);
     const existingForCommand = this.cashRepo.getSessionByCommandId(request.commandId);
     if (existingForCommand) {
       const existingMetadata = this.cashRepo.getSessionMetadata(existingForCommand.id.toString());
       if (
         existingForCommand.openingFloat.amount !== request.openingFloatAmount ||
-        existingForCommand.businessDate !== request.businessDate ||
+        existingForCommand.businessDate !== runtime.businessDate ||
         existingForCommand.openedBy.toString() !== operation.actor.userId ||
         (existingMetadata?.purpose ?? 'NORMAL') !== (request.purpose ?? 'NORMAL')
       ) {
@@ -83,7 +105,7 @@ export class CashService {
       purpose === 'LICENSE_RECOVERY' ? 'CASH_SESSION_OPEN_RECOVERY' : 'CASH_SESSION_OPEN_NORMAL',
       'CORE_POS',
     );
-    const registerId = EntityId.fromString(this.context.cashRegisterId);
+    const registerId = runtime.register.id;
     if (this.cashRepo.getOpenSession(registerId)) {
       throw new AppError('CASH_SESSION_ALREADY_OPEN', 409, 'La caja ya tiene una sesión abierta.');
     }
@@ -91,8 +113,8 @@ export class CashService {
       cashRegisterId: registerId,
       tenantId: EntityId.fromString(this.context.tenantId),
       locationId: EntityId.fromString(this.context.locationId),
-      openingFloat: Money.fromMinorUnits(request.openingFloatAmount, this.context.currency),
-      businessDate: request.businessDate,
+      openingFloat: Money.fromMinorUnits(request.openingFloatAmount, runtime.currency),
+      businessDate: runtime.businessDate,
       openedBy: EntityId.fromString(operation.actor.userId),
       commandId: request.commandId,
     });
@@ -104,11 +126,11 @@ export class CashService {
       entityId: session.id.toString(), reason: 'Restricted license recovery for protected Orders',
       commandId: request.commandId, before: null,
       after: { purpose, protectedOrderIds, licenseRevision: authorization.revision },
-      amountAffected: request.openingFloatAmount, currency: this.context.currency, eventId: null,
+      amountAffected: request.openingFloatAmount, currency: runtime.currency, eventId: null,
     }) : undefined;
     this.cashRepo.openSession(session, { purpose, openedLicenseRevision: authorization.revision,
       openedLicenseMode: authorization.mode, protectedOrderIds,
-      ...(recoveryAudit ? { audit: recoveryAudit } : {}) });
+      ...(runtime.policyJson?{businessDayPolicyJson:runtime.policyJson}:{}),...(recoveryAudit ? { audit: recoveryAudit } : {}) });
     return this.mapSession(session);
   }
 
@@ -322,7 +344,7 @@ export class CashService {
   }
 
   private requireOpenSession(): CashSession {
-    const session = this.cashRepo.getOpenSession(EntityId.fromString(this.context.cashRegisterId));
+    const session = this.cashRepo.getOpenSession(this.currentRegisterId());
     if (!session) {
       throw new AppError('CASH_SESSION_NOT_OPEN', 409, 'No existe una CashSession OPEN.');
     }

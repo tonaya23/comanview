@@ -20,6 +20,7 @@ import type { EdgeOperationalContext } from '../../../app/operationalContext.js'
 import { mapOrderToResponse } from '../../orders/application/orderMapper.js';
 import type { RealtimeHub } from '../../../infrastructure/realtime/RealtimeHub.js';
 import type { EdgeLicenseManager } from '../../licensing/EdgeLicenseManager.js';
+import type { AdministrationService } from '../../administration/AdministrationService.js';
 
 export class PaymentService {
   constructor(
@@ -29,13 +30,16 @@ export class PaymentService {
     private readonly context: EdgeOperationalContext,
     private readonly realtime: RealtimeHub,
     private readonly licensing?: EdgeLicenseManager,
+    private readonly administration?: AdministrationService,
   ) {}
 
   getConfig(): PaymentConfigResponse {
+    if(this.administration)return this.administration.effectiveTips();
     const config = this.licensing?.currentConfiguration().payment;
     return {
       tipsEnabled: config?.tipsEnabled ?? this.context.tipsEnabled,
       percentageOptionsBasisPoints: config?.tipPercentageOptionsBasisPoints ?? this.context.tipPercentageOptionsBasisPoints,
+      fixedAmountEnabled:config?.tipsEnabled??this.context.tipsEnabled,ownerConfigurable:false,
     };
   }
 
@@ -59,8 +63,8 @@ export class PaymentService {
         request.cashTendered === undefined || request.cashTendered === null
           ? null
           : Money.fromMinorUnits(request.cashTendered, previousOrder.currency);
-      const requestedTip = calculateTip(requestedAmount, request.tip,
-        this.licensing?.currentConfiguration().payment.tipsEnabled ?? this.context.tipsEnabled, {
+      const tipConfig=this.getConfig();this.assertTipAllowed(request.tip,tipConfig);
+      const requestedTip = calculateTip(requestedAmount, request.tip,tipConfig.tipsEnabled, {
         method: request.method,
         cashTendered: requestedCashTendered,
         // A persisted REMAINDER Payment proves that this amount settled the balance at creation.
@@ -89,7 +93,9 @@ export class PaymentService {
       );
     }
 
-    const session = this.cashRepo.getOpenSession(EntityId.fromString(this.context.cashRegisterId));
+    const registerId=this.administration?.operational().defaultCashRegisterId??this.context.cashRegisterId;
+    if(!registerId)throw new AppError('DEFAULT_CASH_REGISTER_REQUIRED',409,'Configura una caja predeterminada.');
+    const session = this.cashRepo.getOpenSession(EntityId.fromString(registerId));
     if (!session) {
       throw new AppError(
         'CASH_SESSION_NOT_OPEN',
@@ -117,8 +123,8 @@ export class PaymentService {
       request.cashTendered === undefined || request.cashTendered === null
         ? null
         : Money.fromMinorUnits(request.cashTendered, order.currency);
-    const tipAmount = calculateTip(amountApplied, request.tip,
-      this.licensing?.currentConfiguration().payment.tipsEnabled ?? this.context.tipsEnabled, {
+    const tipConfig=this.getConfig();this.assertTipAllowed(request.tip,tipConfig);
+    const tipAmount = calculateTip(amountApplied, request.tip,tipConfig.tipsEnabled, {
       method: request.method,
       cashTendered,
       authoritativeBalanceDue: order.getBalanceDue(),
@@ -136,6 +142,13 @@ export class PaymentService {
     this.orderRepo.saveOrder(order, true, request.commandId);
     this.notifyOrder(order, 'PAYMENT_COMPLETED');
     return mapOrderToResponse(order);
+  }
+
+  private assertTipAllowed(selection:CreatePaymentRequest['tip'],config:PaymentConfigResponse){
+    if(selection.type==='FIXED_AMOUNT'&&!config.fixedAmountEnabled)throw new AppError('TIP_SELECTION_NOT_ALLOWED',409,'La propina fija no está permitida.');
+    if(selection.type==='PERCENTAGE'&&!config.percentageOptionsBasisPoints.includes(selection.basisPoints))
+      throw new AppError('TIP_SELECTION_NOT_ALLOWED',409,'El porcentaje de propina no está permitido.');
+    if(selection.type!=='NONE'&&!config.tipsEnabled)throw new AppError('TIPS_DISABLED',409,'Las propinas están deshabilitadas.');
   }
 
   voidPayment(

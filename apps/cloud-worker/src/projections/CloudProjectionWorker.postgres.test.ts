@@ -59,6 +59,7 @@ describe.skipIf(!databaseUrl)('Cloud projection worker with PostgreSQL', () => {
     await database.pool.query('DELETE FROM cloud_projection_event_receipts WHERE edge_id = $1', [
       edgeId,
     ]);
+    await database.pool.query('DELETE FROM cloud_restaurant_administration_projection WHERE source_edge_id=$1',[edgeId]);
     await database.pool.query('DELETE FROM cloud_projection_checkpoints WHERE edge_id = $1', [
       edgeId,
     ]);
@@ -90,13 +91,14 @@ describe.skipIf(!databaseUrl)('Cloud projection worker with PostgreSQL', () => {
       payload: Record<string, unknown>;
       schemaVersion?: number;
       recoveryEpoch?:number;
+      aggregateType?:string;
     },
   ): SyncEventEnvelope {
     return {
       schemaVersion: input.schemaVersion ?? 1,
       eventId: randomUUID(),
       eventType: input.eventType,
-      aggregateType: input.eventType.startsWith('CASH_') ? 'CASH_SESSION' : 'ORDER',
+      aggregateType: input.aggregateType??(input.eventType.startsWith('CASH_') ? 'CASH_SESSION' : 'ORDER'),
       aggregateId: input.aggregateId,
       aggregateVersion: input.sequence,
       tenantId: edge.tenantId,
@@ -670,5 +672,12 @@ describe.skipIf(!databaseUrl)('Cloud projection worker with PostgreSQL', () => {
       [cashMovementId, orphan.eventId],
     );
     expect(state.rows[0]).toEqual({ movements: 0, receipts: 0 });
+  });
+  it('projects public restaurant administration descriptors in epoch/sequence order',async()=>{
+    const edge=await createEdge(),entityId=randomUUID();await ingest([event(edge,{sequence:1,eventType:'RESTAURANT_ADMINISTRATION_CHANGED',aggregateType:'BUSINESS_PROFILE',aggregateId:entityId,
+      payload:{kind:'UPDATE_BUSINESS_PROFILE',after:{commercialName:'Casa'}}})]);
+    const worker=new CloudProjectionWorker(projectionRepository,workerConfig(),randomUUID(),logger);expect(await worker.runOnce()).toBeGreaterThanOrEqual(1);
+    const row=await database.pool.query(`SELECT entity_type,public_state->'after'->>'commercialName' name,last_recovery_epoch epoch
+      FROM cloud_restaurant_administration_projection WHERE entity_id=$1`,[entityId]);expect(row.rows[0]).toEqual({entity_type:'BUSINESS_PROFILE',name:'Casa',epoch:0});
   });
 });

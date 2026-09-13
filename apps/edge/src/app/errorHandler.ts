@@ -75,6 +75,12 @@ export function errorHandler(error: Error, request: FastifyRequest, reply: Fasti
     code = error.code;
     message = error.message;
     details = error.details;
+  } else if (['TAX_CONFIGURATION_REQUIRED', 'TAX_PROFILE_REQUIRED', 'TAX_REVISION_INCONSISTENT',
+    'TAX_SNAPSHOT_IMMUTABLE', 'TAX_PROFILE_REQUIRES_ADMIN_COMMAND', 'TAX_SCHEMA_REQUIRED',
+    'TAX_SCHEMA_INCOMPLETE', 'TAX_POLICY_VERSION_INVALID', 'TAX_REVISION_INVALID'].includes(error.message)) {
+    statusCode = 409;
+    code = error.message;
+    message = 'La configuración fiscal requiere revisión; no se modificó el snapshot existente.';
   } else if (error instanceof ConcurrencyError) {
     statusCode = 409;
     code = 'STALE_ORDER_VERSION';

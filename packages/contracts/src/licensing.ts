@@ -74,6 +74,12 @@ export const EdgeConfigurationPayloadSchema = z.object({
     tipsEnabled: z.boolean(),
     tipPercentageOptionsBasisPoints: z.array(z.number().int().min(0).max(10_000)).max(12),
   }),
+  tipPolicy: z.object({
+    ownerConfigurable: z.boolean(),
+    allowPercentages: z.boolean(),
+    allowedPercentagesBasisPoints: z.array(z.number().int().min(0).max(10_000)).max(12),
+    allowFixedAmount: z.boolean(),
+  }).optional(),
 });
 
 export const ConfigurationDocumentPayloadSchema = DocumentIdentitySchema.extend({

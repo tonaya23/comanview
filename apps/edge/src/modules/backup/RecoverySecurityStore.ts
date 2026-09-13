@@ -7,6 +7,8 @@ import type Database from 'better-sqlite3';
 import { readFileSync } from 'node:fs';
 import { assertDocumentBinding, verifyControlDocument, CLOCK_SKEW_TOLERANCE_MS } from '@comanview/licensing';
 import type { LicenseDocumentPayload, SignedDocumentEnvelope } from '@comanview/contracts';
+import { PersonnelSecurityFloorSchema, type PersonnelSecurityFloor } from '../personnel/PersonnelSecurityModel.js';
+import { executePersonnelSecurityOperation, type PersonnelSecurityOperation } from '../personnel/PersonnelSecurityOperation.js';
 
 const BLOOM_BYTES=8192;
 const BLOOM_HASHES=7;
@@ -35,6 +37,7 @@ export interface RecoveryJournal {
   stagedDatabaseSha256?:string;
   nextRecoveryEpoch:number;
   authorizationId:string|null;
+  sourceEdgeId?:string;
   targetBinding:{tenantId:string;locationId:string;edgeId:string};
   enteredFromRecoveryRequired:boolean;
 }
@@ -43,7 +46,10 @@ export interface RecoverySecurityFloor {
   installationEstablished:boolean;
   binding:{tenantId:string;locationId:string;edgeId:string}|null;
   recoveryEpoch:number;
-  minimumSchemaVersion?:14;
+  minimumSchemaVersion?:14|15;
+  personnel?:PersonnelSecurityFloor;
+  administrationUpgradeJournal?:{formatVersion:1;fromSchema:14;toSchema:15;phase:'PREPARING'|'SNAPSHOT_READY';
+    databasePath:string;snapshotId:string;snapshotPath:string;migrationHash:string}|null;
   maximumSignedRevisions:{LICENSE:number;FEATURE_FLAGS:number;CONFIGURATION:number};
   stickyDeclaredState:'SUSPENDED'|'TERMINATED'|null;
   /** Last cryptographically authorized LICENSE decision; no operational document. */
@@ -78,6 +84,12 @@ type LicenseTransition = {envelope:SignedDocumentEnvelope;publicKeyring:Readonly
   prepare(payload:LicenseDocumentPayload,documentHash:string):void;
   activate(payload:LicenseDocumentPayload,documentHash:string):void};
 const licenseWriters=new WeakMap<RecoverySecurityStore,(input:LicenseTransition)=>Promise<void>>();
+const personnelWriters=new WeakMap<RecoverySecurityStore,(input:PersonnelSecurityOperation)=>Promise<void>>();
+/** No generic setter: the executor validates actor/intent/receipt while this store holds its interprocess lock. */
+export function performPersonnelSecurityOperation(store:RecoverySecurityStore,input:PersonnelSecurityOperation):Promise<void>{
+  const writer=personnelWriters.get(store);if(!writer)throw new Error('PERSONNEL_SECURITY_STORE_UNSUPPORTED');
+  return writer(input);
+}
 /** Only this path can relax sticky state: verification happens again inside the persistence lock. */
 export function applySignedLicenseTransition(store:RecoverySecurityStore,input:LicenseTransition){
   const writer=licenseWriters.get(store);if(!writer)throw new Error('LICENSE_SECURITY_STORE_UNSUPPORTED');
@@ -128,7 +140,14 @@ export class MemoryRecoverySecurityStore implements RecoverySecurityStore {
     }
     this.value=updateRecoverySecurityFloor(this.value,{licensePending:{revision:payload.revision,documentHash}});
     input.prepare(payload,documentHash);this.value=structuredClone(next);input.activate(payload,documentHash);
-  }));}
+  }));
+    personnelWriters.set(this,input=>serialized(this,async()=>{
+      await executePersonnelSecurityOperation(input,structuredClone(this.value),async next=>{
+        assertCurrent(this.value,next);assertMonotonic(this.value,next,false,true);
+        this.value=structuredClone(next);origins.set(next,next.checksum);
+      });
+    }));
+  }
   licensingSnapshot(){return structuredClone(this.value);}
   load(){return serialized(this,async()=>structuredClone(this.value));}
   mutate(change:(current:RecoverySecurityFloor)=>RecoverySecurityFloor){return serialized(this,async()=>{
@@ -179,7 +198,7 @@ export async function initializeRecoverySecurityFloor(input:{
   if(installation){
     const row=input.sqlite.prepare("SELECT recovery_epoch epoch FROM edge_installations WHERE singleton_key='PRIMARY'").get() as {epoch:number}|undefined;
     if(!row||!Number.isSafeInteger(row.epoch)||row.epoch<floor.recoveryEpoch)throw new Error('RECOVERY_EPOCH_ROLLBACK');
-    floor=updateRecoverySecurityFloor(floor,{recoveryEpoch:row.epoch,minimumSchemaVersion:14});
+    floor=updateRecoverySecurityFloor(floor,{recoveryEpoch:row.epoch,minimumSchemaVersion:floor.minimumSchemaVersion??14});
   }
   const keyed=ensureRecoveryKey(floor);floor=keyed.floor;
   if(!floor.installationEstablished)floor=updateRecoverySecurityFloor(floor,{
@@ -231,7 +250,15 @@ abstract class FileRecoverySecurityStore implements RecoverySecurityStore {
     }
     await this.writeUnlocked(updateRecoverySecurityFloor(current,{licensePending:{revision:payload.revision,documentHash}}));
     input.prepare(payload,documentHash);await this.writeUnlocked(next);input.activate(payload,documentHash);
-  }));}
+  }));
+    personnelWriters.set(this,input=>this.exclusive(async()=>{
+      let current=await this.readUnlocked();
+      await executePersonnelSecurityOperation(input,structuredClone(current),async next=>{
+        assertCurrent(current,next);assertMonotonic(current,next,false,true);
+        await this.writeUnlocked(next);origins.set(next,next.checksum);current=next;
+      });
+    }));
+  }
   licensingSnapshot(){try{
     return this.cached&&createHash('sha256').update(readFileSync(this.path)).digest('hex')===this.cached.hash?
       structuredClone(this.cached.floor):null;
@@ -296,7 +323,7 @@ function assertCurrent(current:RecoverySecurityFloor,next:RecoverySecurityFloor)
   if((origins.get(next)??next.checksum)!==current.checksum)
     throw new Error('RECOVERY_SECURITY_STALE_WRITE');
 }
-function assertMonotonic(current:RecoverySecurityFloor,next:RecoverySecurityFloor,authorizedLicense=false){
+function assertMonotonic(current:RecoverySecurityFloor,next:RecoverySecurityFloor,authorizedLicense=false,authorizedPersonnel=false){
   validate(next);
   if(current.binding&&(!next.binding||current.binding.edgeId!==next.binding.edgeId||
     current.binding.tenantId!==next.binding.tenantId||current.binding.locationId!==next.binding.locationId))
@@ -305,10 +332,24 @@ function assertMonotonic(current:RecoverySecurityFloor,next:RecoverySecurityFloo
     throw new Error('RECOVERY_SECURITY_LICENSE_DECISION_PROTECTED');
   if(!authorizedLicense&&JSON.stringify(current.licensePending)!==JSON.stringify(next.licensePending))
     throw new Error('RECOVERY_SECURITY_LICENSE_DECISION_PROTECTED');
+  if(!authorizedPersonnel&&JSON.stringify(current.personnel)!==JSON.stringify(next.personnel))
+    throw new Error('PERSONNEL_SECURITY_WRITER_REQUIRED');
+  if(current.personnel){
+    const old=current.personnel,fresh=next.personnel;
+    const hardwareTrustRotation=authorizedPersonnel&&current.journal?.phase==='VALIDATING'&&Boolean(current.journal.authorizationId)&&
+      fresh?.recoveryContext?.recoveryId===current.journal.recoveryId&&fresh.ownerRecoveryAccess.generation>old.ownerRecoveryAccess.generation;
+    if(!fresh||(old.trustDomainId!==fresh.trustDomainId&&!hardwareTrustRotation)||
+      fresh.ownerRecoveryAccess.generation<old.ownerRecoveryAccess.generation||
+      (old.initializationState==='ACTIVE'&&fresh.initializationState!=='ACTIVE')||
+      Object.entries(old.users).some(([id,entry])=>!fresh.users[id]||
+        fresh.users[id]!.credentialRevision<entry.credentialRevision||
+        fresh.users[id]!.authorizationRevision<entry.authorizationRevision||
+        fresh.users[id]!.sessionRevision<entry.sessionRevision))throw new Error('PERSONNEL_SECURITY_ROLLBACK');
+  }
   const before=decodeBloom(current.revokedDeviceBloom),after=decodeBloom(next.revokedDeviceBloom);
   if(next.recoveryEpoch<current.recoveryEpoch||
     (current.installationEstablished&&!next.installationEstablished)||
-    (current.minimumSchemaVersion===14&&next.minimumSchemaVersion!==14)||
+    ((next.minimumSchemaVersion??0)<(current.minimumSchemaVersion??0))||
     (stickyRank(next.stickyDeclaredState)<stickyRank(current.stickyDeclaredState)&&
       !(authorizedLicense&&next.maximumSignedRevisions.LICENSE>current.maximumSignedRevisions.LICENSE))||
     Object.keys(current.maximumSignedRevisions).some(type=>next.maximumSignedRevisions[type as keyof typeof current.maximumSignedRevisions]<current.maximumSignedRevisions[type as keyof typeof current.maximumSignedRevisions])||
@@ -362,7 +403,14 @@ function validate(input:unknown):RecoverySecurityFloor {
     typeof value.checksum!=='string'||checksum(withoutChecksum(value))!==value.checksum)
     throw new Error('RECOVERY_SECURITY_STATE_INVALID');
   decodeBloom(value.revokedDeviceBloom);
-  if(value.minimumSchemaVersion!==undefined&&value.minimumSchemaVersion!==14)throw new Error('RECOVERY_SECURITY_STATE_INVALID');
+  if(value.minimumSchemaVersion!==undefined&&value.minimumSchemaVersion!==14&&value.minimumSchemaVersion!==15)throw new Error('RECOVERY_SECURITY_STATE_INVALID');
+  if(value.personnel)PersonnelSecurityFloorSchema.parse(value.personnel);
+  if(value.administrationUpgradeJournal){const j=value.administrationUpgradeJournal;
+    if(j.formatVersion!==1||j.fromSchema!==14||j.toSchema!==15||!['PREPARING','SNAPSHOT_READY'].includes(j.phase)||
+      ![j.databasePath,j.snapshotId,j.snapshotPath,j.migrationHash].every(x=>typeof x==='string'&&x.length>0)||
+      !/^[a-f0-9]{64}$/.test(j.migrationHash)||!value.binding||!value.installationEstablished||
+      value.recoveryState!=='RECOVERY_IN_PROGRESS'||value.journal||value.upgradeJournal)throw new Error('RECOVERY_SECURITY_STATE_INVALID');
+  }
   if(value.licensePending&&(!Number.isSafeInteger(value.licensePending.revision)||value.licensePending.revision<=0||
     !/^[a-f0-9]{64}$/.test(value.licensePending.documentHash)))throw new Error('RECOVERY_SECURITY_STATE_INVALID');
   if(value.licenseDecision&&(!Number.isSafeInteger(value.licenseDecision.revision)||value.licenseDecision.revision<=0||

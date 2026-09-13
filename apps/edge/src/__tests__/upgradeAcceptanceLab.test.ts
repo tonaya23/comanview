@@ -99,6 +99,15 @@ function withDb(path: string, fn: (db: Database.Database) => void) {
 }
 describe.skipIf(process.platform !== 'win32')('isolated manual upgrade acceptance harness', () => {
   it('starts genuinely at 1U, preserves source/old lab, and verifies upgrade then a distinct restart read-only', async () => {
+    const started = performance.now();
+    let previous = started;
+    const checkpoint = (stage: string) => {
+      const now = performance.now();
+      console.info(
+        `UPGRADE_TEST_TIMING ${stage}: ${(now - previous).toFixed(0)}ms; total ${(now - started).toFixed(0)}ms`,
+      );
+      previous = now;
+    };
     const f = await fixture(),
       sourceBefore = await readFile(f.source),
       secretBefore = await readFile(f.secret);
@@ -108,39 +117,45 @@ describe.skipIf(process.platform !== 'win32')('isolated manual upgrade acceptanc
       SECURITY_FLOOR_PRESENT: false,
       UPGRADE_COMPLETED: false,
     });
+    checkpoint('prepare');
     const p = upgradeLabPaths(f.acceptanceRoot, f.labRoot);
-    const status = await promisify(execFile)(
-      'powershell.exe',
-      [
-        '-NoProfile',
-        '-NonInteractive',
-        '-File',
-        fileURLToPath(new URL('../../../../scripts/Phase1V-UpgradeLab.ps1', import.meta.url)),
-        '-Action',
-        'Status',
-      ],
-      { env: { ...process.env, LOCALAPPDATA: f.root }, windowsHide: true },
-    );
+    // Both checks inspect the same immutable pre-upgrade fixture. Run them
+    // together; the productive upgrade still waits for both to finish.
+    const [status, env] = await Promise.all([
+      promisify(execFile)(
+        'powershell.exe',
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-File',
+          fileURLToPath(new URL('../../../../scripts/Phase1V-UpgradeLab.ps1', import.meta.url)),
+          '-Action',
+          'Status',
+        ],
+        { env: { ...process.env, LOCALAPPDATA: f.root }, windowsHide: true },
+      ),
+      upgradeLabEnvironment(f.acceptanceRoot, f.labRoot, {
+        NODE_ENV: 'development',
+        COMANVIEW_EDGE_DB_PATH: f.source,
+        COMANVIEW_CLOUD_URL: 'https://must-not-connect.example',
+        COMANVIEW_EDGE_SYNC_TOKEN: 'secret',
+        NODE_OPTIONS: '--bad',
+        PATH: process.env['PATH'],
+      }),
+    ]);
     expect(status.stdout).toContain('RUNTIME_SCHEMA = 13');
     expect(status.stdout).toContain('SECURITY_FLOOR_PRESENT = false');
+    checkpoint('powershell-status-and-environment');
     withDb(p.db, (db) => expect(inspectRecoveryUpgradeSchema(db)).toBe(13));
     expect(await readdir(join(f.labRoot, 'runtime'))).not.toContain('security-floor.bin');
-    expect(await readFile(f.source)).toEqual(sourceBefore);
-    expect(await readFile(f.secret)).toEqual(secretBefore);
+    expect((await readFile(f.source)).equals(sourceBefore)).toBe(true);
+    expect((await readFile(f.secret)).equals(secretBefore)).toBe(true);
     await expect(readFile(`${f.source}-wal`)).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(readFile(`${f.source}-shm`)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(await readFile(join(f.acceptanceRoot, 'phase-1v', 'keep.txt'), 'utf8')).toBe(
       'previous accepted lab',
     );
     expect((await readFile(p.secret)).toString()).not.toContain('fixture-secret');
-    const env = await upgradeLabEnvironment(f.acceptanceRoot, f.labRoot, {
-      NODE_ENV: 'development',
-      COMANVIEW_EDGE_DB_PATH: f.source,
-      COMANVIEW_CLOUD_URL: 'https://must-not-connect.example',
-      COMANVIEW_EDGE_SYNC_TOKEN: 'secret',
-      NODE_OPTIONS: '--bad',
-      PATH: process.env['PATH'],
-    });
     expect(env).toMatchObject({
       NODE_ENV: 'production',
       COMANVIEW_SYNC_ENABLED: 'false',
@@ -157,28 +172,37 @@ describe.skipIf(process.platform !== 'win32')('isolated manual upgrade acceptanc
     expect(
       await prepareProductionRecoveryUpgrade({ dbPath: p.db, store, edgeSecretStore }),
     ).toEqual({ state: 'UPGRADED' });
+    checkpoint('productive-upgrade');
     const floorBefore = await readFile(p.floor),
       runtimeBefore = await readFile(p.db);
     expect(await recordUpgradeStart(f.acceptanceRoot, f.labRoot, 'start-1')).toMatchObject({
       FIRST_START_VERIFIED: true,
     });
+    checkpoint('first-start-proof');
     await expect(recordUpgradeStart(f.acceptanceRoot, f.labRoot, 'start-1', true)).rejects.toThrow(
       'SECOND_START_REQUIRED',
     );
+    checkpoint('reject-same-start');
     expect(
       await prepareProductionRecoveryUpgrade({ dbPath: p.db, store, edgeSecretStore }),
     ).toEqual({ state: 'CURRENT' });
+    checkpoint('productive-restart');
     expect(await recordUpgradeStart(f.acceptanceRoot, f.labRoot, 'start-2', true)).toMatchObject({
       RESTART_IDEMPOTENT: true,
     });
-    expect(await readFile(p.floor)).toEqual(floorBefore);
-    expect(await readFile(p.db)).toEqual(runtimeBefore);
-    expect(await readFile(f.source)).toEqual(sourceBefore);
-    expect(await readFile(f.secret)).toEqual(secretBefore);
+    checkpoint('restart-proof');
+    // Native byte equality checks every byte, without recursively enumerating
+    // hundreds of thousands of Buffer indices (or dumping credentials on failure).
+    expect((await readFile(p.floor)).equals(floorBefore)).toBe(true);
+    expect((await readFile(p.db)).equals(runtimeBefore)).toBe(true);
+    expect((await readFile(f.source)).equals(sourceBefore)).toBe(true);
+    expect((await readFile(f.secret)).equals(secretBefore)).toBe(true);
+    checkpoint('unchanged-bytes');
     withDb(p.db, (db) => db.exec('UPDATE payments SET amount_applied_amount=999'));
     await expect(inspectUpgradeLab(f.acceptanceRoot, f.labRoot)).rejects.toThrow(
       'DATA_CHANGED_PAYMENTS',
     );
+    checkpoint('detect-tampered-payment');
   }, 60_000);
   it('refuses to overwrite an existing lab and leaves the previous recovery lab intact', async () => {
     const f = await fixture();
@@ -258,8 +282,8 @@ describe.skipIf(process.platform !== 'win32')('isolated manual upgrade acceptanc
           });
           expect(db.prepare('SELECT reason FROM audit_log').get()).toEqual({ reason: 'fixture' });
         });
-      expect(await readFile(join(f.labRoot, 'capture', 'edge.db'))).toEqual(before[0]);
-      expect(await readFile(join(f.labRoot, 'capture', 'edge.db-wal'))).toEqual(before[1]);
+      expect((await readFile(join(f.labRoot, 'capture', 'edge.db'))).equals(before[0]!)).toBe(true);
+      expect((await readFile(join(f.labRoot, 'capture', 'edge.db-wal'))).equals(before[1]!)).toBe(true);
       // Prove the committed value was NOT present in the main file: examine only
       // a disposable test copy of the captured main file, never the original.
       const mainOnly = join(f.root, 'main-only.db');
@@ -325,7 +349,7 @@ describe.skipIf(process.platform !== 'win32')('isolated manual upgrade acceptanc
     expect(
       (await readdir(dirnamePath(p.floor))).filter((name) => name.startsWith('security-floor')),
     ).toEqual(files);
-    expect(await readFile(p.db)).toEqual(dbBefore);
+    expect((await readFile(p.db)).equals(dbBefore)).toBe(true);
   }, 20_000);
   it('rejects lab paths outside the dedicated namespace', async () => {
     const f = await fixture();

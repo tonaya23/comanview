@@ -22,6 +22,7 @@ export const TaxProfileSchema = z.object({
   rateBasisPoints: z.number().int(),
   calculationMode: z.enum(['TAX_INCLUDED', 'TAX_ADDED']),
   active: z.boolean(),
+  revision: z.number().int().positive().nullable(),
 });
 
 // Modifier Option
@@ -81,6 +82,7 @@ export const CreateProductRequestSchema = z.object({
   productType: z.enum(['STANDARD', 'RECIPE', 'NON_INVENTORY']).default('STANDARD'),
   categoryId: z.string().uuid().optional(),
   taxProfileId: z.string().uuid(),
+  taxProfileRevision: z.number().int().positive(),
   basePrice: MoneySchema,
   stationId: z.string().uuid().optional(),
 });

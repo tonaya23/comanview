@@ -6,6 +6,7 @@ import {
   applyRecoveryUpgradeMigration,
   inspectRecoveryUpgradeSchema,
   recoveryUpgradeMigrationHash,
+  inspectAdministrationSchema,
 } from '@comanview/database';
 import { createEncryptedBackupArtifact, verifyEncryptedBackupArtifact } from './BackupArtifact.js';
 import {
@@ -58,10 +59,10 @@ export async function prepareProductionRecoveryUpgrade(input: {
       throw new Error('UPGRADE_SECURITY_STATE_UNAVAILABLE');
     // No create fallback, even if the path disappears between stat and open.
     const preflight = new Database(input.dbPath, { readonly: true, fileMustExist: true });
-    let version: 13 | 14, identity: Identity;
+    let version: 13 | 14 | 15, identity: Identity;
     try {
       integrity(preflight);
-      version = inspectRecoveryUpgradeSchema(preflight);
+      version = inspectProductiveSchema(preflight);
       identity = readIdentity(preflight, version);
       mergeRecoverySecurityMetadata(floor, preflight);
     } finally {
@@ -75,9 +76,9 @@ export async function prepareProductionRecoveryUpgrade(input: {
     if (floor.binding && !sameBinding(binding, floor.binding))
       throw new Error('UPGRADE_BINDING_MISMATCH');
     if (floor.installationEstablished && !floor.binding) throw new Error('UPGRADE_BINDING_MISSING');
-    if (version === 13 && floor.minimumSchemaVersion === 14)
+    if (version < (floor.minimumSchemaVersion??0))
       throw new Error('UPGRADE_SCHEMA_DOWNGRADE');
-    if (version === 14 && !floor.upgradeJournal) {
+    if (version >= 14 && !floor.upgradeJournal) {
       if(floor.licenseDecision){
         const reconciled=new Database(input.dbPath,{fileMustExist:true});
         try{floor=await input.store.mutate(current=>{
@@ -91,7 +92,7 @@ export async function prepareProductionRecoveryUpgrade(input: {
       } finally {
         current.close();
       }
-      if (floor.minimumSchemaVersion !== 14)
+      if (version===14&&floor.minimumSchemaVersion !== 14)
         await input.store.save(updateRecoverySecurityFloor(floor, { minimumSchemaVersion: 14 }));
       return { state: 'CURRENT' };
     }
@@ -263,7 +264,7 @@ function integrity(db: Database.Database) {
   )
     throw new Error('UPGRADE_DATABASE_INVALID');
 }
-function readIdentity(db: Database.Database, version: 13 | 14): Identity {
+function readIdentity(db: Database.Database, version: 13 | 14 | 15): Identity {
   const count = db.prepare('SELECT COUNT(*) n FROM edge_installations').get() as { n: number };
   if (
     count.n !== 1 ||
@@ -288,7 +289,7 @@ function sameBinding(a: Binding, b: Binding) {
   return a.edgeId === b.edgeId && a.tenantId === b.tenantId && a.locationId === b.locationId;
 }
 
-function verifyFloor(
+export function verifyFloor(
   db: Database.Database,
   floor: RecoverySecurityFloor,
   binding: Binding,
@@ -296,13 +297,13 @@ function verifyFloor(
 ) {
   integrity(db);
   if (
-    inspectRecoveryUpgradeSchema(db) !== 14 ||
+    inspectProductiveSchema(db) < 14 ||
     !floor.installationEstablished ||
     !floor.binding ||
     !sameBinding(binding, floor.binding) ||
     !floor.recoveryKey ||
     floor.journal ||
-    (!pending && (floor.recoveryState !== 'NORMAL' || floor.upgradeJournal)) ||
+    (!pending && (floor.recoveryState !== 'NORMAL' || floor.upgradeJournal||floor.administrationUpgradeJournal)) ||
     readIdentity(db, 14).epoch !== floor.recoveryEpoch
   )
     throw new Error('UPGRADE_FLOOR_INVALID');
@@ -355,6 +356,9 @@ function verifyFloor(
   if (!db.prepare("SELECT * FROM backup_runtime WHERE singleton_key='PRIMARY'").get())
     throw new Error('UPGRADE_RUNTIME_INVALID');
 }
+function inspectProductiveSchema(db:Database.Database):13|14|15{
+  return db.pragma('user_version',{simple:true})===15?inspectAdministrationSchema(db):inspectRecoveryUpgradeSchema(db);
+}
 function mergeFloorIntoDatabase(db: Database.Database, floor: RecoverySecurityFloor) {
   const devices = db.prepare('SELECT id FROM devices').all() as Array<{ id: string }>;
   for (const d of devices)
@@ -405,11 +409,12 @@ function assertPreservedData(baseline: Database.Database, current: Database.Data
     const sql = `SELECT ${columns} FROM ${quoted} ORDER BY rowid`;
     const a = baseline.prepare(sql).iterate(),
       b = current.prepare(sql).iterate();
-    for (const row of a) {
+    try{for (const row of a) {
       const next = b.next();
       if (next.done || JSON.stringify(row) !== JSON.stringify(next.value))
         throw new Error('UPGRADE_SOURCE_CHANGED');
     }
     if (!b.next().done) throw new Error('UPGRADE_SOURCE_CHANGED');
+    }finally{a.return?.();b.return?.();}
   }
 }

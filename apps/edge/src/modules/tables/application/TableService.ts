@@ -33,6 +33,8 @@ export class TableService {
         locationId: record.table.locationId.toString(),
         name: record.table.name,
         zone: record.table.zone,
+        zoneId:record.zoneId,
+        version:record.version,
         capacity: record.table.capacity,
         displayOrder: record.table.displayOrder,
         active: record.table.active,
@@ -45,7 +47,7 @@ export class TableService {
         preparingItemCount,
         readyItemCount,
         draftItemCount: order?.items.filter((item) => item.sendStatus === 'DRAFT').length ?? 0,
-        total: order?.getSubtotal().toJSON() ?? null,
+        total: order?.getTotal().toJSON() ?? null,
         balanceDue: order?.getBalanceDue().toJSON() ?? null,
       };
     });

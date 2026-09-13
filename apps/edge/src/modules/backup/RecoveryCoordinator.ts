@@ -6,13 +6,13 @@ import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import * as edgeSchema from '@comanview/database/edge';
 import { EntityId } from '@comanview/domain';
-import { insertAuditEntry,inspectRecoveryUpgradeSchema,type BackupRepository } from '@comanview/database';
+import { insertAuditEntry,inspectAdministrationSchema,applyAdministrationSchemaMigration,initializeLegacyAdministrationBaseline,type BackupRepository } from '@comanview/database';
 import type { RecoveryAuthorizationEnvelope } from '@comanview/contracts';
 import { verifyRecoveryAuthorization } from '@comanview/licensing';
 import { AppError } from '../../app/errorHandler.js';
 import type { AuthenticatedActor } from '../../app/authContext.js';
 import { verifyEncryptedBackupArtifact } from './BackupArtifact.js';
-import { isDeviceRevokedByFloor,mergeRecoverySecurityMetadata,updateRecoverySecurityFloor,type RecoveryJournal,type RecoverySecurityStore } from './RecoverySecurityStore.js';
+import { isDeviceRevokedByFloor,mergeRecoverySecurityMetadata,updateRecoverySecurityFloor,performPersonnelSecurityOperation,type RecoveryJournal,type RecoverySecurityStore } from './RecoverySecurityStore.js';
 import type { BackupManager } from './BackupManager.js';
 import { reconcileLicenseDecision } from '../licensing/LicensingSecurity.js';
 
@@ -69,7 +69,7 @@ export class RecoveryCoordinator {
       floor=updateRecoverySecurityFloor(floor,{recoveryState:'RECOVERY_IN_PROGRESS',journal:{recoveryId,commandId:input.commandId,
         backupId:input.backupId,artifactPath,phase:'PREPARING',startedAt:now.toISOString(),originalDatabasePath:this.dbPath,
         stagedDatabasePath:verified.stagedDatabasePath,stagedDatabaseSha256:await syncStaging(verified.stagedDatabasePath),nextRecoveryEpoch:nextEpoch,authorizationId,
-        targetBinding:{...this.binding},enteredFromRecoveryRequired:false}});
+        targetBinding:{...this.binding},sourceEdgeId:verified.manifest.sourceEdgeId,enteredFromRecoveryRequired:false}});
       await this.securityStore.save(floor);journalSaved=true;setTimeout(()=>this.requestRestart(),50).unref();
       return {scheduled:true as const,recoveryState:'RECOVERY_IN_PROGRESS' as const};
     }finally{if(!journalSaved)await discardUnscheduledStaging(verified,this.securityStore);}
@@ -110,7 +110,7 @@ export async function scheduleEmergencyRecovery(input:ScheduleJournalInput&{comm
     floor=updateRecoverySecurityFloor(floor,{recoveryState:'RECOVERY_IN_PROGRESS',journal:{recoveryId,commandId:input.commandId,
       backupId:input.backupId,artifactPath:resolve(input.artifactPath),phase:'PREPARING',startedAt:input.now.toISOString(),originalDatabasePath:input.dbPath,
       stagedDatabasePath:verified.stagedDatabasePath,stagedDatabaseSha256:await syncStaging(verified.stagedDatabasePath),nextRecoveryEpoch:nextEpoch,authorizationId,
-      targetBinding:{...input.binding},enteredFromRecoveryRequired:true}});
+      targetBinding:{...input.binding},sourceEdgeId:verified.manifest.sourceEdgeId,enteredFromRecoveryRequired:true}});
     await input.securityStore.save(floor);journalSaved=true;
     return {scheduled:true as const,recoveryState:'RECOVERY_IN_PROGRESS' as const};
   }finally{if(!journalSaved)await discardUnscheduledStaging(verified,input.securityStore);}
@@ -169,11 +169,16 @@ export async function completePendingRecoveryAtStartup(input:{dbPath:string;stor
       if(journal.nextRecoveryEpoch<floor.recoveryEpoch)throw new Error('RECOVERY_EPOCH_ROLLBACK');
       assertIntegrityAndSchema(sqlite);
       const tx=sqlite.transaction(()=>{
+        // The already authenticated staging image is the safety snapshot. A legacy
+        // restore gets schema only, NEVER the production personnel baseline.
+        if(inspectAdministrationSchema(sqlite)===14)applyAdministrationSchemaMigration(sqlite);
         const changed=sqlite.prepare(`UPDATE edge_installations SET tenant_id=?, location_id=?, edge_id=?, recovery_epoch=?
           WHERE singleton_key='PRIMARY'`).run(journal.targetBinding.tenantId,journal.targetBinding.locationId,
             journal.targetBinding.edgeId,journal.nextRecoveryEpoch);
         if(changed.changes!==1)throw new Error('RECOVERY_BINDING_INVALID');
         const now=Date.now();
+        initializeLegacyAdministrationBaseline(sqlite,journal.targetBinding,now);
+        sqlite.prepare('UPDATE auth_sessions SET revoked_at=COALESCE(revoked_at,?)').run(now);
         sqlite.prepare(`UPDATE backup_records SET status='VERIFIED',artifact_path=?,completed_at=COALESCE(completed_at,?),
           verified_at=COALESCE(verified_at,?),failure_code=NULL,failure_detail=NULL WHERE backup_id=?`)
           .run(journal.artifactPath,now,now,journal.backupId);
@@ -219,6 +224,8 @@ export async function completePendingRecoveryAtStartup(input:{dbPath:string;stor
         return updateRecoverySecurityFloor(mergeRecoverySecurityMetadata(current,sqlite),{
           recoveryEpoch:journal.nextRecoveryEpoch});
       });
+      await performPersonnelSecurityOperation(input.store,{kind:'RESTORE',sqlite});
+      floor=await input.store.load();
     }finally{sqlite.close();}
     const completedAt=new Date().toISOString();
     floor=updateRecoverySecurityFloor(floor,{recoveryEpoch:Math.max(floor.recoveryEpoch,journal.nextRecoveryEpoch),
@@ -264,7 +271,7 @@ async function assertSnapshot(path:string,expected:string){
 function assertIntegrityAndSchema(db:Database.Database){
   const integrity=db.pragma('integrity_check') as Array<{integrity_check:string}>;
   if(integrity.length!==1||integrity[0]?.integrity_check!=='ok')throw new Error('RECOVERY_BACKUP_INVALID');
-  if(inspectRecoveryUpgradeSchema(db)!==14)throw new Error('RECOVERY_SCHEMA_INVALID');
+  inspectAdministrationSchema(db);
 }
 function validationReceipt(j:RecoveryJournal){return {recoveryId:j.recoveryId,backupId:j.backupId,
   stagedDatabaseSha256:j.stagedDatabaseSha256,targetBinding:j.targetBinding,nextRecoveryEpoch:j.nextRecoveryEpoch};}

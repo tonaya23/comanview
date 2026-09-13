@@ -186,6 +186,14 @@ export function getCashDifferencePresentation(amount: number, currency: string) 
 }
 
 const errorMessages: Record<string, string> = {
+  DEFAULT_CASH_REGISTER_REQUIRED: 'Configura primero la moneda y una caja predeterminada en Restaurante → Cajas para comenzar a operar.',
+  BUSINESS_DAY_POLICY_IN_USE: 'No se puede cambiar el día de negocio mientras haya cajas o ventas abiertas. Cierra o cancela el trabajo pendiente.',
+  CURRENCY_LOCKED: 'La moneda queda bloqueada permanentemente después de la primera actividad financiera.',
+  STATION_HAS_PENDING_WORK: 'La estación tiene productos enviados pendientes. Complétalos en KDS antes de desactivarla.',
+  TAX_CONFIGURATION_REQUIRED: 'OWNER debe configurar explícitamente los impuestos antes de agregar o reconfigurar productos.',
+  TAX_PROFILE_REQUIRED: 'El producto necesita un perfil fiscal válido.',
+  TAX_REVISION_INCONSISTENT: 'La revisión fiscal no coincide con su evidencia. Solicita revisión administrativa.',
+  TAX_SNAPSHOT_IMMUTABLE: 'El snapshot fiscal está protegido; no se modificó la venta.',
   PRECHECK_REQUIRES_OPEN_ORDER:
     'La precuenta solo está disponible mientras la venta sigue abierta.',
   RECEIPT_REQUIRES_CLOSED_ORDER: 'Cierra la venta antes de generar el recibo.',
@@ -249,6 +257,12 @@ const errorMessages: Record<string, string> = {
 
 export function canEditDraftItem(status: 'DRAFT' | 'SENT'): boolean {
   return status === 'DRAFT';
+}
+
+export function canCreateAnotherCounterOrder(
+  order: Pick<import('@comanview/contracts').OrderResponse, 'status' | 'items'> | null,
+): boolean {
+  return !(order?.status === 'OPEN' && order.items.length === 0);
 }
 
 export function getErrorMessage(error: unknown): string {

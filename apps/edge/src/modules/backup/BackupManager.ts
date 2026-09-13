@@ -6,7 +6,7 @@ import type { BackupDestinationType, BackupProtectionStatus, BackupTrigger } fro
 import type { AuthenticatedActor } from '../../app/authContext.js';
 import { AppError } from '../../app/errorHandler.js';
 import { BackupRepository, insertAuditEntry, type EdgeDatabase } from '@comanview/database';
-import { createEncryptedBackupArtifact } from './BackupArtifact.js';
+import { createEncryptedBackupArtifact, backupSchemaVersion, BACKUP_APPLICATION_VERSION } from './BackupArtifact.js';
 import { initializeRecoverySecurityFloor, updateRecoverySecurityFloor, type RecoverySecurityStore } from './RecoverySecurityStore.js';
 
 const PERIOD_MS=60*60_000;
@@ -78,7 +78,7 @@ export class BackupManager {
       this.repository.create({backupId,tenantId:this.context.tenantId,locationId:this.context.locationId,
         sourceEdgeId:this.context.edgeId,recoveryEpoch:floor.recoveryEpoch,status:'CREATING',trigger:input.trigger,
         destinationType:input.destinationType,artifactPath:resolve(destination,`${backupId}.cvbackup`),formatVersion:1,
-        schemaVersion:14,applicationVersion:'1V',businessDate:null,createdAt:now,commandId:input.commandId});
+        schemaVersion:backupSchemaVersion(this.sqlite),applicationVersion:BACKUP_APPLICATION_VERSION,businessDate:null,createdAt:now,commandId:input.commandId});
       try{
         this.audit('BACKUP_REQUESTED',backupId,input.actor,input.commandId,`Backup ${input.trigger} solicitado.`,now);
         const result=await createEncryptedBackupArtifact({source:this.sqlite,destinationDirectory:destination,

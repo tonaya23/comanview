@@ -352,6 +352,10 @@ export class CloudLicensingRepository {
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'ISSUED',$14,$15,$16,$17) RETURNING *`,
         [input.authorizationId,input.tenantId,input.locationId,input.edgeId,input.pairingId,input.pairingCodeHash,input.deviceId,input.deviceType,input.displayName,
          input.initialOwnerId,input.initialOwnerDisplayName,input.kid,JSON.stringify(input.envelope),input.commandId,input.actor.userId,input.issuedAt,input.expiresAt])).rows[0]!;
+      await client.query(`INSERT INTO cloud_contractual_owners(location_id,tenant_id,owner_user_id,installation_authorization_id,created_at)
+        VALUES($1,$2,$3,$4,$5) ON CONFLICT(location_id) DO NOTHING`,[input.locationId,input.tenantId,input.initialOwnerId,input.authorizationId,input.issuedAt]);
+      const owner=(await client.query<{owner_user_id:string;tenant_id:string}>('SELECT owner_user_id,tenant_id FROM cloud_contractual_owners WHERE location_id=$1 FOR UPDATE',[input.locationId])).rows[0];
+      if(owner?.owner_user_id!==input.initialOwnerId||owner.tenant_id!==input.tenantId)throw new LicensingConflictError('CONTRACTUAL_OWNER_MAPPING_CONFLICT');
       await appendCloudAdminAudit(client,{actor:input.actor,action:'INSTALLATION_AUTHORIZATION_ISSUED',entityType:'INSTALLATION_AUTHORIZATION',entityId:input.authorizationId,
         tenantId:input.tenantId,locationId:input.locationId,commandId:input.commandId,reason:input.reason,
         after:{authorizationId:input.authorizationId,edgeId:input.edgeId,pairingId:input.pairingId,status:'ISSUED',expiresAt:input.expiresAt.toISOString()},now:input.issuedAt});
@@ -379,6 +383,10 @@ export class CloudLicensingRepository {
       [edgeId, documentType],
     );
     return Number(result.rows[0]?.next_revision ?? 1);
+  }
+  async contractualOwner(locationId:string):Promise<string|null>{
+    const row=(await this.pool.query<{owner_user_id:string}>('SELECT owner_user_id FROM cloud_contractual_owners WHERE location_id=$1',[locationId])).rows[0];
+    return row?.owner_user_id??null;
   }
 
   private async mapPlan(row: PlanRow): Promise<CloudPlanRecord> {

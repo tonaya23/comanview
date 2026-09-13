@@ -27,6 +27,7 @@ import {
   type HealthResponse,
   type OrderResponse,
   type ProductResponse,
+  type CreateProductRequest,
   type RemoveOrderItemRequest,
   type SendRoundRequest,
   type CashSessionResponse,
@@ -60,6 +61,7 @@ import {
   type AuditListResponse,
   type RestaurantTableResponse,
   type UpdateOrderTablesRequest,
+  type CancelOrderRequest,
   type CancelEmptyTableOrderRequest,
   type RequestOrderPaymentRequest,
   type EffectiveCapabilitiesResponse,
@@ -71,6 +73,9 @@ import {
   BackupProtectionStatusSchema,BackupRecordSchema,RecoveryKeyExportResponseSchema,RestoreScheduledResponseSchema,
   EmergencyRestoreRequestSchema,
   type BackupProtectionStatus,type BackupRecord,
+  RestaurantAdministrationStateSchema,RestaurantAdministrationResultSchema,TaxAdministrationStateSchema,TaxAdministrationResultSchema,PersonnelListSchema,
+  type RestaurantAdministrationState,type RestaurantAdministrationCommand,type RestaurantAdministrationResult,type TaxAdministrationState,type TaxAdministrationCommand,type TaxAdministrationResult,
+  type PersonnelList,type PersonnelMutation,
 } from '@comanview/contracts';
 
 export * from './cloudAdmin.js';
@@ -122,9 +127,11 @@ export interface EdgeClient {
   getAuditEntries(query?: Partial<AuditListQuery>): Promise<AuditListResponse>;
   getCategories(): Promise<CategoryResponse[]>;
   getProducts(): Promise<ProductResponse[]>;
+  createProduct(request: CreateProductRequest): Promise<ProductResponse>;
   getTables(): Promise<RestaurantTableResponse[]>;
   createOrder(request: CreateOrderRequest): Promise<OrderResponse>;
   getOrder(orderId: string): Promise<OrderResponse>;
+  getOpenCounterOrders(): Promise<OrderResponse[]>;
   addOrderItem(orderId: string, request: AddOrderItemRequest): Promise<OrderResponse>;
   removeOrderItem(
     orderId: string,
@@ -143,6 +150,7 @@ export interface EdgeClient {
   ): Promise<OrderResponse>;
   sendRound(orderId: string, request: SendRoundRequest): Promise<OrderResponse>;
   updateOrderTables(orderId: string, request: UpdateOrderTablesRequest): Promise<OrderResponse>;
+  cancelOrder(orderId: string, request: CancelOrderRequest): Promise<OrderResponse>;
   cancelEmptyTableOrder(
     orderId: string,
     request: CancelEmptyTableOrderRequest,
@@ -195,6 +203,12 @@ export interface EdgeClient {
   restoreBackup(request:{commandId:string;backupId:string;confirmation:'RESTORE_VERIFIED_BACKUP'}):Promise<{scheduled:true;recoveryState:'RECOVERY_IN_PROGRESS'}>;
   emergencyRestore(request:{commandId:string;backupId:string;artifactPath:string;recoveryKey:string;
     confirmation:'RESTORE_VERIFIED_BACKUP';recoveryAuthorization?:{protected:string;payload:string;signature:string}}):Promise<{scheduled:true;recoveryState:'RECOVERY_IN_PROGRESS'}>;
+  getRestaurantAdministration():Promise<RestaurantAdministrationState>;
+  executeRestaurantAdministration(command:RestaurantAdministrationCommand):Promise<RestaurantAdministrationResult>;
+  getTaxAdministration():Promise<TaxAdministrationState>;
+  executeTaxAdministration(command:TaxAdministrationCommand):Promise<TaxAdministrationResult>;
+  getPersonnel():Promise<PersonnelList>;
+  executePersonnel(command:PersonnelMutation):Promise<{completed:true}>;
 }
 
 export function createEdgeClient(options: EdgeClientOptions = {}): EdgeClient {
@@ -302,6 +316,12 @@ export function createEdgeClient(options: EdgeClientOptions = {}): EdgeClient {
     exportRecoveryKey:(body)=>request('/recovery-key/export',RecoveryKeyExportResponseSchema,{method:'POST',body:JSON.stringify(body)}),
     restoreBackup:(body)=>request('/recovery/restore',RestoreScheduledResponseSchema,{method:'POST',body:JSON.stringify(body)}),
     emergencyRestore:(body)=>request('/recovery/emergency-restore',RestoreScheduledResponseSchema,{method:'POST',body:JSON.stringify(EmergencyRestoreRequestSchema.parse(body))},false),
+    getRestaurantAdministration:()=>request('/administration',RestaurantAdministrationStateSchema),
+    executeRestaurantAdministration:(body)=>request('/administration/commands',RestaurantAdministrationResultSchema,{method:'POST',body:JSON.stringify(body)}),
+    getTaxAdministration:()=>request('/administration/taxes',TaxAdministrationStateSchema),
+    executeTaxAdministration:(body)=>request('/administration/taxes/commands',TaxAdministrationResultSchema,{method:'POST',body:JSON.stringify(body)}),
+    getPersonnel:()=>request('/administration/personnel',PersonnelListSchema),
+    executePersonnel:(body)=>request('/administration/personnel/commands',{parse:(v:unknown)=>v as {completed:true}},{method:'POST',body:JSON.stringify(body)}),
     getAuditEntries: (query = {}) => {
       const parameters = Object.entries(query)
         .filter(([, value]) => value !== undefined)
@@ -311,10 +331,12 @@ export function createEdgeClient(options: EdgeClientOptions = {}): EdgeClient {
     },
     getCategories: () => request('/catalog/categories', CategorySchema.array()),
     getProducts: () => request('/catalog/products', ProductSchema.array()),
+    createProduct: (body) => request('/catalog/products', ProductSchema, { method: 'POST', body: JSON.stringify(body) }),
     getTables: () => request('/tables', RestaurantTableSchema.array()),
     createOrder: (body) =>
       request('/orders', OrderSchema, { method: 'POST', body: JSON.stringify(body) }),
     getOrder: (orderId) => request(`/orders/${orderId}`, OrderSchema),
+    getOpenCounterOrders: () => request('/orders/open-counter', OrderSchema.array()),
     addOrderItem: (orderId, body) =>
       request(`/orders/${orderId}/items`, OrderSchema, {
         method: 'POST',
@@ -343,6 +365,11 @@ export function createEdgeClient(options: EdgeClientOptions = {}): EdgeClient {
     updateOrderTables: (orderId, body) =>
       request(`/orders/${orderId}/tables`, OrderSchema, {
         method: 'PUT',
+        body: JSON.stringify(body),
+      }),
+    cancelOrder: (orderId, body) =>
+      request(`/orders/${orderId}/cancel`, OrderSchema, {
+        method: 'POST',
         body: JSON.stringify(body),
       }),
     cancelEmptyTableOrder: (orderId, body) =>

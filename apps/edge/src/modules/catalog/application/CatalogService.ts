@@ -1,5 +1,5 @@
 import { CatalogRepository } from '@comanview/database';
-import { Product, EntityId, TaxProfile, ProductType } from '@comanview/domain';
+import { Product, EntityId, ProductType } from '@comanview/domain';
 import { Money } from '@comanview/money';
 import {
   CreateProductRequest,
@@ -12,15 +12,13 @@ export class CatalogService {
   constructor(private readonly catalogRepo: CatalogRepository) {}
 
   async createProduct(request: CreateProductRequest): Promise<ProductResponse> {
-    // We assume the tax profile is fetched or mocked. For now, creating a mock one
-    // In a real scenario, we'd load it from the repository.
-    const taxProfile = new TaxProfile({
-      id: EntityId.fromString(request.taxProfileId),
-      name: 'Standard Tax',
-      rateBasisPoints: 1600,
-      calculationMode: 'TAX_ADDED',
-      active: true,
-    });
+    const taxProfile = this.catalogRepo.getTaxProfile(EntityId.fromString(request.taxProfileId));
+    if (!taxProfile) throw new Error('TAX_PROFILE_REQUIRED');
+    if (!taxProfile.active) throw new Error('TAX_PROFILE_INACTIVE');
+    if (taxProfile.revision !== null && taxProfile.revision !== request.taxProfileRevision)
+      throw new Error('TAX_REVISION_INCONSISTENT');
+    if (taxProfile.revision === null && request.taxProfileRevision !== 1)
+      throw new Error('TAX_REVISION_INCONSISTENT');
 
     const product = new Product({
       id: EntityId.generate(),
@@ -91,6 +89,7 @@ export class CatalogService {
         rateBasisPoints: product.taxProfile.rateBasisPoints,
         calculationMode: product.taxProfile.calculationMode,
         active: product.taxProfile.active,
+        revision: product.taxProfile.revision,
       },
       basePrice: {
         amount: product.basePrice.amount,

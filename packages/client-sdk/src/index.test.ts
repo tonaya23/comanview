@@ -679,7 +679,7 @@ describe('createEdgeClient', () => {
       updatedAt: '2026-08-27T12:00:00.000Z',
     };
     const fetchMock = vi.fn(async (url: string) =>
-      jsonResponse(url === '/tables' ? [table] : order),
+      jsonResponse(url === '/tables' ? [table] : url === '/orders/open-counter' ? [order] : order),
     );
     const client = createEdgeClient({ fetch: fetchMock as EdgeFetch });
     expect(await client.getTables()).toMatchObject([table]);
@@ -694,6 +694,13 @@ describe('createEdgeClient', () => {
     expect(fetchMock).toHaveBeenLastCalledWith(
       `/orders/${order.id}/cancel-empty`,
       expect.objectContaining({ method: 'POST', body: JSON.stringify(cancellation) }),
+    );
+    await client.getOpenCounterOrders();
+    expect(fetchMock).toHaveBeenLastCalledWith('/orders/open-counter', expect.any(Object));
+    await client.cancelOrder(order.id, { expectedVersion: order.version });
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      `/orders/${order.id}/cancel`,
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ expectedVersion: order.version }) }),
     );
     const requestPayment = { commandId: 'request-payment', expectedVersion: order.version };
     await client.requestOrderPayment(order.id, requestPayment);

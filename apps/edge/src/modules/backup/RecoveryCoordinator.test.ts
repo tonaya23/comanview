@@ -33,7 +33,7 @@ function database(path: string, status = 'ACTIVE') {
     INSERT INTO event_log(id,event_type,aggregate_type,aggregate_id,payload,occurred_at,local_sequence,sync_status) VALUES('pending','ORDER_CREATED','ORDER','order','{}',1,1,'PENDING');
     INSERT INTO devices(id,tenant_id,location_id,name,device_type,status,session_timeout_minutes,created_at) VALUES('${deviceId}','old-tenant','old-location','Fixture','POS','${status}',60,1);
     INSERT INTO device_credentials(credential_id,device_id,credential_hash,created_at) VALUES('credential','${deviceId}','hash',1);
-    INSERT INTO users(id,tenant_id,location_id,display_name,status,pin_hash,created_at) VALUES('user','old-tenant','old-location','User','ACTIVE','hash',1);
+    INSERT INTO users(id,tenant_id,location_id,display_name,status,pin_hash,created_at) VALUES('user','${targetBinding.tenantId}','${targetBinding.locationId}','User','ACTIVE','hash',1);
     INSERT INTO auth_sessions(id,user_id,device_id,tenant_id,location_id,token_hash,login_at,last_activity,expires_at) VALUES('session','user','${deviceId}','old-tenant','old-location','hash',1,1,9999999999999);
     INSERT INTO edge_control_documents(document_id,document_type,revision,document_hash,envelope_json,payload_json,issued_at,received_at,is_current) VALUES('doc','LICENSE',1,'hash','{}','{}',1,1,1);`);
   db.pragma('journal_mode=DELETE');
@@ -66,7 +66,7 @@ describe('recovery startup merge', () => {
       maximumSignedRevisions: { LICENSE: 3, FEATURE_FLAGS: 2, CONFIGURATION: 2 },
       recoveryState: 'RECOVERY_IN_PROGRESS',
       journal: {
-        recoveryId: 'r1',
+        recoveryId: '01991a00-0000-7000-8000-000000000731',
         commandId: '01991a00-0000-7000-8000-000000000707',
         backupId: '01991a00-0000-7000-8000-000000000705',
         artifactPath: 'artifact',
@@ -130,7 +130,8 @@ describe('recovery startup merge', () => {
       recoveryEpoch: 2,
       recoveryState: 'RECOVERY_IN_PROGRESS',
       journal: {
-        recoveryId: 'r-hardware',
+        recoveryId: '01991a00-0000-7000-8000-000000000732',
+        sourceEdgeId: '01991a00-0000-7000-8000-000000000799',
         commandId: '01991a00-0000-7000-8000-000000000710',
         backupId: '01991a00-0000-7000-8000-000000000711',
         artifactPath: 'artifact',
@@ -180,7 +181,7 @@ describe('recovery startup merge', () => {
       binding: targetBinding,
       recoveryState: 'RECOVERY_IN_PROGRESS',
       journal: {
-        recoveryId: 'r2',
+        recoveryId: '01991a00-0000-7000-8000-000000000733',
         commandId: '01991a00-0000-7000-8000-000000000708',
         backupId: '01991a00-0000-7000-8000-000000000706',
         artifactPath: 'artifact',

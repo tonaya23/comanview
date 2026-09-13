@@ -1,11 +1,21 @@
 import { EntityId } from '@comanview/domain';
-import { RecoveryAuthorizationConflictError,type CloudAdminMutationActor,type CloudRecoveryRepository } from '@comanview/database';
+import { RecoveryAuthorizationConflictError,type CloudAdminMutationActor,type CloudRecoveryRepository,type CloudPersonnelRecoveryRepository } from '@comanview/database';
 import type { CloudLicensingConfig } from '@comanview/config';
-import { signRecoveryAuthorization } from '@comanview/licensing';
+import { signRecoveryAuthorization,signOwnerRecoveryAuthorization } from '@comanview/licensing';
+import type { IssueOwnerRecoveryAuthorizationRequest } from '@comanview/contracts';
 
 export class CloudRecoveryService {
   constructor(private repository:CloudRecoveryRepository,private signing:CloudLicensingConfig,
-    private now:()=>Date=()=>new Date()){}
+    private now:()=>Date=()=>new Date(),private personnel?:CloudPersonnelRecoveryRepository){}
+  issueOwner(input:IssueOwnerRecoveryAuthorizationRequest,actor:CloudAdminMutationActor){
+    if(!this.personnel)throw new RecoveryAuthorizationConflictError('OWNER_RECOVERY_UNAVAILABLE');
+    return this.personnel.issue(input,actor,this.now(),{kid:this.signing.signingKid,
+      sign:payload=>signOwnerRecoveryAuthorization(payload,this.signing.signingKid,this.signing.privateKeyPem)});
+  }
+  consumeOwner(edgeId:string,input:{authorizationId:string;commandId:string;consumedAt:string}){
+    if(!this.personnel)throw new RecoveryAuthorizationConflictError('OWNER_RECOVERY_UNAVAILABLE');
+    return this.personnel.consume(edgeId,{...input,consumedAt:new Date(input.consumedAt)});
+  }
   async issue(input:{locationId:string;commandId:string;sourceEdgeId:string;targetEdgeId:string;backupId:string;reason:string},actor:CloudAdminMutationActor){
     const now=this.now(),authorizationId=EntityId.generate().toString(),epoch=await this.repository.nextEpoch(input.sourceEdgeId,input.targetEdgeId);
     const payload={formatVersion:1 as const,typ:'comanview-recovery-authorization' as const,authorizationId,

@@ -173,22 +173,20 @@ describe('restore journal physical evidence', () => {
       for (const afterPersistence of [false, true]) {
         const f = await fixture();
         let interrupted = false;
-        const injected: RecoverySecurityStore = {
-          load: () => f.store.load(),
-          mutate: (change) => f.store.mutate(change),
-          save: async (value) => {
+        const saved=f.store.save.bind(f.store);
+        const saveFailure=vi.spyOn(f.store,'save').mockImplementation(async (value) => {
             if (!interrupted && (value.journal?.phase ?? 'COMPLETED') === phase) {
               interrupted = true;
-              if (afterPersistence) await f.store.save(value);
+              if (afterPersistence) await saved(value);
               throw new Error('simulated journal interruption');
             }
-            await f.store.save(value);
-          },
-        };
-        expect(await completePendingRecoveryAtStartup({ dbPath: f.dbPath, store: injected })).toBe(
+            await saved(value);
+        });
+        expect(await completePendingRecoveryAtStartup({ dbPath: f.dbPath, store: f.store })).toBe(
           'RECOVERY_REQUIRED',
         );
         expect(interrupted).toBe(true);
+        saveFailure.mockRestore();
         const first = await f.store.load();
         if (phase !== 'COMPLETED') {
           expect(first.recoveryEpoch).toBe(0);

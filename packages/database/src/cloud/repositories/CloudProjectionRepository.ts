@@ -34,6 +34,7 @@ interface EventContext {
 
 export type ProjectionAction =
   | { type: 'NOOP' }
+  | {type:'ADMINISTRATION_CHANGED';entityType:string;publicState:Record<string,unknown>}
   | {
       type: 'ORDER_CREATED';
       orderType: string;
@@ -463,6 +464,14 @@ export class CloudProjectionRepository {
     switch (action.type) {
       case 'NOOP':
         return;
+      case 'ADMINISTRATION_CHANGED':
+        await client.query(`INSERT INTO cloud_restaurant_administration_projection(location_id,entity_type,entity_id,tenant_id,source_edge_id,public_state,
+          last_event_id,last_local_sequence,last_recovery_epoch,updated_at) VALUES($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10)
+          ON CONFLICT(location_id,entity_type,entity_id) DO UPDATE SET public_state=EXCLUDED.public_state,last_event_id=EXCLUDED.last_event_id,
+          last_local_sequence=EXCLUDED.last_local_sequence,last_recovery_epoch=EXCLUDED.last_recovery_epoch,source_edge_id=EXCLUDED.source_edge_id,updated_at=EXCLUDED.updated_at
+          WHERE (cloud_restaurant_administration_projection.last_recovery_epoch,cloud_restaurant_administration_projection.last_local_sequence)
+             <= (EXCLUDED.last_recovery_epoch,EXCLUDED.last_local_sequence)`,[event.locationId,action.entityType,event.aggregateId,event.tenantId,event.edgeId,
+          JSON.stringify(action.publicState),event.eventId,event.localSequence,event.recoveryEpoch,now]);return;
       case 'ORDER_CREATED':
         if (
           (

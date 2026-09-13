@@ -395,12 +395,10 @@ export class Order {
       throw new SpecialInstructionsTooLongError(MAX_SPECIAL_INSTRUCTIONS_LENGTH);
     }
 
-    const modifierTotal = snapshot.modifiers.reduce(
-      (total, modifier) => total.add(modifier.priceDelta),
-      Money.zero(this.props.currency),
-    );
-    const replacementLineTotal = snapshot.basePrice.add(modifierTotal).multiply(item.quantity);
-    const resultingSubtotal = this.getSubtotal()
+    // An explicit DRAFT reconfiguration captures the current authoritative snapshot,
+    // including its fiscal revision/policy. Catalog changes alone never reach here.
+    const replacementLineTotal = snapshot.lineAmounts(item.quantity).total;
+    const resultingSubtotal = this.getTotal()
       .subtract(item.getLineTotal())
       .add(replacementLineTotal);
     if (this.getPaidAmount().greaterThan(resultingSubtotal)) {
@@ -441,7 +439,7 @@ export class Order {
       throw new OrderItemSentError(itemId.toString());
     }
 
-    const resultingSubtotal = this.getSubtotal().subtract(item.getLineTotal());
+    const resultingSubtotal = this.getTotal().subtract(item.getLineTotal());
     if (this.getPaidAmount().greaterThan(resultingSubtotal)) {
       throw new OrderPaidAmountExceedsTotalError(this.id.toString());
     }
@@ -702,13 +700,24 @@ export class Order {
   // ─── Totals ─────────────────────────────────────────────────────────────────
 
   /**
-   * Commercial subtotal: sum of all item line totals (base price + modifiers × qty).
+   * Net line bases. Legacy snapshots preserve their original base/total unchanged.
    * Uses exact integer arithmetic via @comanview/money (INV-08).
    *
    * Returns Money.zero(this.currency) when there are no items.
    * Currency is the Order's declared currency — no MXN hardcode.
    */
   getSubtotal(): Money {
+    return this.props.items.reduce(
+      (acc, item) => acc.add(item.getLineBase()),
+      Money.zero(this.props.currency),
+    );
+  }
+
+  getTaxTotal(): Money {
+    return this.props.items.reduce((acc, item) => acc.add(item.getLineTax()), Money.zero(this.currency));
+  }
+
+  getTotal(): Money {
     return this.props.items.reduce(
       (acc, item) => acc.add(item.getLineTotal()),
       Money.zero(this.props.currency),
@@ -728,6 +737,6 @@ export class Order {
   }
 
   getBalanceDue(): Money {
-    return this.getSubtotal().subtract(this.getPaidAmount());
+    return this.getTotal().subtract(this.getPaidAmount());
   }
 }

@@ -24,6 +24,7 @@ import type { KdsService } from '../../kds/application/KdsService.js';
 import type { RealtimeHub } from '../../../infrastructure/realtime/RealtimeHub.js';
 import type { AuthorizedOperation } from '../../../app/authContext.js';
 import type { EdgeLicenseManager } from '../../licensing/EdgeLicenseManager.js';
+import type { AdministrationService } from '../../administration/AdministrationService.js';
 import {
   CreateOrderRequest,
   AddOrderItemRequest,
@@ -51,6 +52,7 @@ export class OrderService {
     private readonly tableRepo: TableRepository,
     private readonly realtime: RealtimeHub,
     private readonly licensing?: EdgeLicenseManager,
+    private readonly administration?: AdministrationService,
   ) {}
 
   async createOrder(
@@ -73,6 +75,9 @@ export class OrderService {
     this.assertTablesAssignable(requestedTableIds);
     const tableIds = requestedTableIds.map((t) => EntityId.fromString(t));
 
+    const configuredCurrency=this.administration?.operational().currency;
+    if(this.administration&&!configuredCurrency)throw new AppError('CURRENCY_REQUIRED',409,'Configura explícitamente la moneda antes de crear Orders.');
+    if(configuredCurrency&&request.currency!==configuredCurrency)throw new AppError('ORDER_CURRENCY_MISMATCH',409,'La moneda solicitada no coincide con la configuración del Location.');
     const order = Order.create({
       orderType: request.orderType as OrderType,
       orderChannel: request.channel as OrderChannel,
@@ -80,7 +85,7 @@ export class OrderService {
       tenantId,
       locationId,
       tableIds,
-      currency: request.currency,
+      currency: configuredCurrency??request.currency,
       ...(request.commandId ? { commandId: request.commandId } : {}),
     });
 
@@ -93,6 +98,10 @@ export class OrderService {
     const order = this.orderRepo.getOrderById(EntityId.fromString(id));
     if (!order) return null;
     return mapOrderToResponse(order);
+  }
+
+  async listOpenCounterOrders(): Promise<OrderResponse[]> {
+    return this.orderRepo.listOpenCounterOrders().map(mapOrderToResponse);
   }
 
   async addItem(
@@ -350,6 +359,10 @@ export class OrderService {
       );
     }
 
+    if (request.emptyCounterOnly && (order.orderType !== 'COUNTER' || order.items.length !== 0 ||
+      order.rounds.length !== 0 || order.payments.length !== 0)) {
+      throw new AppError('ORDER_EMPTY_CANCEL_NOT_ALLOWED', 409, 'Solo se puede descartar una venta COUNTER sin productos, rondas ni pagos.');
+    }
     order.cancel();
     const releasedTableIds = order.tableIds.map((tableId) => tableId.toString());
     this.saveWithTableConflictMapping(order);
@@ -591,6 +604,7 @@ export class OrderService {
       const groupId = owningGroup.modifierGroup.id.toString();
       modifierSelections.set(groupId, [...(modifierSelections.get(groupId) ?? []), optionId]);
     }
-    return product.createSnapshot(modifierSelections);
+    return product.createSnapshot(modifierSelections,
+      this.catalogRepo.getFiscalPolicyVersion(this.context.tenantId, this.context.locationId));
   }
 }

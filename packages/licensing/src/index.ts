@@ -24,6 +24,8 @@ import {
   RecoveryAuthorizationPayloadSchema,
   type RecoveryAuthorizationEnvelope,
   type RecoveryAuthorizationPayload,
+  OwnerRecoveryAuthorizationPayloadSchema,OwnerRecoveryAuthorizationEnvelopeSchema,
+  type OwnerRecoveryAuthorizationPayload,type OwnerRecoveryAuthorizationEnvelope,
 } from '@comanview/contracts';
 
 export const LICENSE_DOCUMENT_DURATION_MS = 7 * 24 * 60 * 60 * 1_000;
@@ -91,6 +93,24 @@ export function verifyRecoveryAuthorization(input:unknown,publicKeyring:Readonly
 
 function parseBase64urlJson(value: string): unknown {
   return JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as unknown;
+}
+
+export function signOwnerRecoveryAuthorization(input:OwnerRecoveryAuthorizationPayload,kid:string,privateKeyPem:string):OwnerRecoveryAuthorizationEnvelope{
+  const payload=OwnerRecoveryAuthorizationPayloadSchema.parse(input);
+  const protectedValue=base64urlJson({typ:'comanview-owner-recovery-authorization',formatVersion:1,alg:'EdDSA',kid});
+  const payloadValue=base64urlJson(payload);
+  return {protected:protectedValue,payload:payloadValue,signature:sign(null,Buffer.from(`${protectedValue}.${payloadValue}`,'ascii'),createPrivateKey(privateKeyPem)).toString('base64url')};
+}
+export function verifyOwnerRecoveryAuthorization(input:unknown,publicKeyring:Readonly<Record<string,string>>):{payload:OwnerRecoveryAuthorizationPayload;kid:string}{
+  const envelope=OwnerRecoveryAuthorizationEnvelopeSchema.parse(input),raw=parseBase64urlJson(envelope.protected);
+  if(!raw||typeof raw!=='object')throw new Error('OWNER_RECOVERY_AUTHORIZATION_INVALID');
+  const header=raw as Record<string,unknown>;
+  if(header['typ']!=='comanview-owner-recovery-authorization'||header['formatVersion']!==1||header['alg']!=='EdDSA'||typeof header['kid']!=='string'||
+    Object.keys(header).sort().join(',')!=='alg,formatVersion,kid,typ')throw new Error('OWNER_RECOVERY_AUTHORIZATION_INVALID');
+  const key=publicKeyring[header['kid']];
+  if(!key||!verify(null,Buffer.from(`${envelope.protected}.${envelope.payload}`,'ascii'),createPublicKey(key),Buffer.from(envelope.signature,'base64url')))
+    throw new Error('OWNER_RECOVERY_AUTHORIZATION_INVALID');
+  return {payload:OwnerRecoveryAuthorizationPayloadSchema.parse(parseBase64urlJson(envelope.payload)),kid:header['kid']};
 }
 
 export function hashSignedEnvelope(envelope: SignedDocumentEnvelope): string {

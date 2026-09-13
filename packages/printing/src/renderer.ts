@@ -57,6 +57,8 @@ export function renderDebugTicket(job: PrintJob): string {
 
   if (payload.kind !== 'STATION_TICKET') {
     lines.push('', `SUBTOTAL: ${money(payload.subtotal)}`);
+    if (payload.taxTotal) lines.push(`TAX: ${money(payload.taxTotal)}`);
+    if (payload.total) lines.push(`TOTAL: ${money(payload.total)}`);
     lines.push(`PAID: ${money(payload.paidAmount)}`);
     lines.push(`BALANCE: ${money(payload.balanceDue)}`);
     lines.push(`TIPS: ${money(payload.tipTotal)}`);

@@ -49,6 +49,15 @@ export function orderRoutes(orderService: OrderService, auth: AuthGuard): Fastif
       },
     );
 
+    // GET /orders/open-counter — recover open counter sales on this Edge.
+    fastify.get(
+      '/open-counter',
+      { preHandler: auth.requirePermission(PERMISSIONS.ORDER_VIEW) },
+      async (_request, reply) => {
+        reply.send(await orderService.listOpenCounterOrders());
+      },
+    );
+
     // PATCH /orders/:id/items/:itemId/instructions
     fastify.patch(
       '/:id/items/:itemId/instructions',

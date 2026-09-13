@@ -6,3 +6,4 @@
  */
 
 export * from './DeviceOnboardingCard.js';
+export * from './ConfigurationFields.js';

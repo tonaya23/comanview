@@ -62,6 +62,29 @@ const target = {
   configuration: {},
 } satisfies PrintTarget;
 
+describe('captured fiscal totals', () => {
+  const fiscalJob: PrintJob = { ...job, jobType: 'PRECHECK', payload: {
+    kind: 'PRECHECK', orderId: 'o', orderNumber: 'A-1', orderType: 'COUNTER', tableIds: [],
+    capturedAt: '2026-09-02T00:00:00Z', items: [],
+    subtotal: { amount: 10000, currency: 'MXN' }, taxTotal: { amount: 1600, currency: 'MXN' },
+    total: { amount: 11600, currency: 'MXN' }, paidAmount: { amount: 0, currency: 'MXN' },
+    balanceDue: { amount: 11600, currency: 'MXN' }, tipTotal: { amount: 0, currency: 'MXN' },
+  } };
+  it.each(['debug', 'escpos'])('renders supplied base/tax/total without recalculating in %s', renderer => {
+    const output = renderer === 'debug' ? renderDebugTicket(fiscalJob) : new TextDecoder().decode(renderEscPosTicket(fiscalJob));
+    expect(output).toContain('SUBTOTAL: MXN 100.00');
+    expect(output).toContain('TAX: MXN 16.00');
+    expect(output).toContain('TOTAL: MXN 116.00');
+  });
+  it('never adds taxes to durable legacy jobs with no tax snapshot', () => {
+    if (fiscalJob.payload.kind !== 'PRECHECK') throw new Error('fixture');
+    const { taxTotal: _tax, total: _total, ...legacyPayload } = fiscalJob.payload;
+    const legacy = { ...fiscalJob, payload: legacyPayload };
+    expect(renderDebugTicket(legacy)).not.toContain('TAX:');
+    expect(new TextDecoder().decode(renderEscPosTicket(legacy))).not.toContain('TAX:');
+  });
+});
+
 const zReportJob = {
   ...job,
   printJobId: '01991a00-0000-7000-8000-000000000903',

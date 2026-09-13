@@ -18,6 +18,8 @@ export interface OrderItemView {
   readonly isDraft: boolean;
   readonly isSent: boolean;
   getLineTotal(): Money;
+  getLineBase(): Money;
+  getLineTax(): Money;
 }
 
 export interface OrderItemProps {
@@ -79,21 +81,15 @@ export class OrderItem implements OrderItemView {
   }
 
   /**
-   * Calculate the line total: (base price + all modifier deltas) × quantity.
+   * Calculate using the frozen snapshot policy, including tax only for policy 1.
    * All arithmetic is exact using @comanview/money.
    */
   getLineTotal(): Money {
-    const snapshot = this.props.snapshot;
-    const currency = snapshot.basePrice.currency;
-
-    const modifierTotal = snapshot.modifiers.reduce(
-      (acc, mod) => acc.add(mod.priceDelta),
-      Money.zero(currency),
-    );
-
-    const unitPrice = snapshot.basePrice.add(modifierTotal);
-    return unitPrice.multiply(this.props.quantity);
+    return this.snapshot.lineAmounts(this.quantity).total;
   }
+
+  getLineBase(): Money { return this.snapshot.lineAmounts(this.quantity).base; }
+  getLineTax(): Money { return this.snapshot.lineAmounts(this.quantity).tax; }
 
   /** Internal: called by Order.sendDraftItems() only. */
   _markAsSent(roundId: EntityId): void {

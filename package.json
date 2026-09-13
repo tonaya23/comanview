@@ -25,7 +25,7 @@
     "build": "turbo run build",
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
-    "test": "turbo run test",
+    "test": "node --test scripts/test-execution.test.mjs && turbo run test && pnpm --filter @comanview/edge test:host",
     "test:integration": "turbo run test:integration",
     "test:e2e": "turbo run test:e2e",
     "format": "prettier --write \"**/*.{ts,tsx,mts,mjs,js,json,md,yaml,yml}\"",

@@ -639,11 +639,11 @@ export function App() {
                   <footer>
                     <b>
                       {money(
-                        item.productSnapshot.basePrice.amount +
+                        item.lineTotal?.amount ?? (item.productSnapshot.basePrice.amount +
                           item.productSnapshot.selectedModifiers.reduce(
                             (sum, mod) => sum + mod.priceDelta.amount,
                             0,
-                          ),
+                          )),
                         order.currency,
                       )}
                     </b>
@@ -674,6 +674,8 @@ export function App() {
                 <span>Subtotal</span>
                 <strong>{money(order.subtotal.amount, order.currency)}</strong>
               </div>
+              {order.taxTotal && <div><span>Impuestos</span><strong>{money(order.taxTotal.amount, order.currency)}</strong></div>}
+              <div><span>Total</span><strong>{money(order.total.amount, order.currency)}</strong></div>
               <button
                 className="send"
                 disabled={pending || !order.items.some((item) => item.status === 'DRAFT')}

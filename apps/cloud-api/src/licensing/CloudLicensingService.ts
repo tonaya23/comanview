@@ -165,7 +165,7 @@ export class CloudLicensingService {
     const payload={formatVersion:1 as const,typ:'comanview-installation-authorization' as const,authorizationId,
       tenantId:assignment.tenantId,locationId,edgeId:assignment.activeEdgeId,pairingId:input.pairingId,
       pairingCodeHash:hashPairingCode(input.pairingId,input.pairingCode),deviceId:input.deviceId,deviceType:input.deviceType,
-      displayName:input.displayName,initialOwnerId:EntityId.generate().toString(),initialOwnerDisplayName:input.initialOwnerDisplayName,
+      displayName:input.displayName,initialOwnerId:await this.repository.contractualOwner(locationId)??EntityId.generate().toString(),initialOwnerDisplayName:input.initialOwnerDisplayName,
       issuedAt:issuedAt.toISOString(),expiresAt:expiresAt.toISOString()};
     const envelope=signInstallationAuthorization(payload,this.signing.signingKid,this.signing.privateKeyPem);
     const stored = await this.repository.issueInstallationAuthorization({...payload,kid:this.signing.signingKid,envelope,commandId:input.commandId,reason:input.reason,actor,issuedAt,expiresAt});

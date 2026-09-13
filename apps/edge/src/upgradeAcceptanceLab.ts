@@ -227,6 +227,12 @@ export async function prepareUpgradeLab(input: {
 }
 
 export async function inspectUpgradeLab(acceptanceRoot: string, labRoot: string) {
+  return (await inspectUpgradeLabState(acceptanceRoot, labRoot)).report;
+}
+
+// Evidence and report come from the same validated inspection. Never cache across
+// calls: a later start must read and validate the current protected state again.
+async function inspectUpgradeLabState(acceptanceRoot: string, labRoot: string) {
   const p = upgradeLabPaths(acceptanceRoot, labRoot),
     m = await marker(p);
   equal(
@@ -262,15 +268,19 @@ export async function inspectUpgradeLab(acceptanceRoot: string, labRoot: string)
         throw new Error('UPGRADE_LAB_PARTIAL_TRANSITION');
       equal(data, m.baselineHashes, 'UPGRADE_LAB_RUNTIME_CHANGED');
       return {
-        LAB_READY: true,
-        ISOLATED_RUNTIME: true,
-        RUNTIME_DB: p.db,
-        SOURCE_UNCHANGED: true,
-        BASELINE_SCHEMA: 13,
-        RUNTIME_SCHEMA: 13,
-        SECURITY_FLOOR_PRESENT: false,
-        DATA_PRESERVED: true,
-        UPGRADE_COMPLETED: false,
+        floor: null,
+        safety: null,
+        report: {
+          LAB_READY: true,
+          ISOLATED_RUNTIME: true,
+          RUNTIME_DB: p.db,
+          SOURCE_UNCHANGED: true,
+          BASELINE_SCHEMA: 13,
+          RUNTIME_SCHEMA: 13,
+          SECURITY_FLOOR_PRESENT: false,
+          DATA_PRESERVED: true,
+          UPGRADE_COMPLETED: false,
+        },
       };
     }
     const floor = await readFloor(p.floor);
@@ -315,20 +325,24 @@ export async function inspectUpgradeLab(acceptanceRoot: string, labRoot: string)
       ).epoch !== 0
     )
       throw new Error('UPGRADE_LAB_EPOCH_CHANGED');
-    await safetyEvidence(p);
+    const safety = await safetyEvidence(p);
     return {
-      LAB_READY: true,
-      ISOLATED_RUNTIME: true,
-      RUNTIME_DB: p.db,
-      SOURCE_UNCHANGED: true,
-      BASELINE_SCHEMA: 13,
-      RUNTIME_SCHEMA: 14,
-      SECURITY_FLOOR_PRESENT: true,
-      SECURITY_FLOOR_VALID: true,
-      DATA_PRESERVED: true,
-      RECOVERY_EPOCH: 0,
-      RECOVERY_STATE: 'NORMAL',
-      UPGRADE_COMPLETED: true,
+      floor,
+      safety,
+      report: {
+        LAB_READY: true,
+        ISOLATED_RUNTIME: true,
+        RUNTIME_DB: p.db,
+        SOURCE_UNCHANGED: true,
+        BASELINE_SCHEMA: 13,
+        RUNTIME_SCHEMA: 14,
+        SECURITY_FLOOR_PRESENT: true,
+        SECURITY_FLOOR_VALID: true,
+        DATA_PRESERVED: true,
+        RECOVERY_EPOCH: 0,
+        RECOVERY_STATE: 'NORMAL',
+        UPGRADE_COMPLETED: true,
+      },
     };
   } finally {
     base.close();
@@ -343,10 +357,17 @@ export async function recordUpgradeStart(
   startId: string,
   restart = false,
 ) {
-  const report = await inspectUpgradeLab(acceptanceRoot, labRoot);
-  if (!report.UPGRADE_COMPLETED) throw new Error('UPGRADE_LAB_NOT_UPGRADED');
-  const p = upgradeLabPaths(acceptanceRoot, labRoot),
-    floor = await readFloor(p.floor);
+  const p = upgradeLabPaths(acceptanceRoot, labRoot);
+  // This negative precondition cannot certify a restart. Reject it before the
+  // expensive DPAPI inspection, but still validate paths before reading evidence.
+  await marker(p);
+  const path = join(p.root, FIRST);
+  const first = restart
+    ? (JSON.parse(await readFile(path, 'utf8')) as { startId: string; proof: unknown })
+    : null;
+  if (first?.startId === startId) throw new Error('UPGRADE_LAB_SECOND_START_REQUIRED');
+  const { report, floor, safety } = await inspectUpgradeLabState(acceptanceRoot, labRoot);
+  if (!report.UPGRADE_COMPLETED || !floor || !safety) throw new Error('UPGRADE_LAB_NOT_UPGRADED');
   const proof = {
     schema: 14,
     epoch: floor.recoveryEpoch,
@@ -358,12 +379,9 @@ export async function recordUpgradeStart(
       sticky: floor.stickyDeclaredState,
       minimumSchemaVersion: floor.minimumSchemaVersion,
     }),
-    safety: await safetyEvidence(p),
+    safety,
   };
-  const path = join(p.root, FIRST);
-  if (restart) {
-    const first = JSON.parse(await readFile(path, 'utf8')) as { startId: string; proof: unknown };
-    if (first.startId === startId) throw new Error('UPGRADE_LAB_SECOND_START_REQUIRED');
+  if (first) {
     equal(first.proof, proof, 'UPGRADE_LAB_NOT_IDEMPOTENT');
     return { ...report, RESTART_IDEMPOTENT: true };
   }

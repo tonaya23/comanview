@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { CategoryResponse, ProductResponse } from '@comanview/contracts';
+import { ErrorResponseSchema } from '@comanview/contracts';
 import { EdgeClientError } from '@comanview/client-sdk';
 import {
   ALL_CATEGORIES,
+  canCreateAnotherCounterOrder,
   canEditDraftItem,
   formatMoney,
   getCashDifferencePresentation,
@@ -22,6 +24,21 @@ import {
   percentageAmountHalfUp,
 } from './posLogic.js';
 
+it('recognizes a missing default register and explains the setup step',()=>{
+  const body=ErrorResponseSchema.parse({error:'DEFAULT_CASH_REGISTER_REQUIRED',message:'Configura una caja predeterminada.'});
+  expect(getErrorMessage(new EdgeClientError(body.message,body.error,409))).toContain('Restaurante → Cajas');
+});
+
+it('prevents orphaning an empty open counter sale and explains administration blockers', () => {
+  expect(canCreateAnotherCounterOrder({ status: 'OPEN', items: [] })).toBe(false);
+  expect(canCreateAnotherCounterOrder({ status: 'OPEN', items: [{} as never] })).toBe(true);
+  expect(canCreateAnotherCounterOrder({ status: 'CLOSED', items: [] })).toBe(true);
+  for (const code of ['BUSINESS_DAY_POLICY_IN_USE', 'CURRENCY_LOCKED', 'STATION_HAS_PENDING_WORK'] as const) {
+    const body = ErrorResponseSchema.parse({ error: code, message: 'technical' });
+    expect(getErrorMessage(new EdgeClientError(body.message, body.error, 409))).not.toBe('technical');
+  }
+});
+
 const product = (overrides: Partial<ProductResponse>): ProductResponse => ({
   id: '01991a00-0000-7000-8000-000000000101',
   name: 'Hamburguesa',
@@ -34,6 +51,7 @@ const product = (overrides: Partial<ProductResponse>): ProductResponse => ({
     rateBasisPoints: 1600,
     calculationMode: 'TAX_INCLUDED',
     active: true,
+    revision: null,
   },
   basePrice: { amount: 12900, currency: 'MXN' },
   stationId: null,

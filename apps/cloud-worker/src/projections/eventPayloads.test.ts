@@ -72,4 +72,9 @@ describe('Cloud projection event payload validation', () => {
       ),
     ).toThrow('Cash closure currencies do not match');
   });
+  it('projects public administration descriptors and rejects credential material',()=>{
+    expect(toProjectionAction(claimed({eventType:'PERSONNEL_CHANGED',aggregateType:'USER',payload:{userId:'u',status:'ACTIVE',credentialRevision:2}})))
+      .toMatchObject({type:'ADMINISTRATION_CHANGED',entityType:'USER'});
+    expect(()=>toProjectionAction(claimed({eventType:'PERSONNEL_CHANGED',payload:{pinHash:'secret'}}))).toThrow('forbidden credential material');
+  });
 });

@@ -24,6 +24,7 @@ import { assertCloudAdminSameOrigin, authenticateCloudAdmin } from '../admin/rou
 import { CloudError } from '../app/CloudError.js';
 import { assignmentResponse, CloudLicensingService, planResponse } from './CloudLicensingService.js';
 import type { CloudRecoveryService } from '../recovery/CloudRecoveryService.js';
+import { IssueOwnerRecoveryAuthorizationRequestSchema,OwnerRecoveryAuthorizationResultSchema } from '@comanview/contracts';
 
 const LocationParams = z.object({ locationId: z.string().uuid() });
 
@@ -108,6 +109,17 @@ export function registerCloudLicensingRoutes(app: FastifyInstance, input: {
     return EdgeControlStateResponseSchema.parse(await input.service.controlState(edge.edgeId));
   });
   if(input.recovery){
+    app.post('/admin/v1/locations/:locationId/owner-recovery-authorizations',async(request,reply)=>{
+      const principal=await writePrincipal(request,input.auth,CLOUD_PERMISSIONS.CLOUD_RECOVERY_AUTHORIZE);
+      const {locationId}=LocationParams.parse(request.params),body=IssueOwnerRecoveryAuthorizationRequestSchema.parse(request.body);
+      const current=await input.service.getLocationAssignment(locationId);
+      if(!current||!canAccessTenant(principal,current.tenantId)||body.context.locationId!==locationId||body.context.tenantId!==current.tenantId)throw notFound();
+      reply.status(201);return OwnerRecoveryAuthorizationResultSchema.parse(await input.recovery!.issueOwner(body,actor(principal)));
+    });
+    app.post('/edge/v1/owner-recovery-authorizations/acks',async(request,reply)=>{
+      const edge=await input.authenticator.authenticate(request.headers['x-comanview-edge-id'],request.headers.authorization);
+      await input.recovery!.consumeOwner(edge.edgeId,ConsumeRecoveryAuthorizationRequestSchema.parse(request.body));reply.status(204).send();
+    });
     app.post('/admin/v1/locations/:locationId/recovery-authorizations',async(request,reply)=>{
       const principal=await writePrincipal(request,input.auth,CLOUD_PERMISSIONS.CLOUD_RECOVERY_AUTHORIZE);
       const {locationId}=LocationParams.parse(request.params);const current=await input.service.getLocationAssignment(locationId);

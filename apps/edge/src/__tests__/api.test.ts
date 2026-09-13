@@ -37,6 +37,10 @@ describe('Edge API Integration Tests', () => {
       );
     }
     sqlite.exec(`
+      INSERT INTO tax_profiles
+        (id, name, rate_basis_points, calculation_mode, active, is_default)
+      VALUES
+        ('f47ac10b-58cc-4372-a567-0e02b2c3d479', 'IVA API', 1600, 'TAX_ADDED', 1, 0);
       INSERT INTO restaurant_tables
         (id, tenant_id, location_id, name, zone, capacity, display_order, active)
       VALUES
@@ -89,6 +93,33 @@ describe('Edge API Integration Tests', () => {
 
   let productId: string;
 
+  it('empty-counter discard enforces emptiness and OCC on the authoritative database',async()=>{
+    const create=await app.inject({method:'POST',url:'/orders',payload:{orderType:'COUNTER',channel:'POS',currency:'MXN'}});
+    expect(create.statusCode).toBe(201);
+    const sale=create.json();
+    const stale=await app.inject({method:'POST',url:`/orders/${sale.id}/cancel`,payload:{expectedVersion:sale.version-1,emptyCounterOnly:true}});
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json().error).toBe('STALE_ORDER_VERSION');
+    const cancelled=await app.inject({method:'POST',url:`/orders/${sale.id}/cancel`,payload:{expectedVersion:sale.version,emptyCounterOnly:true}});
+    expect(cancelled.statusCode).toBe(200);expect(cancelled.json().status).toBe('CANCELLED');
+    expect((await app.inject({method:'GET',url:'/orders/open-counter'})).json().some((x:{id:string})=>x.id===sale.id)).toBe(false);
+    const table=await app.inject({method:'POST',url:'/orders',payload:{orderType:'TABLE',channel:'WAITER',currency:'MXN',tableIds:['01991a00-0000-7000-8000-000000000899']}});
+    expect(table.statusCode).toBe(201);
+    const rejected=await app.inject({method:'POST',url:`/orders/${table.json().id}/cancel`,payload:{expectedVersion:table.json().version,emptyCounterOnly:true}});
+    expect(rejected.statusCode).toBe(409);expect(rejected.json().error).toBe('ORDER_EMPTY_CANCEL_NOT_ALLOWED');
+    await app.inject({method:'POST',url:`/orders/${table.json().id}/cancel`,payload:{expectedVersion:table.json().version}});
+    const product=await app.inject({method:'POST',url:'/catalog/products',payload:{name:'Discard fixture',description:'',productType:'STANDARD',
+      taxProfileId:'f47ac10b-58cc-4372-a567-0e02b2c3d479',taxProfileRevision:1,basePrice:{amount:100,currency:'MXN'}}});
+    expect(product.statusCode).toBe(201);
+    const another=await app.inject({method:'POST',url:'/orders',payload:{orderType:'COUNTER',channel:'POS',currency:'MXN'}});
+    const added=await app.inject({method:'POST',url:`/orders/${another.json().id}/items`,payload:{commandId:'discard-fixture-item',expectedVersion:another.json().version,productId:product.json().id,selectedModifiers:[]}});
+    expect(added.statusCode).toBe(200);
+    const nonempty=await app.inject({method:'POST',url:`/orders/${another.json().id}/cancel`,payload:{expectedVersion:added.json().version,emptyCounterOnly:true}});
+    expect(nonempty.statusCode).toBe(409);expect(nonempty.json().error).toBe('ORDER_EMPTY_CANCEL_NOT_ALLOWED');
+    const preserved=(await app.inject({method:'GET',url:`/orders/${another.json().id}`})).json();
+    expect(preserved.status).toBe('OPEN');expect(preserved.items).toHaveLength(1);
+  });
+
   it('2. POST /catalog/products', async () => {
     const response = await app.inject({
       method: 'POST',
@@ -98,6 +129,7 @@ describe('Edge API Integration Tests', () => {
         description: 'Delicious burger',
         productType: 'STANDARD',
         taxProfileId: 'f47ac10b-58cc-4372-a567-0e02b2c3d479',
+        taxProfileRevision: 1,
         basePrice: {
           amount: 1500,
           currency: 'MXN',

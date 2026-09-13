@@ -1,9 +1,16 @@
-import { and, eq, gt, isNull } from 'drizzle-orm';
+import { and, eq, gt, isNull, sql } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
-import type { Permission } from '@comanview/auth';
+import { BASE_ROLE_PERMISSIONS, type BaseRole, type Permission } from '@comanview/auth';
 import * as schema from '../schema.js';
 
 type DB = BetterSQLite3Database<typeof schema>;
+
+/** Persisted grants can restrict a V1 role, never expand it beyond its explicit allowlist. */
+function allowedPermissions(roles: readonly string[], stored: readonly Permission[]): Permission[] {
+  const allowed = new Set<Permission>(roles.flatMap(role =>
+    Object.hasOwn(BASE_ROLE_PERMISSIONS, role) ? BASE_ROLE_PERMISSIONS[role as BaseRole] : []));
+  return [...new Set(stored.filter(permission => allowed.has(permission)))];
+}
 
 export interface LocalUserCredential {
   id: string;
@@ -58,7 +65,13 @@ export interface NewAuthSession {
   loginAt: Date;
   lastActivity: Date;
   expiresAt: Date;
+  security?: PersonnelSessionSecurity;
 }
+
+export interface PersonnelUserSecurity { userId:string;status:'ACTIVE'|'DISABLED';trustDomainId:string|null;
+  credentialRevision:number|null;authorizationRevision:number|null; }
+export interface PersonnelSessionSecurity { trustDomainId:string;credentialRevision:number;authorizationRevision:number;
+  sessionRevision:number;issuedRecoveryEpoch:number; }
 
 export interface LocalUserAuthorization extends LocalUserCredential {
   roles: string[];
@@ -67,6 +80,25 @@ export interface LocalUserAuthorization extends LocalUserCredential {
 
 export class AuthRepository {
   constructor(private readonly db: DB) {}
+
+  personnelSchemaPresent():boolean {
+    const row=this.db.get<{n:number}>(sql`SELECT count(*) AS n FROM pragma_table_info('users')
+      WHERE name IN ('trust_domain_id','credential_revision','authorization_revision')`);
+    if(row?.n===0)return false;
+    if(row?.n!==3)throw new Error('PERSONNEL_SCHEMA_INCOMPLETE');
+    return true;
+  }
+  getPersonnelUserSecurity(userId:string):PersonnelUserSecurity|null{
+    if(!this.personnelSchemaPresent())return null;
+    return this.db.get<PersonnelUserSecurity>(sql`SELECT id AS userId,status,trust_domain_id AS trustDomainId,
+      credential_revision AS credentialRevision,authorization_revision AS authorizationRevision FROM users WHERE id=${userId}`)??null;
+  }
+  getPersonnelSessionSecurity(sessionId:string):PersonnelSessionSecurity|null{
+    if(!this.personnelSchemaPresent())return null;
+    return this.db.get<PersonnelSessionSecurity>(sql`SELECT trust_domain_id AS trustDomainId,credential_revision AS credentialRevision,
+      authorization_revision AS authorizationRevision,session_revision AS sessionRevision,issued_recovery_epoch AS issuedRecoveryEpoch
+      FROM auth_sessions WHERE id=${sessionId}`)??null;
+  }
 
   listUsersForLogin(tenantId: string, locationId: string): LocalUserCredential[] {
     return this.db
@@ -91,7 +123,7 @@ export class AuthRepository {
       .where(eq(schema.userRoles.userId, user.id))
       .all()
       .map(({ permission }) => permission as Permission);
-    return { ...user, roles, permissions: [...new Set(permissions)] };
+    return { ...user, roles, permissions: allowedPermissions(roles, permissions) };
   }
 
   getDevice(id: string, tenantId: string, locationId: string): LocalDevice | null {
@@ -113,7 +145,16 @@ export class AuthRepository {
   }
 
   createSession(session: NewAuthSession): void {
-    this.db.insert(schema.authSessions).values(session).run();
+    const {security,...values}=session;
+    this.db.transaction(tx=>{
+      tx.insert(schema.authSessions).values(values).run();
+      if(this.personnelSchemaPresent()){
+        if(!security)throw new Error('PERSONNEL_SESSION_SECURITY_REQUIRED');
+        tx.run(sql`UPDATE auth_sessions SET trust_domain_id=${security.trustDomainId},credential_revision=${security.credentialRevision},
+          authorization_revision=${security.authorizationRevision},session_revision=${security.sessionRevision},issued_recovery_epoch=${security.issuedRecoveryEpoch}
+          WHERE id=${session.id}`);
+      }
+    });
   }
 
   findValidSession(tokenHash: string, now: Date): AuthenticatedSessionRecord | null {
@@ -184,7 +225,7 @@ export class AuthRepository {
       deviceType: row.deviceType as 'POS' | 'WAITER' | 'KDS',
       deviceStatus: row.deviceStatus as 'PENDING' | 'ACTIVE' | 'REVOKED',
       roles: roleRows.map(({ role }) => role),
-      permissions: [...new Set(permissionRows.map(({ permission }) => permission as Permission))],
+      permissions: allowedPermissions(roleRows.map(({ role }) => role), permissionRows.map(({ permission }) => permission as Permission)),
     };
   }
 

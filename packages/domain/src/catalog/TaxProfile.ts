@@ -9,6 +9,8 @@ export interface TaxProfileProps {
   rateBasisPoints: number;
   calculationMode: TaxCalculationMode;
   active: boolean;
+  /** Immutable fiscal revision; absent only for pre-1W catalog objects. */
+  revision?: number;
 }
 
 export class TaxProfile {
@@ -19,6 +21,8 @@ export class TaxProfile {
     if (props.rateBasisPoints < 0) {
       throw new Error(`Tax rate cannot be negative. Got ${props.rateBasisPoints}`);
     }
+    if (props.revision !== undefined && (!Number.isSafeInteger(props.revision) || props.revision < 1))
+      throw new Error('TAX_REVISION_INVALID');
   }
 
   get id(): EntityId { return this.props.id; }
@@ -26,4 +30,5 @@ export class TaxProfile {
   get rateBasisPoints(): number { return this.props.rateBasisPoints; }
   get calculationMode(): TaxCalculationMode { return this.props.calculationMode; }
   get active(): boolean { return this.props.active; }
+  get revision(): number | null { return this.props.revision ?? null; }
 }

@@ -9,6 +9,8 @@ import { AppError } from '../../app/errorHandler.js';
 import type { EdgeLicenseManager } from '../licensing/EdgeLicenseManager.js';
 import { addRevokedDevice, type RecoverySecurityStore } from '../backup/RecoverySecurityStore.js';
 import type { BackupManager } from '../backup/BackupManager.js';
+import type { PersonnelService } from '../personnel/PersonnelService.js';
+import type { AdministrationService } from '../administration/AdministrationService.js';
 
 const TTL=10*60_000, MAX_ATTEMPTS=5;
 const hash=(v:string)=>createHash('sha256').update(v,'utf8').digest('hex');
@@ -19,7 +21,8 @@ export class DeviceService {
   constructor(private readonly repository:DeviceRepository,
     private readonly licensing:EdgeLicenseManager, private readonly context:{edgeId:string;tenantId:string;locationId:string},
     private readonly publicKeyring:Readonly<Record<string,string>>,private readonly log:DeviceBootstrapLog=SILENT_LOG,
-    private readonly recoverySecurityStore?:RecoverySecurityStore,private readonly backupManager?:BackupManager) {}
+    private readonly recoverySecurityStore?:RecoverySecurityStore,private readonly backupManager?:BackupManager,private readonly personnel?:PersonnelService,
+    private readonly administration?:AdministrationService) {}
   createPairing(input:{deviceId:string;deviceType:DeviceType;displayName:string;credential:string},now=new Date()) {
     const registered=this.repository.registeredIdentity(input.deviceId,this.context.tenantId,this.context.locationId);
     if(registered?.device.status==='REVOKED'&&registered.credentialHashes.some((encoded)=>verifyDeviceCredential(input.credential,encoded))) {
@@ -54,6 +57,11 @@ export class DeviceService {
     return this.device(this.repository.getPairing(pairingId)!.device);
   }
   completeBootstrap(input:{pairingId:string;pairingCode:string;requestToken:string;authorization:InstallationAuthorizationEnvelope;ownerPin:string},now=new Date()) {
+    if(this.recoverySecurityStore&&!this.recoverySecurityStore.licensingSnapshot?.())throw new AppError('PERSONNEL_SECURITY_UNAVAILABLE',503,'Personnel security must be refreshed.');
+    if(this.recoverySecurityStore?.licensingSnapshot?.()?.personnel){
+      if(!this.personnel)throw new AppError('PERSONNEL_SECURITY_UNAVAILABLE',503,'Personnel security is unavailable.');
+      return this.personnel.bootstrap(input).then(()=>this.device(this.repository.getPairing(input.pairingId)!.device));
+    }
     const row=this.repository.getPairing(input.pairingId);
     if(!row) throw new AppError('DEVICE_NOT_PAIRED',404,'Pairing not found.');
     if(!safeEqual(row.pairing.requestTokenHash,hash(input.requestToken))) throw new AppError('INSTALLATION_AUTHORIZATION_INVALID',401,'Bootstrap proof is invalid.');
@@ -111,6 +119,12 @@ export class DeviceService {
       c('BOOTSTRAP',s.installation?.bootstrapStatus==='COMPLETED','BOOTSTRAP_PENDING',s.installation?.bootstrapStatus??'PENDING'),
       {key:'SYNC',state:s.sync?.lastSuccessfulSyncAt?'READY' as const:'DEGRADED' as const,code:s.sync?.lastSuccessfulSyncAt?'SYNC_VERIFIED':'SYNC_NOT_VERIFIED',detail:'Sync no bloquea operación local.'},
       ];
+    if(this.administration){const admin=this.administration.state(),floor=await this.recoverySecurityStore?.load(),personnel=await this.personnel?.list();
+      const configured=admin.businessProfile.confirmed&&Boolean(admin.operational.timeZone&&admin.operational.rollover&&admin.operational.currency&&
+        admin.operational.defaultCashRegisterId&&admin.operational.defaultTaxProfileId&&admin.operational.fiscalPolicyVersion===1);
+      components.push(c('ADMINISTRATION',configured,'ADMINISTRATION_INCOMPLETE','Perfil, día de negocio, moneda, caja e impuestos deben confirmarse.'));
+      components.push(c('PERSONNEL_SECURITY',floor?.personnel?.initializationState==='ACTIVE'&&personnel?.ownerRecoveryRequired===false,'PERSONNEL_SECURITY_INCOMPLETE','Trust de personal requiere un Owner activo y confiable.'));
+    }
     const backup=this.backupManager?await this.backupManager.status():null;
     components.push(backup?{key:'BACKUP',state:backup.recoveryState!=='NORMAL'?'NOT_READY' as const:
       backup.recoveryPreparedness==='READY'?'READY' as const:backup.recoveryPreparedness,

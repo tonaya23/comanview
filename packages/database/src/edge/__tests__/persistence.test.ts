@@ -109,6 +109,24 @@ function makeOrder(currency = 'MXN') {
   });
 }
 
+it('lists only open counter orders so abandoned empty sales can be recovered', () => {
+  const db = createTestDb();
+  const repository = new OrderRepository(db);
+  const openCounter = makeOrder();
+  const closedCounter = makeOrder();
+  closedCounter.cancel();
+  const openTakeout = Order.create({
+    tenantId: EntityId.generate(), locationId: EntityId.generate(), orderType: 'TAKEOUT',
+    orderChannel: 'POS', orderNumber: 'T-001', currency: 'MXN',
+  });
+  repository.saveOrder(openCounter, false);
+  repository.saveOrder(closedCounter, false);
+  repository.saveOrder(openTakeout, false);
+  expect(repository.listOpenCounterOrders().map(({ id }) => id.toString())).toEqual([
+    openCounter.id.toString(),
+  ]);
+});
+
 function openCashSession(db: ReturnType<typeof createTestDb>, openingFloat = 5000) {
   const cashRepo = new CashRepository(db);
   const register = new CashRegister({

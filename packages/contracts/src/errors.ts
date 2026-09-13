@@ -117,6 +117,10 @@ export const ErrorCode = z.enum([
   'RECOVERY_KEY_ALREADY_EXPORTED',
   'RECOVERY_KEY_INVALID',
   'INTERNAL_ERROR',
+  'DEFAULT_CASH_REGISTER_REQUIRED',
+  'BUSINESS_DAY_POLICY_IN_USE',
+  'CURRENCY_LOCKED',
+  'STATION_HAS_PENDING_WORK',
 ]);
 
 export type ErrorCode = z.infer<typeof ErrorCode>;

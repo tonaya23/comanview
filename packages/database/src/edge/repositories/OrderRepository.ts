@@ -1,4 +1,4 @@
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import * as schema from '../schema.js';
 import {
@@ -22,6 +22,26 @@ import { insertPrintJobs, type NewPrintJob } from './PrintJobRepository.js';
 import { insertAuditEntry, type NewAuditEntry } from './AuditRepository.js';
 
 type DB = BetterSQLite3Database<typeof schema>;
+
+type FiscalSnapshot = { id: string; policyVersion: 0 | 1; profileId: string | null;
+  profileRevision: number | null; rate: number; mode: string; sendStatus: string };
+
+/** Explicit legacy reader support. Partially migrated metadata must not be mistaken
+ * for legacy, and policy 1 must never be silently persisted into a legacy schema.
+ */
+function fiscalMetadataAvailable(db: DB): boolean {
+  const row = db.get<{ count: number }>(sql`SELECT count(*) AS count FROM pragma_table_info('order_items')
+    WHERE name IN ('tax_policy_version','tax_profile_id','tax_profile_revision')`);
+  if (row?.count === 0) return false;
+  if (row?.count !== 3) throw new Error('TAX_SCHEMA_INCOMPLETE');
+  return true;
+}
+function fiscalSnapshots(db: DB, orderId: string, available: boolean): Map<string, FiscalSnapshot> {
+  const metadata = available ? sql`tax_policy_version AS policyVersion,tax_profile_id AS profileId,tax_profile_revision AS profileRevision`
+    : sql`0 AS policyVersion,NULL AS profileId,NULL AS profileRevision`;
+  return new Map(db.all<FiscalSnapshot>(sql`SELECT id,${metadata},tax_rate_basis_points AS rate,tax_calculation_mode AS mode,send_status AS sendStatus
+    FROM order_items WHERE order_id=${orderId}`).map(row => [row.id, row]));
+}
 
 /**
  * OrderRepository persists and retrieves the Order Aggregate Root from Edge SQLite.
@@ -87,6 +107,12 @@ export class OrderRepository {
   ): void {
     this.db.transaction((txDb) => {
       const db = txDb as unknown as DB;
+      const fiscalAvailable = fiscalMetadataAvailable(db);
+      const priorFiscal = fiscalSnapshots(db, order.id.toString(), fiscalAvailable);
+      const priorOrder = db.select({ status: schema.orders.status }).from(schema.orders)
+        .where(eq(schema.orders.id, order.id.toString())).get();
+      const explicitlyReconfigured = new Set(order.events.flatMap(event =>
+        event.eventType === 'ITEM_CONFIGURATION_UPDATED' ? [event.itemId.toString()] : []));
 
       if (commandId) {
         db.insert(schema.processedCommands)
@@ -199,6 +225,16 @@ export class OrderRepository {
 
       for (const item of order.items) {
         const snap = item.snapshot;
+        if (!fiscalAvailable && snap.taxPolicyVersion !== 0) throw new Error('TAX_SCHEMA_REQUIRED');
+        const previousTax = priorFiscal.get(item.id.toString());
+        if (previousTax?.sendStatus === 'SENT' && item.isDraft) throw new Error('TAX_SNAPSHOT_IMMUTABLE');
+        const draftReplacement = previousTax?.sendStatus === 'DRAFT' && priorOrder?.status === 'OPEN' &&
+          order.status === 'OPEN' && explicitlyReconfigured.has(item.id.toString());
+        const fiscalChanged = previousTax && (previousTax.policyVersion !== snap.taxPolicyVersion ||
+          previousTax.profileId !== (snap.taxProfileId?.toString() ?? null) ||
+          previousTax.profileRevision !== snap.taxProfileRevision || previousTax.rate !== snap.taxRateBasisPoints ||
+          previousTax.mode !== snap.taxCalculationMode);
+        if (fiscalChanged && !draftReplacement) throw new Error('TAX_SNAPSHOT_IMMUTABLE');
         db.insert(schema.orderItems)
           .values({
             id: item.id.toString(),
@@ -224,7 +260,7 @@ export class OrderRepository {
               roundId: item.roundId?.toString() ?? null,
               quantity: item.quantity,
               specialInstructions: item.specialInstructions,
-              ...(item.isDraft
+              ...(draftReplacement
                 ? {
                     productId: snap.productId.toString(),
                     productName: snap.productName,
@@ -238,6 +274,10 @@ export class OrderRepository {
             },
           })
           .run();
+
+        if (fiscalAvailable && (!previousTax || draftReplacement)) db.run(sql`UPDATE order_items SET tax_policy_version=${snap.taxPolicyVersion},
+          tax_profile_id=${snap.taxProfileId?.toString() ?? null},tax_profile_revision=${snap.taxProfileRevision}
+          WHERE id=${item.id.toString()}`);
 
         // 4a. A DRAFT snapshot changes only after an explicit aggregate command.
         // Reconcile its modifier rows when the authoritative snapshot differs. SENT
@@ -266,7 +306,7 @@ export class OrderRepository {
         const configurationChanged =
           JSON.stringify(persistedConfiguration) !== JSON.stringify(currentConfiguration);
 
-        if (configurationChanged && (persistedModifiers.length === 0 || item.isDraft)) {
+        if (configurationChanged && (!previousTax || draftReplacement)) {
           db.delete(schema.orderItemModifiers)
             .where(eq(schema.orderItemModifiers.orderItemId, item.id.toString()))
             .run();
@@ -394,7 +434,10 @@ export class OrderRepository {
       .all();
 
     const items: OrderItemProps[] = [];
+    const fiscal = fiscalSnapshots(this.db, id.toString(), fiscalMetadataAvailable(this.db));
     for (const itemRow of itemRows) {
+      const storedTax = fiscal.get(itemRow.id);
+      if (!storedTax) throw new Error('TAX_SNAPSHOT_MISSING');
       const modRows = this.db
         .select()
         .from(schema.orderItemModifiers)
@@ -416,6 +459,9 @@ export class OrderRepository {
         basePrice: Money.fromMinorUnits(itemRow.basePriceAmount, itemRow.basePriceCurrency),
         taxRateBasisPoints: itemRow.taxRateBasisPoints,
         taxCalculationMode: itemRow.taxCalculationMode as ProductSnapshot['taxCalculationMode'],
+        taxPolicyVersion: storedTax.policyVersion,
+        taxProfileId: storedTax.profileId ? EntityId.fromString(storedTax.profileId) : null,
+        taxProfileRevision: storedTax.profileRevision,
         stationId: itemRow.stationId ? EntityId.fromString(itemRow.stationId) : null,
         modifiers,
       });
@@ -479,5 +525,16 @@ export class OrderRepository {
     };
 
     return Order.rehydrate(rehydrateProps);
+  }
+
+  listOpenCounterOrders(): Order[] {
+    return this.db
+      .select({ id: schema.orders.id })
+      .from(schema.orders)
+      .where(and(eq(schema.orders.status, 'OPEN'), eq(schema.orders.orderType, 'COUNTER')))
+      .orderBy(desc(schema.orders.createdAt))
+      .all()
+      .map(({ id }) => this.getOrderById(EntityId.fromString(id)))
+      .filter((order): order is Order => order !== null);
   }
 }

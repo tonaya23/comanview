@@ -84,7 +84,7 @@ export class Product {
    *
    * @param selectedOptions Map of ModifierGroup ID -> Array of selected ModifierOption IDs
    */
-  public createSnapshot(selectedOptions: Map<string, EntityId[]>): ProductSnapshot {
+  public createSnapshot(selectedOptions: Map<string, EntityId[]>, taxPolicyVersion: 0 | 1 = 0): ProductSnapshot {
     if (!this.active) {
       throw new ProductInactiveError(this.id.toString());
     }
@@ -166,6 +166,9 @@ export class Product {
       basePrice: this.basePrice,
       taxRateBasisPoints: this.taxProfile.rateBasisPoints,
       taxCalculationMode: this.taxProfile.calculationMode,
+      taxPolicyVersion,
+      taxProfileId: taxPolicyVersion === 1 ? this.taxProfile.id : null,
+      taxProfileRevision: taxPolicyVersion === 1 ? this.taxProfile.revision : null,
       stationId: this.stationId,
       modifiers: modifierSnapshots,
     });

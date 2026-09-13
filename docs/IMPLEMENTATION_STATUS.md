@@ -6,33 +6,34 @@ El repositorio determina qué existe; el Master PRD determina el comportamiento 
 
 ## Current State
 
-- Current functional phase: **NONE**
-- Last closed phase: **1V — Backup / Recovery**
-- Last closed commit: `48b9c3a61a2c36acac60737a981741dcfd1ab74a`
-- Commit message: `feat: complete phase 1V backup and recovery`
+- Current functional phase: **ninguna abierta**
+- Current phase status: **1W CLOSED**
+- Last closed phase: **1W — Restaurant Administration & Operational Configuration**
+- Closure commit message: `feat: complete phase 1W restaurant administration`
 - Branch: `main`
 - 1V status: **CLOSED**
-- Clasificación de cierre: `READY_WITH_NON_BLOCKING_DEBT`.
+- 1W status: **CLOSED**
+- Manual acceptance 1W: **PASS** (`phase-1w-final-acceptance`).
 
-El roadmap restante fue reconstruido después de 1V y aprobado a nivel macro.
-Ninguna fase funcional posterior ha comenzado. Crear este ledger no abre 1W.
-El cierre de 1V no equivale a declarar comercialmente completa toda la V1.
+El roadmap restante fue reconstruido después de 1V y aprobado a nivel macro. El Grupo A se cerró
+con 1W. El Grupo B es el siguiente grupo propuesto y permanece **NOT STARTED**; este cierre no
+autoriza su implementación ni declara comercialmente completa toda la V1.
 
 ## Implemented Foundation
 
 Las capacidades operativas siguientes existen; su uso presupone un entorno configurado.
 Backend, dominio o persistencia no equivalen a administración accesible al restaurante.
 
-| Área | Implementación real hasta 1V | Límite comercial actual |
+| Área | Implementación real hasta 1W | Límite comercial actual |
 | --- | --- | --- |
 | Core domain/invariants | Money, catálogo, snapshots y reglas transaccionales | No sustituye configuración/onboarding |
 | Orders | POS, DRAFT/SENT, rondas, cierre y operaciones de mesa | Recorridos V1 adicionales pendientes |
 | Payments | CASH/CARD/OTHER, pagos parciales, propinas y void autorizado | Sin terminal bancaria integrada ni split bill completo |
-| Cash | Apertura, movimientos, arqueo y X/Z | Register, moneda y fecha operativa no administrables integralmente |
-| Tables/Waiter | UI de mesas existentes, comandas y solicitud de cuenta | Falta configuración administrativa de zonas/mesas |
-| KDS | UI de tickets, estaciones existentes y preparación | Falta administración de estaciones/thresholds |
+| Cash | Apertura, movimientos, arqueo, X/Z, caja predeterminada, moneda y jornada administrables | Multicaja simultánea permanece para evaluación posterior |
+| Tables/Waiter | UI de mesas, comandas, solicitud de cuenta y administración de zonas/mesas | Recorridos y UX comerciales adicionales pendientes |
+| KDS | UI de tickets, estaciones, preparación y administración básica de estaciones | Configuración física/printing comercial pendiente |
 | Printing infrastructure | Cola durable, renderer ESC/POS y adaptador TCP | Startup normal DEBUG; falta configuración física comercial |
-| RBAC/Auth | Login offline, sesiones, roles V1 y autorización superior | Falta administración cotidiana de usuarios/PINs |
+| RBAC/Auth | Login offline, sesiones, roles V1, administración de personal/PINs y Security Floor anti-rollback | UX administrativa transversal pendiente |
 | Audit/Event Log | Persistencia, trazabilidad y eventos operacionales | Nuevos comandos deberán integrarse sin duplicar autoridad |
 | Sync | Outbox/Inbox, ACK, recoveryEpoch y proyecciones operacionales | No es backup ni catálogo público publicado |
 | Tenant/Location control plane | Alta y gestión de infraestructura desde Super Admin | No es el backoffice normal del restaurante |
@@ -46,8 +47,6 @@ Backend, dominio o persistencia no equivalen a administración accesible al rest
 El recorrido PC limpia → restaurante configurado → primera venta todavía requiere desarrollo.
 Gaps confirmados; no deben confundirse con reapertura automática de fases cerradas:
 
-- **Restaurant Administration / Operational Configuration:** datos del negocio, branding,
-  moneda, impuestos, timezone/business date, register, usuarios/PINs, zonas y estaciones.
 - **Commercial Catalog administration:** UI y comandos completos para categorías, productos,
   precios, modificadores/overrides, active/available; retirar supuestos de prueba del alta actual.
 - **CSV/XLSX import:** upload, validación por fila, preview, confirmación y resultado determinista.
@@ -69,6 +68,11 @@ La existencia de readiness técnico no acredita por sí sola configuración come
 - Cloud object backup: diferido explícitamente en 1V.
 - Automated/physical OFF_DEVICE certification: diferida explícitamente.
   No equivale a omitir la custodia de una copia externa real en una instalación comercial.
+- UX/IA administrativa: sustituir rechazos genéricos por precondiciones accionables, guiar
+  dependencias entre configuraciones y reemplazar campos técnicos por controles comerciales.
+  Este follow-up corresponde a la fase UX/UI propuesta y no bloquea el cierre de 1W.
+- La administración comercial completa de catálogo y la importación CSV/XLSX pertenecen al
+  Grupo B; no se consideran implementadas ni se reducen a una corrección UX de 1W.
 
 ## Explicit V2+ Boundaries
 
@@ -86,9 +90,8 @@ No contabilizar como faltantes de V1 ni introducir sin cambio explícito de alca
 
 ## Proposed Remaining V1 Roadmap
 
-**PROPUESTO / APROBADO A NIVEL MACRO — NO INICIADO.**
-Estos grupos representan el roadmap macro, no fases funcionales ya abiertas.
-El alcance detallado y las decisiones correspondientes deben aprobarse antes de implementar.
+**APROBADO A NIVEL MACRO — GRUPO A CLOSED (1W); GRUPO B PROPOSED / NOT STARTED.**
+Los grupos posteriores no están iniciados.
 
 | Grupo | Trabajo restante |
 | --- | --- |
@@ -100,17 +103,49 @@ El alcance detallado y las decisiones correspondientes deben aprobarse antes de 
 | F | Signed Release / OTA Lifecycle |
 | G | Public Storefront |
 
-Ningún grupo constituye una autorización de ejecución. No hay una fase actualmente iniciada.
+El cierre de 1W no autoriza iniciar los grupos posteriores. Multicaja simultánea
+permanece como gap V1 a reevaluar en el grupo C, no como exclusión V2.
 
 ## Next Decision
 
-- Candidate next phase: **1W — Restaurant Administration & Operational Configuration**
-- Status: **PROPOSED / NOT STARTED**
-- Next approved functional work: **NONE**; falta aprobación de alcance detallado.
+- Closed phase: **1W — Restaurant Administration & Operational Configuration**
+- Status: **CLOSED**
+- Manual acceptance: **PASS**.
+- Next roadmap group: **B — Commercial Catalog + CSV/XLSX Import**, **PROPOSED / NOT STARTED**.
 
-Antes de implementarla deben resolverse autoridad Cloud/Edge/OWNER y política de configuración:
-qué campos administra cada actor, tratamiento de Configuration firmada existente y reglas de
-moneda, impuestos, timezone y business date. No cambiar estas decisiones implícitamente desde UI.
+Decisiones aprobadas: timezone/jornada Edge; propinas mediante policy Cloud y preferencia Edge;
+moneda inmutable tras actividad monetaria; impuestos efectivos HALF_UP por línea; una caja
+operacional predeterminada; revisiones de seguridad de personal y recuperación OWNER autorizada.
+La implementación focal, la validación técnica y la aceptación manual están completas. La aceptación
+manual detectó defectos funcionales y problemas UX;
+los cuatro blockers funcionales (PIN, borradores, ventas stale/cancelación y permisos administrativos)
+fueron corregidos. Las mejoras UX/IA no bloqueantes pasan a la propuesta futura correspondiente,
+no iniciada. La aceptación manual final en `phase-1w-final-acceptance` resultó PASS.
+Incluye Admin Local, schema 0015/Cloud 0007, jornada/moneda/impuestos,
+personal con Security Floor anti-rollback, caja predeterminada, zonas/mesas, estaciones, propinas,
+readiness, proyección Cloud y upgrade/restore 1V→1W. Solo una edición explícita autorizada de un
+Item DRAFT puede reemplazar su snapshot fiscal; cambios externos, SENT e historia no se reinterpretan.
+
+La política efectiva de propinas ya limita preferencias antiguas por la configuración Cloud vigente,
+incluido restore. La limpieza PostgreSQL de Cloud Licensing ya respeta la referencia de
+`cloud_contractual_owners`; PostgreSQL 18 real pasa Database 18/18, Cloud API 1/1 y Cloud Worker
+12/12, sin skips. El harness de upgrade reutiliza evidencia validada dentro de cada inspección.
+El blocker de contención quedó resuelto con separación del grupo host y comparación binaria nativa
+en las pruebas: grupo focal 56/56 PASS, upgrade 54,36 s y rechazo WAL 3,92 s.
+La única corrida global posterior pasa: checks de configuración 3/3, Turbo 32/32 tareas
+(31 desde caché), Edge paralelo 186/186 y grupo host real 56/56, sin skips en Edge.
+Upgrade global 53,42 s y rechazo WAL 3,82 s, sin ampliar los límites originales de 60 s y 5 s.
+Typecheck 21/21, build 20/20 y PostgreSQL conservan su validación previa; no se repitieron porque
+esta corrección solo afecta infraestructura/pruebas. No quedan blockers técnicos conocidos;
+1W queda CLOSED tras la aceptación manual y la autorización de cierre.
+
+La estrategia oficial de validación es `pnpm test` desde la raíz: comprueba la partición de tests,
+ejecuta el bloque paralelo de Turbo y, tras su finalización correcta, ejecuta obligatoriamente
+`@comanview/edge test:host` sin caché de Turbo y con un solo worker. El grupo host conserva los
+archivos completos de upgrade acceptance, ProductionRecoveryUpgrade, RecoverySecurityConcurrency,
+RecoverySecurityStore y EdgeSecretStore. `pnpm --filter @comanview/edge test` por sí solo cubre
+únicamente el bloque paralelo; no sustituye la validación global. No se amplían timeouts ni se
+añaden skips. Las comprobaciones de archivos binarios usan igualdad byte por byte nativa.
 
 ## Canonical References
 
@@ -118,6 +153,7 @@ moneda, impuestos, timezone y business date. No cambiar estas decisiones implíc
 - [Master Technical Specification](Master_Technical_Specification.md): referencia técnica ampliada.
 - [Full Specification](Full_Specification.md): contexto y detalle complementario.
 - [Acceptance Phase 1V](Acceptance_Phase_1V.md): aceptación general y upgrade productivo PASS.
+- [Acceptance Phase 1W](Acceptance_Phase_1W.md): aceptación manual PASS y cierre de 1W.
 
 ## Ledger Maintenance Rule
 

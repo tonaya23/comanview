@@ -1,4 +1,4 @@
-import { and, asc, eq, isNull } from 'drizzle-orm';
+import { and, asc, eq, isNull,sql } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { EntityId, RestaurantTable } from '@comanview/domain';
 import * as schema from '../schema.js';
@@ -9,6 +9,8 @@ export interface RestaurantTableRecord {
   table: RestaurantTable;
   activeOrderId: string | null;
   activeOrderNumber: string | null;
+  zoneId:string|null;
+  version:number;
 }
 
 export class TableRepository {
@@ -46,7 +48,13 @@ export class TableRepository {
         }),
         activeOrderId: row.activeOrderId,
         activeOrderNumber: row.activeOrderNumber,
+        ...this.administrationMetadata(row.table.id),
       }));
+  }
+
+  private administrationMetadata(tableId:string):{zoneId:string|null;version:number}{
+    try{return this.db.get<{zoneId:string|null;version:number}>(sql`SELECT zone_id zoneId,version FROM restaurant_tables WHERE id=${tableId}`)??{zoneId:null,version:1};}
+    catch{return{zoneId:null,version:1};}
   }
 
   getByIds(tableIds: readonly string[]): RestaurantTable[] {

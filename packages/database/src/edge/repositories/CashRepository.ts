@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq,sql } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import * as schema from '../schema.js';
 import {
@@ -76,7 +76,7 @@ export class CashRepository {
 
   openSession(session: CashSession, metadata: {
     purpose: 'NORMAL'|'LICENSE_RECOVERY'; openedLicenseRevision: number|null;
-    openedLicenseMode: string; protectedOrderIds: string[]; audit?: NewAuditEntry;
+    openedLicenseMode: string; protectedOrderIds: string[]; audit?: NewAuditEntry; businessDayPolicyJson?: string;
   } = { purpose: 'NORMAL', openedLicenseRevision: null, openedLicenseMode: 'LEGACY', protectedOrderIds: [] }): void {
     try {
       this.db.transaction((tx) => {
@@ -99,6 +99,8 @@ export class CashRepository {
             openedLicenseMode: metadata.openedLicenseMode,
           })
           .run();
+        if(metadata.businessDayPolicyJson!==undefined)tx.run(sql`UPDATE cash_sessions SET business_day_policy_json=${metadata.businessDayPolicyJson}
+          WHERE id=${session.id.toString()}`);
 
         for (const orderId of metadata.protectedOrderIds) {
           tx.insert(schema.cashSessionProtectedOrders).values({
