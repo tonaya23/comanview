@@ -687,12 +687,246 @@ button {
   .options {
     grid-template-columns: 1fr;
   }
-.picker-grid {
+  .picker-grid {
     grid-template-columns: repeat(2, 1fr);
   }
 }
 
 /* Shared Device onboarding surface: local identity remains secondary to Waiter operation. */
-.device-onboarding-card,.device-onboarding-authorized{margin-top:16px;border:1px solid #c7d8d2;border-radius:14px;background:#f7faf9;padding:15px;text-align:left}
-.device-onboarding-card{display:grid;gap:12px}.device-onboarding-card header{display:flex;justify-content:space-between;gap:10px}.device-onboarding-card header>div,.device-onboarding-authorized>div{display:grid;gap:2px}.device-onboarding-card header small,.device-onboarding-authorized small,.device-onboarding-card p{color:#62766f;font-size:.78rem}.device-onboarding-badge{height:27px;display:inline-flex;align-items:center;padding:0 9px;border-radius:999px;background:#fff0c9;color:#76550e;font-size:.7rem;font-weight:850}.device-onboarding-card label{display:grid;gap:6px;font-size:.78rem;font-weight:800}.device-onboarding-card input{min-height:46px;padding:0 11px;border:1px solid #b9cdc6;border-radius:10px}.device-onboarding-primary{min-height:48px;border:0;border-radius:11px;background:#176a57;color:#fff;font-weight:850}.device-onboarding-code{display:grid;place-items:center;gap:3px;padding:12px;border:1px dashed #8fbcae;border-radius:11px;background:#eaf6f1}.device-onboarding-code>strong{font-size:1.7rem;letter-spacing:.15em;color:#174f44}.device-onboarding-card details code{display:block;overflow-wrap:anywhere}.device-onboarding-warning{padding:9px;border-radius:9px;background:#fff0ed;color:#8d3029!important}.device-onboarding-authorized{display:flex;align-items:center;gap:10px;color:#176149;background:#eaf7f1;border-color:#b9ddcf}.device-onboarding-authorized>span{width:28px;height:28px;display:grid;place-items:center;border-radius:50%;color:#fff;background:#287763;font-weight:900}
-.device-onboarding-card button:focus-visible,.device-onboarding-card input:focus-visible{outline:3px solid #75ac9f;outline-offset:2px}
+.device-onboarding-card,
+.device-onboarding-authorized {
+  margin-top: 16px;
+  border: 1px solid #c7d8d2;
+  border-radius: 14px;
+  background: #f7faf9;
+  padding: 15px;
+  text-align: left;
+}
+.device-onboarding-card {
+  display: grid;
+  gap: 12px;
+}
+.device-onboarding-card header {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+.device-onboarding-card header > div,
+.device-onboarding-authorized > div {
+  display: grid;
+  gap: 2px;
+}
+.device-onboarding-card header small,
+.device-onboarding-authorized small,
+.device-onboarding-card p {
+  color: #62766f;
+  font-size: 0.78rem;
+}
+.device-onboarding-badge {
+  height: 27px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: #fff0c9;
+  color: #76550e;
+  font-size: 0.7rem;
+  font-weight: 850;
+}
+.device-onboarding-card label {
+  display: grid;
+  gap: 6px;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+.device-onboarding-card input {
+  min-height: 46px;
+  padding: 0 11px;
+  border: 1px solid #b9cdc6;
+  border-radius: 10px;
+}
+.device-onboarding-primary {
+  min-height: 48px;
+  border: 0;
+  border-radius: 11px;
+  background: #176a57;
+  color: #fff;
+  font-weight: 850;
+}
+.device-onboarding-code {
+  display: grid;
+  place-items: center;
+  gap: 3px;
+  padding: 12px;
+  border: 1px dashed #8fbcae;
+  border-radius: 11px;
+  background: #eaf6f1;
+}
+.device-onboarding-code > strong {
+  font-size: 1.7rem;
+  letter-spacing: 0.15em;
+  color: #174f44;
+}
+.device-onboarding-card details code {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.device-onboarding-warning {
+  padding: 9px;
+  border-radius: 9px;
+  background: #fff0ed;
+  color: #8d3029 !important;
+}
+.device-onboarding-authorized {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #176149;
+  background: #eaf7f1;
+  border-color: #b9ddcf;
+}
+.device-onboarding-authorized > span {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: #fff;
+  background: #287763;
+  font-weight: 900;
+}
+.device-onboarding-card button:focus-visible,
+.device-onboarding-card input:focus-visible {
+  outline: 3px solid #75ac9f;
+  outline-offset: 2px;
+}
+
+/* X-F: one task per view, including tablet; navigation never owns the order. */
+.waiter-shell {
+  padding-bottom: calc(132px + env(safe-area-inset-bottom));
+}
+.waiter-shell .order-view {
+  display: block;
+  height: auto;
+  overflow: visible;
+  max-width: 900px;
+  margin: auto;
+}
+.waiter-shell .order-panel {
+  border: 0;
+  min-height: 0;
+}
+.waiter-shell .order-panel > h1 {
+  margin: 16px;
+}
+.waiter-shell .items {
+  overflow: visible;
+}
+.waiter-shell .order-status-summary {
+  flex-wrap: wrap;
+}
+.waiter-shell .secondary-order-actions {
+  flex-wrap: wrap;
+}
+.waiter-shell .secondary-order-actions button {
+  flex-basis: 130px;
+  min-height: 44px;
+}
+.waiter-shell .order-footer .action-reason {
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+.waiter-shell .local-connection-status {
+  margin: 8px 12px;
+  padding: 8px 12px;
+  font-size: 0.8rem;
+}
+.waiter-shell > .cv-alert {
+  margin: 8px 12px;
+}
+.task-navigation {
+  position: fixed;
+  bottom: 0;
+  inset-inline: 0;
+  z-index: 10;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  padding: 8px 10px calc(8px + env(safe-area-inset-bottom));
+  background: #f9fbfa;
+  border-top: 1px solid #b9ccc6;
+  box-shadow: 0 -4px 16px #102f2a18;
+}
+.task-navigation button {
+  min-height: 52px;
+  padding: 6px;
+  border: 1px solid #b9ccc6;
+  border-radius: 10px;
+  color: #173b36;
+  background: white;
+  font-weight: 750;
+}
+.task-navigation button[aria-current='page'] {
+  color: white;
+  background: #176a57;
+  border-color: #176a57;
+}
+.waiter-shell button,
+.modal button {
+  min-height: 44px;
+  min-width: 44px;
+  touch-action: manipulation;
+}
+.waiter-shell .items article footer button {
+  min-height: 44px;
+}
+.waiter-shell .items article footer {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.waiter-shell h1:focus {
+  outline: 3px solid var(--cv-focus-ring);
+  outline-offset: 3px;
+}
+.waiter-shell .products strong,
+.waiter-shell .table-card strong {
+  overflow-wrap: anywhere;
+}
+.waiter-shell .table-context {
+  color: #49665e;
+  font-weight: 700;
+}
+.waiter-shell .operator-context {
+  font-size: 0.8rem;
+}
+.waiter-shell .topbar > div:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.modal.cv-dialog {
+  padding: 18px;
+  width: min(560px, calc(100vw - 24px));
+  max-height: calc(100dvh - 24px);
+}
+.modal.cv-dialog > h2 {
+  margin: 0 0 12px;
+}
+.modal.cv-dialog header h2 {
+  display: none;
+}
+
+/* Round 2: context above content; no floating control over send/payment actions. */
+.waiter-active-context { position:sticky; top:0; z-index:5; display:flex; align-items:center; gap:8px; padding:8px 12px; background:#f4f9f6; border-bottom:1px solid #b9ccc6; }
+.waiter-active-context > div { flex:1; min-width:0; overflow-wrap:anywhere; }
+.waiter-active-context strong, .waiter-active-context small { display:block; }
+.waiter-active-context small { color:#49665e; }
+.waiter-active-context details { font-size:.75rem; }
+.waiter-active-context button { flex:none; padding:6px 10px; border:1px solid #b9ccc6; border-radius:8px; background:white; color:#173b36; }
+.waiter-active-context button:disabled { display:none; }
+.waiter-shell .view-heading { flex-wrap:wrap; gap:8px; }
+.waiter-shell .view-heading > div { flex:1 1 190px; min-width:0; }
+.waiter-shell .view-heading > button { flex:0 0 auto; }
+.waiter-shell .items article { padding:10px 12px; }
+.waiter-shell .items article h3 { margin:0 0 4px; }
+.waiter-shell .items article footer { gap:4px; }
+.waiter-shell .order-footer { padding:10px 12px; }

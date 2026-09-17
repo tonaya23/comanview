@@ -1,3 +1,4 @@
+import { getUserGuidance } from '@comanview/ui';
 import type {
   OrderResponse,
   ProductModifierGroupResponse,
@@ -73,21 +74,9 @@ export function emptyTableCancellationBlocker(order: OrderResponse): string | nu
   return null;
 }
 
-const messages: Record<string, string> = {
-  TABLE_OCCUPIED: 'La mesa acaba de ser ocupada en otro dispositivo. Actualizamos el mapa.',
-  TABLE_INACTIVE: 'Esta mesa ya no está activa.',
-  STALE_ORDER_VERSION: 'La comanda cambió en otro dispositivo. Se actualizó su estado.',
-  PRODUCT_UNAVAILABLE: 'Este producto ya no está disponible.',
-  INVALID_MODIFIER_SELECTION: 'Revisa las opciones obligatorias y sus límites.',
-  ORDER_ITEM_SENT: 'Un producto enviado ya no puede editarse.',
-  NO_DRAFT_ITEMS: 'No hay productos nuevos por enviar.',
-  ORDER_EMPTY_CANCEL_NOT_ALLOWED: 'La mesa dejó de estar vacía. Actualizamos la cuenta.',
-  PERMISSION_DENIED: 'Tu usuario no tiene permiso para esta acción.',
-  EDGE_UNREACHABLE: 'No hay conexión con Edge local. La operación no fue confirmada.',
-};
-
-export function waiterError(problem: unknown) {
-  return problem instanceof EdgeClientError
-    ? (messages[problem.code] ?? problem.message)
-    : 'Ocurrió un error inesperado.';
+export function waiterError(problem: unknown): string {
+  const guidance = getUserGuidance(problem instanceof EdgeClientError ? problem : undefined, {
+    action: null,
+  });
+  return guidance.title + '. ' + guidance.explanation;
 }

@@ -1,3 +1,4 @@
+export { invalidatesLocalSession } from './sessionErrors.js';
 import {
   CategorySchema,
   ErrorResponseSchema,
@@ -75,8 +76,9 @@ import {
   type BackupProtectionStatus,type BackupRecord,
   RestaurantAdministrationStateSchema,RestaurantAdministrationResultSchema,TaxAdministrationStateSchema,TaxAdministrationResultSchema,PersonnelListSchema,
   type RestaurantAdministrationState,type RestaurantAdministrationCommand,type RestaurantAdministrationResult,type TaxAdministrationState,type TaxAdministrationCommand,type TaxAdministrationResult,
-  type PersonnelList,type PersonnelMutation,
+  type PersonnelList,type PersonnelMutation,type ErrorCode,type PublicErrorDetails,
 } from '@comanview/contracts';
+import { diagnosticDetails } from './errorTransport.js';
 
 export * from './cloudAdmin.js';
 export * from './deviceIdentity.js';
@@ -100,17 +102,21 @@ export interface EdgeRequestInit {
 export interface EdgeResponse {
   readonly ok: boolean;
   readonly status: number;
+  readonly headers?: { get(name: string): string | null };
   json(): Promise<unknown>;
 }
 
 export type EdgeFetch = (input: string, init?: EdgeRequestInit) => Promise<EdgeResponse>;
 
+export type EdgeClientErrorCode = ErrorCode | 'EDGE_UNREACHABLE' | 'INVALID_EDGE_RESPONSE' |
+  'UNKNOWN_EDGE_ERROR';
+
 export class EdgeClientError extends Error {
   readonly status: number | null;
-  readonly code: string;
-  readonly details: unknown;
+  readonly code: EdgeClientErrorCode;
+  readonly details: PublicErrorDetails | undefined;
 
-  constructor(message: string, code: string, status: number | null, details?: unknown) {
+  constructor(message: string, code: EdgeClientErrorCode, status: number | null, details?: PublicErrorDetails) {
     super(message);
     this.name = 'EdgeClientError';
     this.code = code;
@@ -239,12 +245,11 @@ export function createEdgeClient(options: EdgeClientOptions = {}): EdgeClient {
         requestInit.headers = { ...requestInit.headers, 'content-type': 'application/json' };
       }
       response = await edgeFetch(`${baseUrl}${path}`, requestInit);
-    } catch (error) {
+    } catch {
       throw new EdgeClientError(
         'No fue posible conectar con ComanView Edge.',
         'EDGE_UNREACHABLE',
         null,
-        error,
       );
     }
 
@@ -256,6 +261,7 @@ export function createEdgeClient(options: EdgeClientOptions = {}): EdgeClient {
         'Edge devolvió una respuesta que no se pudo interpretar.',
         'INVALID_EDGE_RESPONSE',
         response.status,
+        diagnosticDetails(response.headers),
       );
     }
 
@@ -274,18 +280,18 @@ export function createEdgeClient(options: EdgeClientOptions = {}): EdgeClient {
         'Edge rechazó la operación.',
         'UNKNOWN_EDGE_ERROR',
         response.status,
-        body,
+        diagnosticDetails(response.headers,body),
       );
     }
 
     try {
       return schema.parse(body);
-    } catch (error) {
+    } catch {
       throw new EdgeClientError(
         'Edge devolvió datos con un formato inesperado.',
         'INVALID_EDGE_RESPONSE',
         response.status,
-        error,
+        diagnosticDetails(response.headers,body),
       );
     }
   }

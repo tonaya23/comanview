@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { Device, PairingStatusResponse } from '@comanview/contracts';
-import { clearPairingApproval, deviceDisplayName, deviceInstallationPresentation, effectivePairingStatus, groupPairings, shouldClearPairingApproval, type DeviceAdminState } from './deviceAdmin.js';
+import type { BackupTrigger, Device, PairingStatusResponse } from '@comanview/contracts';
+import { Dialog, ConfirmationDialog, IconButton, PrerequisiteNotice, StatusBadge as SharedStatusBadge, TechnicalDetails, type TypedNavigationTarget } from '@comanview/ui';
+import { clearPairingApproval, deviceDisplayName, deviceInstallationPresentation, effectivePairingStatus, groupPairings, readinessPrerequisite, shouldClearPairingApproval, type DeviceAdminState } from './deviceAdmin.js';
 
 type BusyAction = `approve:${string}` | `cancel:${string}` | `revoke:${string}` | 'refresh' | 'backup-local' | 'backup-off-device' | 'backup-config' | 'recovery-key' | 'restore' | null;
 
@@ -25,6 +26,8 @@ export interface DeviceAdminPanelProps {
   onConfigureOffDevice(path:string):Promise<void>;
   onExportRecoveryKey():Promise<string>;
   onRestoreBackup(backupId:string):Promise<void>;
+  onNavigate?(target:TypedNavigationTarget):void;
+  canNavigate?(target:TypedNavigationTarget):boolean;
   onClose(): void;
 }
 
@@ -34,6 +37,10 @@ const labels: Record<string,string> = {
   EXPIRED: 'Expirado', CANCELLED: 'Cancelado', VALID: 'Válida',
   NORMAL:'Normal',RECOVERY_REQUIRED:'Recuperación requerida',RECOVERY_IN_PROGRESS:'Recuperando',
   NOT_CONFIGURED:'Sin configurar',VERIFIED:'Verificado',FAILED:'Falló',CREATING:'Creando',DELETED:'Eliminado',
+};
+const backupTriggerLabels: Record<BackupTrigger, string> = {
+  MANUAL: 'Manual', PERIODIC: 'Programada', POST_Z: 'Cierre de turno',
+  PRE_MAINTENANCE: 'Antes de mantenimiento', SAFETY: 'Copia de seguridad previa',
 };
 
 export function DeviceAdminPanel(props: DeviceAdminPanelProps) {
@@ -50,6 +57,10 @@ export function DeviceAdminPanel(props: DeviceAdminPanelProps) {
     return () => window.clearInterval(timer);
   }, []);
   const activeDevices = props.state?.devices.filter((device) => device.status === 'ACTIVE').length ?? 0;
+  const requirements = props.state?.readiness.components.map(component => ({component,
+    requirement:readinessPrerequisite(component,props.canNavigate??(()=>false))})) ?? [];
+  const pendingRequirements = requirements.filter(row=>row.requirement.status !== 'complete' && row.component.state !== 'NOT_APPLICABLE');
+  const checkedRequirements = requirements.filter(row=>!pendingRequirements.includes(row));
   const pairings = useMemo(() => props.state?.pairings.map((pairing) => ({
     pairing,
     effectiveStatus: effectivePairingStatus(pairing, now),
@@ -69,12 +80,11 @@ export function DeviceAdminPanel(props: DeviceAdminPanelProps) {
     ));
   }
 
-  return <div className="modal-backdrop device-admin-backdrop">
-    <section className="modal-card device-admin" role="dialog" aria-modal="true" aria-labelledby="device-admin-title">
+  return <Dialog open title="Dispositivos e instalación" className="device-admin pos-device-dialog" cancelable={!props.busyAction && !confirmingCancel && !confirmingRevoke && !restoreBackupId} onClose={props.onClose}>
       <header className="device-admin-header">
-        <div><span className="eyebrow">Administración local</span><h2 id="device-admin-title">Dispositivos e instalación</h2>
+        <div><span className="eyebrow">Administración local</span>
           <p>Estado operativo, solicitudes de emparejamiento y preparación de esta instalación.</p></div>
-        <button type="button" className="icon-close" aria-label="Cerrar administración" autoFocus onClick={props.onClose}>×</button>
+        <IconButton type="button" variant="ghost" className="icon-close" aria-label="Cerrar administración" autoFocus onClick={props.onClose}>×</IconButton>
       </header>
 
       <div className="device-admin-feedback" aria-live="polite">
@@ -86,48 +96,51 @@ export function DeviceAdminPanel(props: DeviceAdminPanelProps) {
       {props.state ? <>
         <section className="admin-section" aria-labelledby="installation-summary-title">
           <div className="section-title-row"><div><h3 id="installation-summary-title">Resumen de instalación</h3>
-            <p>La preparación para producción permanece pendiente hasta completar todos los componentes requeridos.</p></div>
+            <p>{props.state.readiness.productionReadiness === 'READY' ? 'Preparación para producción verificada.' : `${pendingRequirements.length} requisitos necesitan atención. Revisa primero los pendientes.`}</p></div>
             <button type="button" className="secondary-button compact-button" disabled={props.busyAction === 'refresh'} onClick={props.onRefresh}>
               {props.busyAction === 'refresh' ? 'Actualizando…' : 'Actualizar'}
             </button></div>
-          <div className="readiness-summary">
+          <details className="readiness-technical"><summary>Estado general y detalles de instalación</summary><div className="readiness-summary">
             <Summary label="Producción" value={props.state.readiness.productionReadiness}/>
             <Summary label="Operación" value={props.state.readiness.operationalReadiness}/>
             <Summary label="Salud técnica" value={props.state.readiness.technicalHealth}/>
             <Summary label="Licencia" value={props.state.readiness.licensingStatus}/>
             <Summary label="Dispositivos activos" value={String(activeDevices)} neutral/>
-          </div>
+          </div></details>
           <div className="readiness-components">
-            {props.state.readiness.components.map((component) => <div className="readiness-row" key={component.key}>
-              <div><strong>{componentLabel(component.key)}</strong><small>{component.detail}</small></div>
-              <StatusBadge value={component.state}/>
+            {pendingRequirements.map(({component,requirement}) => <div className="readiness-pending" key={component.key}>
+              <small>{labels[component.state]??component.state}</small>
+              <PrerequisiteNotice state={requirement} onAction={props.onNavigate}/>
             </div>)}
           </div>
+          <details className="readiness-checked"><summary>Sin pendientes en {checkedRequirements.length} componentes</summary>
+            <ul>{checkedRequirements.map(({component,requirement})=><li key={component.key}>{requirement.label} · <StatusBadge value={component.state}/></li>)}</ul>
+          </details>
         </section>
 
         <section className="admin-section" aria-labelledby="backup-title">
-          <div className="section-title-row"><div><h3 id="backup-title">Backup y recuperación</h3>
-            <p>Las copias son independientes de Sync. Configura el destino off-device fuera del almacenamiento operativo; ComanView no confirma que esté en otro disco físico.</p></div>
+          <div className="section-title-row"><div><h3 id="backup-title">Respaldo y recuperación</h3>
+            <p>Las copias son independientes de la sincronización. Configura la copia externa fuera del almacenamiento operativo; ComanView no confirma que esté en otro disco físico.</p></div>
             <StatusBadge value={props.state.backup.recoveryPreparedness}/></div>
           <div className="readiness-summary">
-            <Summary label="Backup local" value={props.state.backup.localBackupStatus}/>
-            <Summary label="Destino off-device" value={props.state.backup.offDeviceBackupStatus}/>
-            <Summary label="Recovery Key" value={props.state.backup.recoveryKeyExported?'READY':'NOT_READY'}/>
-            <Summary label="Recovery" value={props.state.backup.recoveryState}/>
+            <Summary label="Copia local" value={props.state.backup.localBackupStatus}/>
+            <Summary label="Copia externa" value={props.state.backup.offDeviceBackupStatus}/>
+            <Summary label="Clave de recuperación" value={props.state.backup.recoveryKeyExported?'READY':'NOT_READY'}/>
+            <Summary label="Recuperación" value={props.state.backup.recoveryState}/>
           </div>
           <p className="backup-last">Último verificado: {props.state.backup.lastVerifiedBackup?formatDate(props.state.backup.lastVerifiedBackup.verifiedAt!):'Todavía no existe una copia verificada.'}</p>
           <div className="backup-actions">
-            <div className="backup-create-actions" aria-label="Crear backup manual">
-              <button type="button" className="primary-button" disabled={Boolean(props.busyAction)} onClick={()=>void props.onCreateBackup('LOCAL')}>{props.busyAction==='backup-local'?'Creando…':'Crear backup local'}</button>
-              <button type="button" className="secondary-button" disabled={Boolean(props.busyAction)||props.state.backup.offDeviceBackupStatus==='NOT_CONFIGURED'} onClick={()=>void props.onCreateBackup('OFF_DEVICE')}>{props.busyAction==='backup-off-device'?'Creando…':'Crear backup externo'}</button>
+            <div className="backup-create-actions" aria-label="Crear copia manual">
+              <button type="button" className="primary-button" disabled={Boolean(props.busyAction)} onClick={()=>void props.onCreateBackup('LOCAL')}>{props.busyAction==='backup-local'?'Creando…':'Crear copia local'}</button>
+              <button type="button" className="secondary-button" disabled={Boolean(props.busyAction)||props.state.backup.offDeviceBackupStatus==='NOT_CONFIGURED'} onClick={()=>void props.onCreateBackup('OFF_DEVICE')}>{props.busyAction==='backup-off-device'?'Creando…':'Crear copia externa'}</button>
             </div>
-            <label>Directorio off-device<input value={offDevicePath} onChange={event=>setOffDevicePath(event.target.value)} placeholder="E:\\ComanView-Backups"/></label>
+            <label>Carpeta para la copia externa<input value={offDevicePath} onChange={event=>setOffDevicePath(event.target.value)} placeholder="E:\\ComanView-Backups"/></label>
             <button type="button" className="secondary-button" disabled={Boolean(props.busyAction)||offDevicePath.trim().length<3} onClick={()=>void props.onConfigureOffDevice(offDevicePath)}>Configurar destino</button>
-            <button type="button" className="secondary-button" disabled={Boolean(props.busyAction)||props.state.backup.recoveryKeyExported} onClick={()=>void props.onExportRecoveryKey().then(setExportedRecoveryKey)}>Exportar Recovery Key una vez</button>
+            <button type="button" className="secondary-button" disabled={Boolean(props.busyAction)||props.state.backup.recoveryKeyExported} onClick={()=>void props.onExportRecoveryKey().then(setExportedRecoveryKey)}>Exportar clave de recuperación una vez</button>
           </div>
           {exportedRecoveryKey?<div className="inline-alert inline-alert--warning" role="status"><strong>Guárdala ahora en un lugar seguro.</strong><code>{exportedRecoveryKey}</code><button type="button" onClick={()=>setExportedRecoveryKey(null)}>Ya la guardé</button></div>:null}
-          <details><summary>Backups recientes ({props.state.backup.recentBackups.length})</summary><div className="pairing-list">{props.state.backup.recentBackups.map(item=><article className="pairing-card" key={item.backupId}><div><strong>{item.destinationType==='LOCAL'?'Local':'Externo'}</strong><span>{formatDate(item.createdAt)} · {item.trigger}</span></div><StatusBadge value={item.status}/>{item.status==='VERIFIED'?<button type="button" className="text-danger-button" onClick={()=>setRestoreBackupId(item.backupId)}>Preparar restauración</button>:null}</article>)}</div></details>
-          {restoreBackupId?<ConfirmCard title="Restaurar backup verificado" confirmLabel="Restaurar y reiniciar" destructive
+          <details><summary>Copias recientes ({props.state.backup.recentBackups.length})</summary><div className="pairing-list">{props.state.backup.recentBackups.map(item=><article className="pairing-card" key={item.backupId}><div><strong>{item.destinationType==='LOCAL'?'Local':'Externo'}</strong><span>{formatDate(item.createdAt)} · {backupTriggerLabels[item.trigger]}</span></div><StatusBadge value={item.status}/>{item.status==='VERIFIED'?<button type="button" className="text-danger-button" onClick={()=>setRestoreBackupId(item.backupId)}>Preparar restauración</button>:null}</article>)}</div></details>
+          {restoreBackupId?<ConfirmCard title="Restaurar copia verificada" confirmLabel="Restaurar y reiniciar" destructive
             busy={props.busyAction==='restore'} description="La operación local se detendrá, conservará la base actual y validará la copia antes de activarla. Usa esta acción solo para recuperación."
             onCancel={()=>setRestoreBackupId(null)} onConfirm={()=>void props.onRestoreBackup(restoreBackupId).then(()=>setRestoreBackupId(null))}/>:null}
         </section>
@@ -145,9 +158,9 @@ export function DeviceAdminPanel(props: DeviceAdminPanelProps) {
               </div></div>
               <StatusBadge value={installation.tone} label={installation.label}/>
               <div className="device-card-actions">
-                <details><summary>Detalles técnicos</summary><code>{device.deviceId}</code><span>Estado Device: {device.status}</span>
+                <TechnicalDetails><code>{device.deviceId}</code><span>Estado del dispositivo: {device.status}</span>
                   <span>Alta: {formatDate(device.createdAt)}</span>{device.activatedAt && <span>Activado: {formatDate(device.activatedAt)}</span>}
-                  {device.revokedAt && <span>Revocado: {formatDate(device.revokedAt)}</span>}</details>
+                  {device.revokedAt && <span>Revocado: {formatDate(device.revokedAt)}</span>}</TechnicalDetails>
                 {device.status === 'ACTIVE' && device.deviceId !== props.currentDeviceId && props.canRevoke ?
                   <button type="button" className="danger-button" disabled={Boolean(props.busyAction)} onClick={() => setConfirmingRevoke(device)}>Revocar</button> : null}
               </div>
@@ -190,8 +203,7 @@ export function DeviceAdminPanel(props: DeviceAdminPanelProps) {
         busy={props.busyAction === `revoke:${confirmingRevoke.deviceId}`}
         description="Las sesiones activas de este dispositivo se cerrarán y deberá emparejarse nuevamente como un dispositivo nuevo."
         onCancel={() => setConfirmingRevoke(null)} onConfirm={() => void props.onRevoke(confirmingRevoke).then(()=>setConfirmingRevoke(null))}/> : null}
-    </section>
-  </div>;
+  </Dialog>;
 }
 
 export function focusPairingApproval(
@@ -204,7 +216,7 @@ export function focusPairingApproval(
 }
 
 function Summary({label,value,neutral=false}:{label:string;value:string;neutral?:boolean}) { return <article className="readiness-card"><span>{label}</span>{neutral?<strong>{value}</strong>:<StatusBadge value={value}/>}</article>; }
-export function StatusBadge({value,label}:{value:string;label?:string}) { return <span className={`admin-status admin-status--${value.toLowerCase()}`}>{label??labels[value]??value}</span>; }
+export function StatusBadge({value,label}:{value:string;label?:string}) { const tone=['READY','ACTIVE','VERIFIED','NORMAL'].includes(value)?'success':['NOT_READY','FAILED','REVOKED'].includes(value)?'error':['DEGRADED','PENDING','NOT_CONFIGURED'].includes(value)?'warning':'neutral';return <SharedStatusBadge tone={tone}>{label??labels[value]??value}</SharedStatusBadge>; }
 function PairingCard(props:{pairing:PairingStatusResponse;devices:Device[];selected:boolean;actionable:boolean;busy:boolean;onUse(id:string):void;onCancel(pairing:PairingStatusResponse):void}) {
   const status=effectivePairingStatus(props.pairing);
   return <article className={`pairing-card${props.selected?' pairing-card--selected':''}`} aria-current={props.selected?'true':undefined}>
@@ -214,6 +226,5 @@ function PairingCard(props:{pairing:PairingStatusResponse;devices:Device[];selec
   </article>;
 }
 function EmptyState({text}:{text:string}) { return <div className="admin-empty">{text}</div>; }
-function ConfirmCard(props:{title:string;description:string;confirmLabel:string;destructive?:boolean;busy:boolean;onCancel():void;onConfirm():void}) { return <div className="confirmation-scrim"><section className="confirmation-card" role="alertdialog" aria-modal="true" aria-labelledby="device-confirmation-title"><h3 id="device-confirmation-title">{props.title}</h3><p>{props.description}</p><div><button type="button" className="secondary-button" disabled={props.busy} onClick={props.onCancel}>Volver</button><button type="button" className={props.destructive?'danger-button':'primary-button'} disabled={props.busy} onClick={props.onConfirm}>{props.busy?'Procesando…':props.confirmLabel}</button></div></section></div>; }
-function componentLabel(key:string) { return ({EDGE:'Edge local',DATABASE:'Base de datos',TENANT_LOCATION:'Tenant y Location',LICENSE:'Licencia',CATALOG:'Catálogo',USERS:'Usuarios',RBAC:'Permisos locales',CASH_REGISTER:'Caja',STATIONS:'Estaciones KDS',PRINTING:'Impresión',DEVICES:'Dispositivos',BOOTSTRAP:'Instalación inicial',SYNC:'Sincronización',BACKUP:'Backup y recuperación'} as Record<string,string>)[key]??key; }
+function ConfirmCard(props:{title:string;description:string;confirmLabel:string;destructive?:boolean;busy:boolean;onCancel():void;onConfirm():void}) { return <ConfirmationDialog open title={props.title} description={props.description} confirmLabel={props.confirmLabel} cancelLabel="Volver" {...(props.destructive?{destructive:true}:{})} loading={props.busy} onClose={props.onCancel} onConfirm={props.onConfirm}/>; }
 function formatDate(value:string) { return new Intl.DateTimeFormat('es-MX',{dateStyle:'medium',timeStyle:'short'}).format(new Date(value)); }

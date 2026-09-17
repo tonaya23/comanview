@@ -48,7 +48,7 @@ describe('KDS presentation behavior', () => {
     expect(reconnectDelayMs(0)).toBe(1_000);
     expect(reconnectDelayMs(20)).toBe(10_000);
     expect(getKdsErrorMessage(new EdgeClientError('offline', 'EDGE_UNREACHABLE', null))).toBe(
-      'CONEXIÓN LOCAL PERDIDA',
+      'No hay conexión con la operación local. Verifica que el servicio local esté disponible y vuelve a intentar.',
     );
   });
 });

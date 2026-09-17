@@ -25,6 +25,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
     "test": "vitest run --passWithNoTests",
+    "test:resources": "vitest run --config vitest.resources.config.mjs",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "dev:prepare": "tsx src/edge/prepareDevelopmentDatabase.ts",
     "cloud:migrate": "tsx src/cloud/migrate.ts",

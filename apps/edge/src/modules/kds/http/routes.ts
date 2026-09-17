@@ -94,44 +94,48 @@ export function kdsRoutes(
       }
 
       let sessionToken: string | null = null;
+      let revalidate:(()=>void)|null=null;
+      let closed=false;
       const realtimePermissions = [PERMISSIONS.ORDER_VIEW, PERMISSIONS.KDS_VIEW] as const;
       const authenticationTimeout = setTimeout(
         () => socket.close(1008, 'Local session authentication required.'),
         5_000,
       );
       const validityInterval = setInterval(() => {
-        if (sessionToken && !auth.isRealtimeSessionValidForAny(sessionToken, realtimePermissions)) {
-          socket.close(1008, 'Local session is no longer authorized.');
-        }
+        revalidate?.();
       }, 5_000);
       validityInterval.unref();
 
-      socket.once('message', (payload: Buffer) => {
+      socket.once('message', async (payload: Buffer) => {
         try {
           const message = JSON.parse(payload.toString()) as { type?: unknown; token?: unknown };
           const token = typeof message.token === 'string' ? message.token : null;
-          const actor =
-            message.type !== 'AUTHENTICATE' || !token
-              ? null
-              : auth.authenticateRealtimeActorAny(token, realtimePermissions);
-          if (!actor) {
+          if(message.type!=='AUTHENTICATE'||!token){
             socket.close(1008, 'Invalid local session.');
             return;
           }
-          sessionToken = token;
           clearTimeout(authenticationTimeout);
-          realtime.subscribe(socket, actor.locationId, () =>
-            auth.isRealtimeSessionValidForAny(sessionToken!, realtimePermissions),
-          );
-          socket.send(JSON.stringify({ type: 'AUTHENTICATED' }));
+          const deadline=setTimeout(()=>{closed=true;socket.close(1013,'SECURITY_VALIDATION_PENDING');},5000);
+          const result=await auth.withRealtimeAuthorization(token,realtimePermissions,actor=>{
+            if(closed||socket.readyState!==1)return;
+            sessionToken=token;
+            revalidate=realtime.subscribe(socket,actor.locationId,deliver=>
+              auth.withRealtimeAuthorization(token,realtimePermissions,()=>deliver()));
+            socket.send(JSON.stringify({type:'AUTHENTICATED'}));
+          });
+          clearTimeout(deadline);
+          if(!closed&&result!=='AUTHORIZED')socket.close(result==='INVALID'?1008:1013,
+            result==='INVALID'?'AUTH_SESSION_INVALID':'SECURITY_VALIDATION_PENDING');
         } catch {
           socket.close(1008, 'Invalid authentication message.');
         }
       });
-      socket.on('close', () => {
+      socket.on('close', (code:number) => {
+        if(process.env['COMANVIEW_SECURITY_TRACE']==='true')fastify.log.info({event:'WS_CLOSED',code},'Security trace');
         clearTimeout(authenticationTimeout);
         clearInterval(validityInterval);
         sessionToken = null;
+        closed=true;revalidate=null;
       });
     });
   };

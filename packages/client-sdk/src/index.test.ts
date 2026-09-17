@@ -64,6 +64,10 @@ function jsonResponse(body: unknown, status = 200): EdgeResponse {
   };
 }
 
+function jsonResponseWithDiagnostic(body:unknown,status:number,diagnosticId:string):EdgeResponse{
+  return{...jsonResponse(body,status),headers:{get:(name:string)=>name.toLowerCase()==='x-request-id'?diagnosticId:null}};
+}
+
 describe('createEdgeClient', () => {
   it('creates a random UUIDv7 device identity without a fixed credential',()=>{
     const first=createDeviceIdentity('POS','Caja'); const second=createDeviceIdentity('POS','Caja');
@@ -708,5 +712,37 @@ describe('createEdgeClient', () => {
       `/orders/${order.id}/payment-request`,
       expect.objectContaining({ method: 'POST', body: JSON.stringify(requestPayment) }),
     );
+  });
+});
+
+describe('Edge error transport safety',()=>{
+  it('preserves contractual code, status and public details',async()=>{
+    const client=createEdgeClient({fetch:vi.fn(async()=>jsonResponse({error:'TABLE_OCCUPIED',message:'occupied',
+      details:{tableId:'table-1',activeOrderId:'order-1',diagnosticId:'req-body'}},409)) as EdgeFetch});
+    await expect(client.getOrder('order-1')).rejects.toMatchObject({code:'TABLE_OCCUPIED',status:409,
+      details:{tableId:'table-1',activeOrderId:'order-1',diagnosticId:'req-body'}});
+  });
+
+  it('does not retain a malformed or sensitive raw error body',async()=>{
+    const secret='private-token-value';
+    const client=createEdgeClient({fetch:vi.fn(async()=>jsonResponse({error:'TABLE_OCCUPIED',
+      message:'occupied',details:{diagnosticId:'req-body',token:secret},rawBody:{path:'C:\\private\\edge.db'}},409)) as EdgeFetch});
+    const error=await client.getOrder('order-1').catch((cause:unknown)=>cause);
+    expect(error).toMatchObject({code:'UNKNOWN_EDGE_ERROR',status:409,details:{diagnosticId:'req-body'}});
+    expect(JSON.stringify(error)).not.toContain(secret);
+    expect(JSON.stringify(error)).not.toContain('edge.db');
+  });
+
+  it('does not retain parser or network Error objects as public details',async()=>{
+    const invalid=createEdgeClient({fetch:vi.fn(async()=>jsonResponseWithDiagnostic({unexpected:'secret'},200,'req-invalid')) as EdgeFetch});
+    await expect(invalid.getHealth()).rejects.toMatchObject({code:'INVALID_EDGE_RESPONSE',details:{diagnosticId:'req-invalid'}});
+    const offline=createEdgeClient({fetch:vi.fn(async()=>{throw new Error('C:\\private\\network secret');}) as EdgeFetch});
+    const error=await offline.getHealth().catch((cause:unknown)=>cause);
+    expect(error).toMatchObject({code:'EDGE_UNREACHABLE',details:undefined});
+    expect(JSON.stringify(error)).not.toContain('network secret');
+
+    const unsafeHeader=createEdgeClient({fetch:vi.fn(async()=>jsonResponseWithDiagnostic(
+      {error:'NOT_CONTRACTUAL',message:'private'},500,'C:\\private\\edge.db')) as EdgeFetch});
+    await expect(unsafeHeader.getHealth()).rejects.toMatchObject({code:'UNKNOWN_EDGE_ERROR',details:undefined});
   });
 });

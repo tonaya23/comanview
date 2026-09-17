@@ -1,3 +1,4 @@
+import { getUserGuidance } from '@comanview/ui';
 import type { KdsPreparationStatus, KdsRealtimeMessage } from '@comanview/contracts';
 import { EdgeClientError } from '@comanview/client-sdk';
 
@@ -61,14 +62,9 @@ export function shouldRefreshForMessage(message: KdsRealtimeMessage, stationId: 
   return message.stationIds.includes(stationId);
 }
 
-export function getKdsErrorMessage(error: unknown): string {
-  if (error instanceof EdgeClientError) {
-    if (error.code === 'KDS_INVALID_TRANSITION') {
-      return 'El ticket cambió en otra pantalla. Se actualizará desde Edge.';
-    }
-    if (error.code === 'KDS_TICKET_NOT_FOUND') return 'El ticket ya no está disponible.';
-    if (error.code === 'EDGE_UNREACHABLE') return 'CONEXIÓN LOCAL PERDIDA';
-    return error.message;
-  }
-  return error instanceof Error ? error.message : 'No fue posible confirmar la operación.';
+export function getKdsErrorMessage(problem: unknown): string {
+  const guidance = getUserGuidance(problem instanceof EdgeClientError ? problem : undefined, {
+    action: null,
+  });
+  return guidance.title + '. ' + guidance.explanation;
 }

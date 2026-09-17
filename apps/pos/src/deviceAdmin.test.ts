@@ -1,10 +1,17 @@
-import { describe, expect, it, vi } from 'vitest';
-import { renderToString } from 'react-dom/server';
-import { createElement } from 'react';
+// @vitest-environment jsdom
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, render } from '@testing-library/react';
+import { createElement, type ReactElement } from 'react';
+afterEach(cleanup);
+function renderPanel(element: ReactElement) {
+  cleanup();
+  const result = render(element);
+  return result.baseElement.innerHTML;
+}
 import type { EdgeClient } from '@comanview/client-sdk';
 import type { Device, InstallationReadiness, PairingStatusResponse,BackupProtectionStatus } from '@comanview/contracts';
 import { DeviceAdminPanel, focusPairingApproval } from './DeviceAdminPanel.js';
-import { clearPairingApproval, deviceAdminErrorMessage, deviceDisplayName, deviceInstallationPresentation, effectivePairingStatus, groupPairings, loadDeviceAdminState, shouldClearPairingApproval } from './deviceAdmin.js';
+import { clearPairingApproval, deviceAdminErrorMessage, deviceDisplayName, deviceInstallationPresentation, effectivePairingStatus, groupPairings, loadDeviceAdminState, readinessPrerequisite, shouldClearPairingApproval } from './deviceAdmin.js';
 import { EdgeClientError } from '@comanview/client-sdk';
 
 describe('POS Device administration', () => {
@@ -37,6 +44,24 @@ describe('POS Device administration', () => {
     expect(client.getInstallationReadiness).toHaveBeenCalledOnce();
   });
 
+  it('maps readiness failures to local actions only when the current user can resolve them',()=>{
+    const missing={key:'CASH_REGISTER',state:'NOT_READY',code:'CASH_REGISTER_MISSING',detail:'0 cajas.'} as const;
+    expect(readinessPrerequisite(missing)).toMatchObject({status:'missing',action:{target:{surface:'administration',section:'registers'}},authority:{source:'edge'}});
+    expect(readinessPrerequisite(missing,()=>false).action).toBeUndefined();
+    expect(readinessPrerequisite({key:'PRINTING',state:'NOT_READY',code:'PRINT_TARGET_MISSING',detail:'0 destinos.'}).action).toBeUndefined();
+    expect(readinessPrerequisite({key:'SYNC',state:'DEGRADED',code:'SYNC_NOT_VERIFIED',detail:'Pendiente.'})).toMatchObject({status:'unavailable'});
+    expect(readinessPrerequisite({key:'EDGE',state:'READY',code:'EDGE_UP',detail:'OK'})).toMatchObject({status:'complete'});
+    expect(readinessPrerequisite({key:'BACKUP',state:'PENDING_PHASE',code:'PENDING',detail:'Pendiente'})).toMatchObject({status:'not-applicable'});
+  });
+
+  it('renders an actionable readiness prerequisite only when locally resolvable',()=>{
+    const readinessValue:InstallationReadiness={...readiness(),components:[{key:'CASH_REGISTER',state:'NOT_READY',code:'CASH_REGISTER_MISSING',detail:'0 cajas.'}]};
+    const actionable=renderPanel(createElement(DeviceAdminPanel,panelProps({state:{devices:[],pairings:[],readiness:readinessValue},canNavigate:()=>true,onNavigate:vi.fn()})));
+    expect(actionable).toContain('Configurar cajas');
+    const unavailable=renderPanel(createElement(DeviceAdminPanel,panelProps({state:{devices:[],pairings:[],readiness:readinessValue},canNavigate:()=>false,onNavigate:vi.fn()})));
+    expect(unavailable).not.toContain('Configurar cajas</button>');
+  });
+
   it('renders readiness details, differentiated Devices and actionable pending pairings', () => {
     const active = device('01991a00-0000-7000-8000-000000000721', 'POS principal', 'ACTIVE');
     const revoked = device('01991a00-0000-7000-8000-000000000722', 'POS principal', 'REVOKED');
@@ -47,12 +72,12 @@ describe('POS Device administration', () => {
       ],
     };
     const pending = pairing('01991a00-0000-7000-8000-000000000401', active, 'PENDING', '2099-08-29T12:10:00.000Z');
-    const html = renderToString(createElement(DeviceAdminPanel, panelProps({
+    const html = renderPanel(createElement(DeviceAdminPanel, panelProps({
       state:{devices:[active,revoked],pairings:[pending],readiness}, currentDeviceId:active.deviceId,
     })));
 
     expect(html).toContain('Dispositivos e instalación');
-    expect(html).toContain('Backup y recuperación');
+    expect(html).toContain('Respaldo y recuperación');
     expect(html).toContain('Fase pendiente');
     expect(html).toContain('POS principal · POS · …000721');
     expect(html).toContain('Activo');
@@ -65,7 +90,7 @@ describe('POS Device administration', () => {
     const pendingDevice = device('01991a00-0000-7000-8000-000000000723', 'Caja barra', 'PENDING');
     const expired = pairing('01991a00-0000-7000-8000-000000000402', pendingDevice, 'PENDING', '2020-01-01T00:00:00.000Z');
     expect(effectivePairingStatus(expired, Date.parse('2020-01-02T00:00:00.000Z'))).toBe('EXPIRED');
-    const html = renderToString(createElement(DeviceAdminPanel, panelProps({
+    const html = renderPanel(createElement(DeviceAdminPanel, panelProps({
       state:{devices:[pendingDevice],pairings:[expired],readiness:readiness()},
     })));
     expect(html).toContain('Expirado');
@@ -95,7 +120,7 @@ describe('POS Device administration', () => {
     const grouped=groupPairings([...terminal,current]);
     expect(grouped.active.map((item)=>item.pairingId)).toEqual([current.pairingId]);
     expect(grouped.history).toHaveLength(12);
-    const html=renderToString(createElement(DeviceAdminPanel,panelProps({state:{devices:[value],pairings:[...terminal,current],readiness:readiness()}})));
+    const html=renderPanel(createElement(DeviceAdminPanel,panelProps({state:{devices:[value],pairings:[...terminal,current],readiness:readiness()}})));
     expect(html.indexOf('Usar solicitud')).toBeLessThan(html.indexOf('Mostrar historial'));
     expect(html).toContain('<details class="pairing-history">');
   });
@@ -113,7 +138,7 @@ describe('POS Device administration', () => {
   it('keeps contextual feedback visible and disables pairing actions while approval is pending', () => {
     const pendingDevice = device('01991a00-0000-7000-8000-000000000724', 'Caja terraza', 'PENDING');
     const pending = pairing('01991a00-0000-7000-8000-000000000403', pendingDevice, 'PENDING', '2099-01-01T00:00:00.000Z');
-    const html = renderToString(createElement(DeviceAdminPanel, panelProps({
+    const html = renderPanel(createElement(DeviceAdminPanel, panelProps({
       state:{devices:[pendingDevice],pairings:[pending],readiness:readiness()},
       error:'Se alcanzó el límite de dispositivos activos para este tipo.',
       busyAction:`approve:${pending.pairingId}`,
@@ -149,19 +174,21 @@ describe('POS Device administration', () => {
     const verified={backupId:'01991a00-0000-7000-8000-000000000499',status:'VERIFIED' as const,trigger:'MANUAL' as const,
       destinationType:'LOCAL' as const,createdAt:'2026-09-01T12:00:00.000Z',completedAt:'2026-09-01T12:00:01.000Z',
       verifiedAt:'2026-09-01T12:00:01.000Z',sizeBytes:1024,failureCode:null};
-    const html=renderToString(createElement(DeviceAdminPanel,panelProps({state:{devices:[],pairings:[],readiness:readiness(),
+    const html=renderPanel(createElement(DeviceAdminPanel,panelProps({state:{devices:[],pairings:[],readiness:readiness(),
       backup:{...backup(),localBackupStatus:'READY',lastVerifiedBackup:verified,recentBackups:[verified]}}})));
-    expect(html).toContain('Backup y recuperación');expect(html).toContain('Preparar restauración');
-    expect(html).toContain('Destino off-device');expect(html).toContain('Sin configurar');
-    expect(html).toContain('Crear backup local');expect(html).toContain('Crear backup externo');
-    expect(html).toMatch(/disabled=""[^>]*>Crear backup externo<\/button>/);
+    expect(html).toContain('Respaldo y recuperación');expect(html).toContain('Preparar restauración');
+    expect(html).toContain('Copia externa');expect(html).toContain('Sin configurar');
+    expect(html).toContain('Crear copia local');expect(html).toContain('Crear copia externa');
+    expect(html).toMatch(/disabled=""[^>]*>Crear copia externa<\/button>/);
+    expect(html).not.toContain('off-device');
+    expect(html).not.toContain('· MANUAL');
   });
 
   it('enables the external backup action once its destination is configured',()=>{
-    const html=renderToString(createElement(DeviceAdminPanel,panelProps({state:{devices:[],pairings:[],readiness:readiness(),
+    const html=renderPanel(createElement(DeviceAdminPanel,panelProps({state:{devices:[],pairings:[],readiness:readiness(),
       backup:{...backup(),offDeviceBackupStatus:'NOT_READY'}}})));
-    expect(html).toContain('Crear backup externo');
-    expect(html).not.toMatch(/disabled=""[^>]*>Crear backup externo<\/button>/);
+    expect(html).toContain('Crear copia externa');
+    expect(html).not.toMatch(/disabled=""[^>]*>Crear copia externa<\/button>/);
   });
 });
 

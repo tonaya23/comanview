@@ -12,6 +12,7 @@
     "lint": "eslint src",
     "test": "vitest run --passWithNoTests",
     "test:host": "vitest run --config vitest.host.config.mjs",
+    "test:resources": "vitest run --config vitest.resources.config.mjs",
     "test:integration": "vitest run --config vitest.integration.config.ts"
   },
   "dependencies": {

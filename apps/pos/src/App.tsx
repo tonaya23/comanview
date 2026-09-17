@@ -1,9 +1,23 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { createEdgeClient, EdgeClientError, clearDevicePairing, createDeviceIdentity,
-  createClientDevicePairing, createPairingAuthorizationData, getDeviceOnboardingState, loadDeviceIdentity, loadDevicePairing,
+import {
+  createEdgeClient,
+  EdgeClientError,
+  invalidatesLocalSession,
+  clearDevicePairing,
+  createDeviceIdentity,
+  createClientDevicePairing,
+  createPairingAuthorizationData,
+  getDeviceOnboardingState,
+  loadDeviceIdentity,
+  loadDevicePairing,
   markDeviceAuthorizationStatus,
-  rotateDeviceIdentity, saveDeviceIdentity, saveDevicePairing, serializePairingAuthorizationData,
-  type ClientDeviceIdentity, type ClientDevicePairing } from '@comanview/client-sdk';
+  rotateDeviceIdentity,
+  saveDeviceIdentity,
+  saveDevicePairing,
+  serializePairingAuthorizationData,
+  type ClientDeviceIdentity,
+  type ClientDevicePairing,
+} from '@comanview/client-sdk';
 import type {
   CashSessionResponse,
   CashReportSnapshotResponse,
@@ -23,6 +37,29 @@ import type {
   EffectiveCapabilitiesResponse,
 } from '@comanview/contracts';
 import { OperationalRealtimeMessageSchema, PermissionCodes } from '@comanview/contracts';
+import {
+  getUserGuidance,
+  Button,
+  InlineAlert,
+  TechnicalDetails,
+  type UserGuidance,
+  type AdministrationNavigationTarget,
+  type TypedNavigationTarget,
+} from '@comanview/ui';
+import {
+  PosAction,
+  PosDialog,
+  PosFeedback,
+  ConnectionStatus,
+  PrintingStatus,
+  PaymentSummary,
+  paymentMethodLabel,
+  paymentStatusLabel,
+  itemStatusLabel,
+  licenseModeLabel,
+  usePosConfirmation,
+} from './PosOperationalUX.js';
+import { roleLabel } from './AdministrationFields.js';
 import {
   ALL_CATEGORIES,
   canCreateAnotherCounterOrder,
@@ -55,14 +92,28 @@ import {
   setManualCashTender,
   undoCashDenomination,
 } from './cashTenderInput.js';
-import { getPairingUxState, pairingBelongsToIdentity, requestPairingWithRevokedIdentityRotation,
-  shouldAcceptPairingPoll, shouldShowPairingOnLogin } from './devicePairingLifecycle.js';
-import { clearPairingApproval, deviceAdminErrorMessage, isGlobalDeviceAdminError, loadDeviceAdminState,
-  type DeviceAdminState } from './deviceAdmin.js';
+import {
+  getPairingUxState,
+  pairingBelongsToIdentity,
+  requestPairingWithRevokedIdentityRotation,
+  shouldAcceptPairingPoll,
+  shouldShowPairingOnLogin,
+} from './devicePairingLifecycle.js';
+import {
+  clearPairingApproval,
+  deviceAdminErrorMessage,
+  isGlobalDeviceAdminError,
+  loadDeviceAdminState,
+  type DeviceAdminState,
+} from './deviceAdmin.js';
 import { DeviceAdminPanel } from './DeviceAdminPanel.js';
 import { CashMovementTypeSelector } from './CashMovementTypeSelector.js';
 import { AdministrationPanel } from './AdministrationPanel.js';
-import { discardCounterSale, isDiscardableCounterSale, openCurrentCounterSale } from './counterSales.js';
+import {
+  discardCounterSale,
+  isDiscardableCounterSale,
+  openCurrentCounterSale,
+} from './counterSales.js';
 
 const sessionTokenStorageKey = 'comanview.pos.sessionToken';
 const edge = createEdgeClient({
@@ -78,38 +129,59 @@ export function App() {
   const [pin, setPin] = useState('');
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loginPending, setLoginPending] = useState(false);
-  const [deviceIdentity,setDeviceIdentity]=useState<ClientDeviceIdentity|null>(null);
-  const [pairing,setPairing]=useState<ClientDevicePairing|null>(null);
-  const [bootstrapAuthorization,setBootstrapAuthorization]=useState('');
-  const [bootstrapPin,setBootstrapPin]=useState('');
-  const [pairingCopyFeedback,setPairingCopyFeedback]=useState('');
-  const [pairingDisplayName,setPairingDisplayName]=useState('POS principal');
-  const [pairingError,setPairingError]=useState<string|null>(null);
-  const [pairingNotice,setPairingNotice]=useState<string|null>(null);
-  const [pairingPending,setPairingPending]=useState(false);
-  const [bootstrapPending,setBootstrapPending]=useState(false);
-  const [deviceAdminOpen,setDeviceAdminOpen]=useState(false);
-  const [administrationOpen,setAdministrationOpen]=useState(false);
-  const [deviceAdmin,setDeviceAdmin]=useState<DeviceAdminState|null>(null);
-  const [deviceAdminLoading,setDeviceAdminLoading]=useState(false);
-  const [deviceAdminError,setDeviceAdminError]=useState<string|null>(null);
-  const [deviceAdminNotice,setDeviceAdminNotice]=useState<string|null>(null);
-  const [deviceAdminBusy,setDeviceAdminBusy]=useState<`approve:${string}`|`cancel:${string}`|`revoke:${string}`|'refresh'|'backup-local'|'backup-off-device'|'backup-config'|'recovery-key'|'restore'|null>(null);
-  const [approvalPairingId,setApprovalPairingId]=useState(''); const [approvalCode,setApprovalCode]=useState('');
-  const pairingGenerationRef=useRef(0);
-  const deviceIdentityRef=useRef<ClientDeviceIdentity|null>(null);
+  const [deviceIdentity, setDeviceIdentity] = useState<ClientDeviceIdentity | null>(null);
+  const [pairing, setPairing] = useState<ClientDevicePairing | null>(null);
+  const [bootstrapAuthorization, setBootstrapAuthorization] = useState('');
+  const [bootstrapPin, setBootstrapPin] = useState('');
+  const [pairingCopyFeedback, setPairingCopyFeedback] = useState('');
+  const [pairingDisplayName, setPairingDisplayName] = useState('POS principal');
+  const [pairingError, setPairingError] = useState<string | null>(null);
+  const [pairingNotice, setPairingNotice] = useState<string | null>(null);
+  const [pairingPending, setPairingPending] = useState(false);
+  const [bootstrapPending, setBootstrapPending] = useState(false);
+  const [deviceAdminOpen, setDeviceAdminOpen] = useState(false);
+  const [administrationOpen, setAdministrationOpen] = useState(false);
+  const [administrationTarget, setAdministrationTarget] =
+    useState<AdministrationNavigationTarget | null>(null);
+  const [deviceAdmin, setDeviceAdmin] = useState<DeviceAdminState | null>(null);
+  const [deviceAdminLoading, setDeviceAdminLoading] = useState(false);
+  const [deviceAdminError, setDeviceAdminError] = useState<string | null>(null);
+  const [deviceAdminNotice, setDeviceAdminNotice] = useState<string | null>(null);
+  const [deviceAdminBusy, setDeviceAdminBusy] = useState<
+    | `approve:${string}`
+    | `cancel:${string}`
+    | `revoke:${string}`
+    | 'refresh'
+    | 'backup-local'
+    | 'backup-off-device'
+    | 'backup-config'
+    | 'recovery-key'
+    | 'restore'
+    | null
+  >(null);
+  const [approvalPairingId, setApprovalPairingId] = useState('');
+  const [approvalCode, setApprovalCode] = useState('');
+  const pairingGenerationRef = useRef(0);
+  const deviceIdentityRef = useRef<ClientDeviceIdentity | null>(null);
   const [connection, setConnection] = useState<ConnectionState>('CHECKING');
-  const [recoveryRequired,setRecoveryRequired]=useState(false);
-  const [emergencyRecovery,setEmergencyRecovery]=useState({backupId:'',artifactPath:'',recoveryKey:'',authorization:''});
-  const [emergencyRecoveryBusy,setEmergencyRecoveryBusy]=useState(false);
+  const [recoveryRequired, setRecoveryRequired] = useState(false);
+  const [emergencyRecovery, setEmergencyRecovery] = useState({
+    backupId: '',
+    artifactPath: '',
+    recoveryKey: '',
+    authorization: '',
+  });
+  const [emergencyRecoveryBusy, setEmergencyRecoveryBusy] = useState(false);
   const [categories, setCategories] = useState<CategoryResponse[]>([]);
   const [products, setProducts] = useState<ProductResponse[]>([]);
   const [tables, setTables] = useState<RestaurantTableResponse[]>([]);
   const [showOpenTables, setShowOpenTables] = useState(false);
   const [openCounterOrders, setOpenCounterOrders] = useState<OrderResponse[]>([]);
   const [showOpenCounterOrders, setShowOpenCounterOrders] = useState(false);
-  const [counterError,setCounterError]=useState<string|null>(null);
-  const counterBusy=useRef(false);
+  const [counterError, setCounterError] = useState<string | null>(null);
+  const counterBusy = useRef(false);
+  const operationalReadSequence = useRef(0);
+  const deviceReadSequence = useRef(0);
   const [openTablesError, setOpenTablesError] = useState<string | null>(null);
   const [selectedCategoryId, setSelectedCategoryId] = useState(ALL_CATEGORIES);
   const [productSearch, setProductSearch] = useState('');
@@ -119,13 +191,54 @@ export function App() {
   const [licensing, setLicensing] = useState<EffectiveCapabilitiesResponse | null>(null);
   const [loadingCatalog, setLoadingCatalog] = useState(true);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setErrorText] = useState<string | null>(null);
+  const [errorGuidance, setErrorGuidance] = useState<UserGuidance | null>(null);
+  function setError(text: string | null) {
+    setErrorText(text);
+    setErrorGuidance(null);
+  }
+  function reportError(problem: unknown) {
+    if(problem instanceof EdgeClientError&&problem.code==='PERSONNEL_SECURITY_UNAVAILABLE'){
+      setConnection('CHECKING');setOperationalDegraded(true);
+    }
+    setErrorText(getErrorMessage(problem));
+    setErrorGuidance(
+      getUserGuidance(problem instanceof EdgeClientError ? problem : 'UNKNOWN_EDGE_ERROR'),
+    );
+  }
+  const { confirm: confirmOperation, confirmation: operationConfirmation } = usePosConfirmation();
+  const [networkAvailable, setNetworkAvailable] = useState(navigator.onLine);
+  const [operationalDegraded, setOperationalDegraded] = useState(false);
+  const [printStatusUnavailable, setPrintStatusUnavailable] = useState(false);
+  useEffect(() => {
+    const update = () => setNetworkAvailable(navigator.onLine);
+    window.addEventListener('online', update);
+    window.addEventListener('offline', update);
+    return () => {
+      window.removeEventListener('online', update);
+      window.removeEventListener('offline', update);
+    };
+  }, []);
   const [notice, setNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (!notice || notice.startsWith('La venta actual ya está vacía.') || notice.startsWith('Hay una venta vacía abierta.')) return;
+    const timer = window.setTimeout(() => setNotice(null), 4000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
   const [showOpenCash, setShowOpenCash] = useState(false);
   const [openingFloat, setOpeningFloat] = useState('0.00');
-  const [openCashError, setOpenCashError] = useState<string | null>(null);
+  const [cashGuidance, setCashGuidance] = useState<UserGuidance | null>(null);
+  const [openCashError, setOpenCashErrorText] = useState<string | null>(null);
+  function setOpenCashError(text: string | null) {
+    setOpenCashErrorText(text);
+    setCashGuidance(null);
+  }
   const [showCashOperations, setShowCashOperations] = useState(false);
-  const [cashModalError, setCashModalError] = useState<string | null>(null);
+  const [cashModalError, setCashModalErrorText] = useState<string | null>(null);
+  function setCashModalError(text: string | null) {
+    setCashModalErrorText(text);
+    setCashGuidance(null);
+  }
   const [cashMovementType, setCashMovementType] = useState<'CASH_IN' | 'CASH_OUT'>('CASH_IN');
   const [cashMovementAmount, setCashMovementAmount] = useState('0.00');
   const [cashMovementReason, setCashMovementReason] = useState('');
@@ -160,6 +273,8 @@ export function App() {
   );
 
   const clearLocalSession = useCallback(() => {
+    operationalReadSequence.current++;
+    deviceReadSequence.current++;
     window.localStorage.removeItem(sessionTokenStorageKey);
     setAuthUser(null);
     setOrder(null);
@@ -178,56 +293,121 @@ export function App() {
     setOverrideError(null);
   }, []);
 
-  useEffect(()=>{let disposed=false;const generation=++pairingGenerationRef.current;
-    void Promise.all([loadDeviceIdentity(),loadDevicePairing()]).then(async([storedIdentity,storedPairing])=>{
-      const identity=storedIdentity??createDeviceIdentity('POS','POS principal');
-      if(!storedIdentity)await saveDeviceIdentity(identity);
-      if(disposed||generation!==pairingGenerationRef.current)return;
-      deviceIdentityRef.current=identity;setDeviceIdentity(identity);setPairingDisplayName(identity.displayName);
-      if(!storedPairing)return;
-      if(!pairingBelongsToIdentity(storedPairing,identity)){
-        await clearDevicePairing(storedPairing.pairingId);return;
+  useEffect(() => {
+    let disposed = false;
+    const generation = ++pairingGenerationRef.current;
+    void Promise.all([loadDeviceIdentity(), loadDevicePairing()]).then(
+      async ([storedIdentity, storedPairing]) => {
+        const identity = storedIdentity ?? createDeviceIdentity('POS', 'POS principal');
+        if (!storedIdentity) await saveDeviceIdentity(identity);
+        if (disposed || generation !== pairingGenerationRef.current) return;
+        deviceIdentityRef.current = identity;
+        setDeviceIdentity(identity);
+        setPairingDisplayName(identity.displayName);
+        if (!storedPairing) return;
+        if (!pairingBelongsToIdentity(storedPairing, identity)) {
+          await clearDevicePairing(storedPairing.pairingId);
+          return;
+        }
+        if (storedPairing.currentStatus === 'ACTIVE') {
+          const active = await markDeviceAuthorizationStatus(identity.deviceId, 'ACTIVE');
+          if (active) {
+            deviceIdentityRef.current = active;
+            setDeviceIdentity(active);
+          }
+          await clearDevicePairing(storedPairing.pairingId);
+          return;
+        }
+        setPairing(storedPairing);
+      },
+    );
+    return () => {
+      disposed = true;
+      if (pairingGenerationRef.current === generation) pairingGenerationRef.current += 1;
+    };
+  }, []);
+  useEffect(() => {
+    deviceIdentityRef.current = deviceIdentity;
+  }, [deviceIdentity]);
+  useEffect(() => {
+    if (!authUser || !deviceIdentity || deviceIdentity.authorizationStatus === 'ACTIVE') return;
+    void markDeviceAuthorizationStatus(deviceIdentity.deviceId, 'ACTIVE').then((active) => {
+      if (active) {
+        deviceIdentityRef.current = active;
+        setDeviceIdentity(active);
       }
-      if(storedPairing.currentStatus==='ACTIVE'){
-        const active=await markDeviceAuthorizationStatus(identity.deviceId,'ACTIVE');
-        if(active){deviceIdentityRef.current=active;setDeviceIdentity(active);}
-        await clearDevicePairing(storedPairing.pairingId);return;
-      }
-      setPairing(storedPairing);
     });
-    return()=>{disposed=true;if(pairingGenerationRef.current===generation)pairingGenerationRef.current+=1;};
-  },[]);
-  useEffect(()=>{deviceIdentityRef.current=deviceIdentity;},[deviceIdentity]);
-  useEffect(()=>{if(!authUser||!deviceIdentity||deviceIdentity.authorizationStatus==='ACTIVE')return;
-    void markDeviceAuthorizationStatus(deviceIdentity.deviceId,'ACTIVE').then(active=>{if(active){deviceIdentityRef.current=active;setDeviceIdentity(active);}});
-  },[authUser,deviceIdentity]);
-  useEffect(()=>{
-    if(!pairing||!deviceIdentity||pairing.currentStatus!=='PENDING'||!pairingBelongsToIdentity(pairing,deviceIdentity))return;
-    const generation=++pairingGenerationRef.current;let disposed=false;let timer:number|undefined;
-    const poll=async()=>{try{
-      const status=await edge.getPairingStatus(pairing.pairingId,pairing.requestToken);
-      if(disposed||!shouldAcceptPairingPoll({responsePairingId:status.pairingId,
-        responseDeviceId:status.device.deviceId,expectedPairingId:pairing.pairingId,
-        expectedDeviceId:pairing.deviceId,currentDeviceId:deviceIdentityRef.current?.deviceId??null,
-        generation,currentGeneration:pairingGenerationRef.current}))return;
-      if(status.status==='ACTIVE'){
-        pairingGenerationRef.current+=1;setPairing(null);
-        const active=await markDeviceAuthorizationStatus(deviceIdentity.deviceId,'ACTIVE');
-        if(active){deviceIdentityRef.current=active;setDeviceIdentity(active);}
-        await clearDevicePairing(pairing.pairingId);
-        if(!disposed)setPairingNotice('Dispositivo autorizado. Ya puedes iniciar sesión.');
-        return;
+  }, [authUser, deviceIdentity]);
+  useEffect(() => {
+    if (
+      !pairing ||
+      !deviceIdentity ||
+      pairing.currentStatus !== 'PENDING' ||
+      !pairingBelongsToIdentity(pairing, deviceIdentity)
+    )
+      return;
+    const generation = ++pairingGenerationRef.current;
+    let disposed = false;
+    let timer: number | undefined;
+    const poll = async () => {
+      try {
+        const status = await edge.getPairingStatus(pairing.pairingId, pairing.requestToken);
+        if (
+          disposed ||
+          !shouldAcceptPairingPoll({
+            responsePairingId: status.pairingId,
+            responseDeviceId: status.device.deviceId,
+            expectedPairingId: pairing.pairingId,
+            expectedDeviceId: pairing.deviceId,
+            currentDeviceId: deviceIdentityRef.current?.deviceId ?? null,
+            generation,
+            currentGeneration: pairingGenerationRef.current,
+          })
+        )
+          return;
+        if (status.status === 'ACTIVE') {
+          pairingGenerationRef.current += 1;
+          setPairing(null);
+          const active = await markDeviceAuthorizationStatus(deviceIdentity.deviceId, 'ACTIVE');
+          if (active) {
+            deviceIdentityRef.current = active;
+            setDeviceIdentity(active);
+          }
+          await clearDevicePairing(pairing.pairingId);
+          if (!disposed) setPairingNotice('Dispositivo autorizado. Ya puedes iniciar sesión.');
+          return;
+        }
+        const next = { ...pairing, currentStatus: status.status };
+        setPairing(next);
+        const saved = await saveDevicePairing(next, pairing.pairingId);
+        if (generation !== pairingGenerationRef.current) {
+          await clearDevicePairing(next.pairingId);
+          return;
+        }
+        if (!saved) {
+          pairingGenerationRef.current += 1;
+          setPairing(null);
+          return;
+        }
+        if (status.status === 'PENDING') timer = window.setTimeout(() => void poll(), 2_000);
+      } catch {
+        if (!disposed && generation === pairingGenerationRef.current)
+          timer = window.setTimeout(() => void poll(), 2_000);
       }
-      const next={...pairing,currentStatus:status.status};
-      setPairing(next);
-      const saved=await saveDevicePairing(next,pairing.pairingId);
-      if(generation!==pairingGenerationRef.current){await clearDevicePairing(next.pairingId);return;}
-      if(!saved){pairingGenerationRef.current+=1;setPairing(null);return;}
-      if(status.status==='PENDING')timer=window.setTimeout(()=>void poll(),2_000);
-    }catch{if(!disposed&&generation===pairingGenerationRef.current)timer=window.setTimeout(()=>void poll(),2_000);}};
-    void poll();return()=>{disposed=true;if(timer!==undefined)window.clearTimeout(timer);
-      if(pairingGenerationRef.current===generation)pairingGenerationRef.current+=1;};
-  },[deviceIdentity?.deviceId,pairing?.pairingId,pairing?.requestToken,pairing?.deviceId,pairing?.currentStatus]);
+    };
+    void poll();
+    return () => {
+      disposed = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+      if (pairingGenerationRef.current === generation) pairingGenerationRef.current += 1;
+    };
+  }, [
+    deviceIdentity?.deviceId,
+    pairing?.pairingId,
+    pairing?.requestToken,
+    pairing?.deviceId,
+    pairing?.currentStatus,
+  ]);
 
   useEffect(() => {
     const restoreSession = async () => {
@@ -238,8 +418,9 @@ export function App() {
       try {
         const current = await edge.getCurrentSession();
         setAuthUser(current.user);
-      } catch {
-        clearLocalSession();
+      } catch (problem) {
+        if(invalidatesLocalSession(problem))clearLocalSession();
+        else reportError(problem);
       } finally {
         setAuthChecking(false);
       }
@@ -263,7 +444,7 @@ export function App() {
   const refreshConnection = useCallback(async () => {
     try {
       const health = await edge.getHealth();
-      setRecoveryRequired(health.recoveryState==='RECOVERY_REQUIRED');
+      setRecoveryRequired(health.recoveryState === 'RECOVERY_REQUIRED');
       setConnection(health.status === 'UP' ? 'CONNECTED' : 'DISCONNECTED');
       return health.status === 'UP';
     } catch {
@@ -275,8 +456,17 @@ export function App() {
 
   const refreshOperationalState = useCallback(async () => {
     if (!authUser) return;
+    const sequence = ++operationalReadSequence.current;
     try {
-      const [nextCategories, nextProducts, nextTables, nextCounterOrders, currentCash, config, licenseStatus] = await Promise.all([
+      const [
+        nextCategories,
+        nextProducts,
+        nextTables,
+        nextCounterOrders,
+        currentCash,
+        config,
+        licenseStatus,
+      ] = await Promise.all([
         authUser.permissions.includes(PermissionCodes.CATALOG_VIEW)
           ? edge.getCategories()
           : Promise.resolve([]),
@@ -297,6 +487,7 @@ export function App() {
           : Promise.resolve(null),
         edge.getLicensingStatus(),
       ]);
+      if (sequence !== operationalReadSequence.current) return;
       setCategories(nextCategories);
       setProducts(nextProducts);
       setTables(nextTables);
@@ -304,12 +495,15 @@ export function App() {
       setCashSession(currentCash.session);
       setPaymentConfig(config);
       setLicensing(licenseStatus);
+      setOperationalDegraded(false);
       setConnection('CONNECTED');
     } catch (stateError) {
+      if (sequence !== operationalReadSequence.current) return;
+      setOperationalDegraded(true);
       if (stateError instanceof EdgeClientError && stateError.code === 'EDGE_UNREACHABLE')
         setConnection('DISCONNECTED');
-      if (stateError instanceof EdgeClientError && stateError.status === 401) clearLocalSession();
-      setError(getErrorMessage(stateError));
+      if (invalidatesLocalSession(stateError)) clearLocalSession();
+      reportError(stateError);
     } finally {
       setLoadingCatalog(false);
     }
@@ -324,7 +518,7 @@ export function App() {
     } catch (restoreError) {
       window.localStorage.removeItem(currentOrderStorageKey);
       if (!(restoreError instanceof EdgeClientError && restoreError.code === 'ORDER_NOT_FOUND'))
-        setError(getErrorMessage(restoreError));
+        reportError(restoreError);
     }
   }, [authUser]);
 
@@ -333,7 +527,7 @@ export function App() {
     try {
       setTables(await edge.getTables());
     } catch (problem) {
-      if (problem instanceof EdgeClientError && problem.status === 401) clearLocalSession();
+      if (invalidatesLocalSession(problem)) clearLocalSession();
     }
   }, [authUser, clearLocalSession]);
 
@@ -347,7 +541,7 @@ export function App() {
           return next;
         });
       } catch (problem) {
-        if (problem instanceof EdgeClientError && problem.status === 401) clearLocalSession();
+        if (invalidatesLocalSession(problem)) clearLocalSession();
       }
     },
     [clearLocalSession],
@@ -395,7 +589,10 @@ export function App() {
           const message = OperationalRealtimeMessageSchema.safeParse(raw);
           if (!message.success) return;
           if (message.data.type === 'TABLES_CHANGED') void refreshRealtimeTables();
-          if (message.data.type === 'ORDER_UPDATED' && message.data.orderId === orderRef.current?.id) {
+          if (
+            message.data.type === 'ORDER_UPDATED' &&
+            message.data.orderId === orderRef.current?.id
+          ) {
             void refreshRealtimeOrder(message.data.orderId);
           }
         } catch {
@@ -403,7 +600,8 @@ export function App() {
         }
       };
       socket.onerror = () => socket?.close();
-      socket.onclose = () => {
+      socket.onclose = (event) => {
+        if(!stopped&&event?.code===1008){clearLocalSession();return;}
         if (!stopped) retry = window.setTimeout(connect, 1_500);
       };
     };
@@ -424,7 +622,9 @@ export function App() {
     const refresh = async () => {
       try {
         setPrintJobs(await edge.getRecentPrintJobs());
+        setPrintStatusUnavailable(false);
       } catch {
+        setPrintStatusUnavailable(true);
         // Printing is non-blocking; connectivity polling remains authoritative.
       }
     };
@@ -477,9 +677,13 @@ export function App() {
       )
     : null;
   const isBusy = pendingAction !== null;
-  const licenseAllowsNewOrders = licensing !== null &&
-    ['FULL','FULL_WITH_WARNING','GRACE_OPERATING','GUARANTEED_SHIFT'].includes(licensing.mode);
-  const canOperateOrder = order?.status === 'OPEN' && connection === 'CONNECTED' && !isBusy &&
+  const licenseAllowsNewOrders =
+    licensing !== null &&
+    ['FULL', 'FULL_WITH_WARNING', 'GRACE_OPERATING', 'GUARANTEED_SHIFT'].includes(licensing.mode);
+  const canOperateOrder =
+    order?.status === 'OPEN' &&
+    connection === 'CONNECTED' &&
+    !isBusy &&
     (licenseAllowsNewOrders || Boolean(order && licensing?.mode === 'PROTECTED_OPERATIONS'));
 
   function clearFeedback() {
@@ -488,17 +692,23 @@ export function App() {
   }
 
   function setContextualCashError(problem: unknown, setLocalError: (message: string) => void) {
+    if(problem instanceof EdgeClientError&&problem.code==='PERSONNEL_SECURITY_UNAVAILABLE'){
+      reportError(problem);setLocalError(getErrorMessage(problem));return;
+    }
     if (problem instanceof EdgeClientError && problem.code === 'EDGE_UNREACHABLE') {
       setConnection('DISCONNECTED');
-      setError(getErrorMessage(problem));
+      reportError(problem);
       return;
     }
-    if (problem instanceof EdgeClientError && problem.status === 401) {
+    if (invalidatesLocalSession(problem)) {
       clearLocalSession();
-      setError(getErrorMessage(problem));
+      reportError(problem);
       return;
     }
     setLocalError(getErrorMessage(problem));
+    setCashGuidance(
+      getUserGuidance(problem instanceof EdgeClientError ? problem : 'UNKNOWN_EDGE_ERROR'),
+    );
   }
 
   async function mutate(
@@ -511,13 +721,14 @@ export function App() {
     clearFeedback();
     try {
       const next = await action();
+      operationalReadSequence.current++;
       updateOrder(next);
       setNotice(message);
       return next;
     } catch (problem) {
       if (problem instanceof EdgeClientError && problem.code === 'EDGE_UNREACHABLE')
         setConnection('DISCONNECTED');
-      if (problem instanceof EdgeClientError && problem.status === 401) clearLocalSession();
+      if (invalidatesLocalSession(problem)) clearLocalSession();
       if (problem instanceof EdgeClientError && problem.code === 'STALE_ORDER_VERSION' && order) {
         try {
           updateOrder(await edge.getOrder(order.id));
@@ -557,7 +768,7 @@ export function App() {
           /* the authoritative mutation error remains the useful feedback */
         }
       }
-      if (!handleError?.(problem)) setError(getErrorMessage(problem));
+      if (!handleError?.(problem)) reportError(problem);
       return null;
     } finally {
       setPendingAction(null);
@@ -565,7 +776,7 @@ export function App() {
   }
 
   async function createOrder() {
-    if(counterBusy.current)return;
+    if (counterBusy.current) return;
     if (!canCreateAnotherCounterOrder(order)) {
       setNotice('La venta actual ya está vacía. Úsala o descártala antes de crear otra.');
       return;
@@ -573,59 +784,115 @@ export function App() {
     if (
       order?.status === 'OPEN' &&
       order.items.length > 0 &&
-      !window.confirm('La venta actual permanecerá abierta en Edge. ¿Quieres iniciar otra venta?')
+      !(await confirmOperation(
+        'Iniciar otra venta',
+        'La venta actual permanecerá abierta. Podrás recuperarla desde Ventas abiertas. ¿Continuar?',
+      ))
     )
       return;
     const currency = products.find((product) => product.active)?.basePrice.currency ?? 'MXN';
-    counterBusy.current=true;
+    counterBusy.current = true;
     setPendingAction('create-order');
     try {
-      const current=await edge.getOpenCounterOrders();
+      const current = await edge.getOpenCounterOrders();
       setOpenCounterOrders(current);
-      if(current.some(isDiscardableCounterSale)){
-        setCounterError(null);setShowOpenCounterOrders(true);
+      if (current.some(isDiscardableCounterSale)) {
+        setCounterError(null);
+        setShowOpenCounterOrders(true);
         setNotice('Hay una venta vacía abierta. Selecciónala para continuar o descartarla.');
         return;
       }
       await mutate(
-      'create-order',
-      () => edge.createOrder({ commandId:crypto.randomUUID(),orderType: 'COUNTER', channel: 'POS', currency }),
-      'Nueva venta creada en Edge.',
-    );
-    }catch(problem){setError(getErrorMessage(problem));}
-    finally{counterBusy.current=false;setPendingAction(null);}
+        'create-order',
+        () =>
+          edge.createOrder({
+            commandId: crypto.randomUUID(),
+            orderType: 'COUNTER',
+            channel: 'POS',
+            currency,
+          }),
+        'Nueva venta creada.',
+      );
+    } catch (problem) {
+      reportError(problem);
+    } finally {
+      counterBusy.current = false;
+      setPendingAction(null);
+    }
   }
 
   async function openCounterOrder(next: OrderResponse) {
-    if(counterBusy.current)return;
-    counterBusy.current=true;setPendingAction('open-counter');setCounterError(null);
-    try{updateOrder(await openCurrentCounterSale(edge,next.id));setShowOpenCounterOrders(false);setNotice('Venta abierta recuperada.');}
-    catch(problem){setCounterError(problem instanceof EdgeClientError?getErrorMessage(problem):'Esta venta ya no está abierta. Actualiza la lista.');}
-    finally{counterBusy.current=false;setPendingAction(null);}
+    if (counterBusy.current) return;
+    counterBusy.current = true;
+    setPendingAction('open-counter');
+    setCounterError(null);
+    try {
+      updateOrder(await openCurrentCounterSale(edge, next.id));
+      setShowOpenCounterOrders(false);
+      setNotice('Venta abierta recuperada.');
+    } catch (problem) {
+      setCounterError(
+        problem instanceof EdgeClientError
+          ? getErrorMessage(problem)
+          : 'Esta venta ya no está abierta. Actualiza la lista.',
+      );
+    } finally {
+      counterBusy.current = false;
+      setPendingAction(null);
+    }
   }
 
-  async function refreshCounterSales(){
-    if(counterBusy.current)return;
-    counterBusy.current=true;setPendingAction('list-counter');setCounterError(null);
-    try{setOpenCounterOrders(await edge.getOpenCounterOrders());}
-    catch(problem){setCounterError(getErrorMessage(problem));}
-    finally{counterBusy.current=false;setPendingAction(null);}
+  async function refreshCounterSales() {
+    if (counterBusy.current) return;
+    counterBusy.current = true;
+    setPendingAction('list-counter');
+    setCounterError(null);
+    try {
+      setOpenCounterOrders(await edge.getOpenCounterOrders());
+    } catch (problem) {
+      setCounterError(getErrorMessage(problem));
+    } finally {
+      counterBusy.current = false;
+      setPendingAction(null);
+    }
   }
 
   async function cancelEmptyCounterOrder() {
-    if (!order || !isDiscardableCounterSale(order)||counterBusy.current) return;
-    counterBusy.current=true;setPendingAction('cancel-empty-counter');clearFeedback();
-    try{
-      const result=await discardCounterSale(edge,order,cancelled=>{
-        setOrder(null);orderRef.current=null;window.localStorage.removeItem(currentOrderStorageKey);
-        setOpenCounterOrders(current=>current.filter(x=>x.id!==cancelled.id));
+    if (!order || !isDiscardableCounterSale(order) || counterBusy.current) return;
+    if (
+      !(await confirmOperation(
+        'Descartar venta vacía',
+        'Solo puede descartarse una venta de mostrador abierta, sin productos, rondas ni pagos. Esta venta dejará de aparecer en Ventas abiertas.',
+      ))
+    )
+      return;
+    counterBusy.current = true;
+    setPendingAction('cancel-empty-counter');
+    clearFeedback();
+    try {
+      const result = await discardCounterSale(edge, order, (cancelled) => {
+        setOrder(null);
+        orderRef.current = null;
+        window.localStorage.removeItem(currentOrderStorageKey);
+        setOpenCounterOrders((current) => current.filter((x) => x.id !== cancelled.id));
         setNotice('Venta vacía cancelada.');
       });
-      if(result.remaining)setOpenCounterOrders(result.remaining);
-      setCounterError(result.refreshFailed?'La venta fue cancelada. No se pudo actualizar la lista; pulsa Actualizar.':null);
-      setShowOpenCounterOrders(true);
-    }catch(problem){setError(getErrorMessage(problem));}
-    finally{counterBusy.current=false;setPendingAction(null);}
+      if (result.remaining) setOpenCounterOrders(result.remaining);
+      setCounterError(
+        result.refreshFailed
+          ? 'La venta fue cancelada. No se pudo actualizar la lista; pulsa Actualizar.'
+          : null,
+      );
+      setShowOpenCounterOrders(false);
+      if (result.refreshFailed) {
+        setError('La venta fue cancelada. No se pudo actualizar la lista; abre Ventas abiertas para consultarla.');
+      }
+    } catch (problem) {
+      reportError(problem);
+    } finally {
+      counterBusy.current = false;
+      setPendingAction(null);
+    }
   }
 
   async function openTableOrder(orderId: string, tableNames: string[]) {
@@ -782,7 +1049,7 @@ export function App() {
           commandId: crypto.randomUUID(),
           expectedVersion: order.version,
         }),
-      `Ronda ${order.rounds.length + 1} enviada; comandas encoladas en Edge.`,
+      `Ronda ${order.rounds.length + 1} enviada; pedido registrado. La impresión se verifica por separado.`,
     );
   }
 
@@ -795,10 +1062,17 @@ export function App() {
         kind === 'PRECHECK'
           ? await edge.requestPrecheck(order.id, { commandId: crypto.randomUUID() })
           : await edge.requestCustomerReceipt(order.id, { commandId: crypto.randomUUID() });
-      setPrintJobs(await edge.getRecentPrintJobs());
-      setNotice(`${kind === 'PRECHECK' ? 'Precuenta' : 'Recibo'} encolado (${job.status}).`);
+      setNotice(
+        `${kind === 'PRECHECK' ? 'Precuenta' : 'Recibo'} solicitado. La impresión se verifica por separado.`,
+      );
+      try {
+        setPrintJobs(await edge.getRecentPrintJobs());
+        setPrintStatusUnavailable(false);
+      } catch {
+        setPrintStatusUnavailable(true);
+      }
     } catch (problem) {
-      setError(getErrorMessage(problem));
+      reportError(problem);
     } finally {
       setPendingAction(null);
     }
@@ -821,10 +1095,11 @@ export function App() {
         businessDate: getLocalBusinessDate(),
         purpose: licensing?.mode === 'PROTECTED_OPERATIONS' ? 'LICENSE_RECOVERY' : 'NORMAL',
       });
+      operationalReadSequence.current++;
       setCashSession(session);
       setShowOpenCash(false);
       setOpenCashError(null);
-      setNotice('Caja abierta y persistida en Edge.');
+      setNotice('Turno de caja abierto.');
     } catch (problem) {
       setContextualCashError(problem, setOpenCashError);
     } finally {
@@ -906,11 +1181,12 @@ export function App() {
         commandId: crypto.randomUUID(),
         countedCashAmount: amount,
       });
+      operationalReadSequence.current++;
       setCashSession(null);
       setClosingPreview(null);
       setCashReport(result.report);
       setCountedCash('');
-      setNotice('Corte Z confirmado. La CashSession quedó CLOSED.');
+      setNotice('Corte Z confirmado. El turno de caja quedó cerrado.');
     } catch (problem) {
       setContextualCashError(problem, setCashModalError);
     } finally {
@@ -920,6 +1196,7 @@ export function App() {
 
   function beginPayment() {
     if (!order) return;
+    clearFeedback();
     if (!cashSession) {
       if (hasPermission(PermissionCodes.CASH_SESSION_OPEN)) {
         setOpenCashError(null);
@@ -968,7 +1245,7 @@ export function App() {
           tip,
           cashTendered: paymentMethod === 'CASH' ? tendered : null,
         }),
-      `${paymentMethod === 'CASH' ? 'Pago en efectivo' : 'Pago con tarjeta'} confirmado por Edge.`,
+      `${paymentMethod === 'CASH' ? 'Pago en efectivo' : 'Pago con tarjeta'} confirmado.`,
     );
     if (next) {
       setShowPayment(false);
@@ -994,7 +1271,7 @@ export function App() {
             commandId: crypto.randomUUID(),
             expectedVersion: order.version,
           }),
-        'Venta cobrada y cerrada en Edge.',
+        'Venta cobrada y cerrada.',
       )
     ) {
       setShowPayment(false);
@@ -1022,11 +1299,9 @@ export function App() {
           commandId: crypto.randomUUID(),
           expectedVersion: order.version,
           reason: voidReason,
-          ...(hasPermission(PermissionCodes.PAYMENT_VOID)
-            ? {}
-            : { overridePin: authorizationPin }),
+          ...(hasPermission(PermissionCodes.PAYMENT_VOID) ? {} : { overridePin: authorizationPin }),
         }),
-      'Pago anulado con autorización y Audit Log durable.',
+      'Pago anulado. La autorización quedó registrada.',
       (problem) => {
         if (
           problem instanceof EdgeClientError &&
@@ -1065,60 +1340,382 @@ export function App() {
         setLoginError('Este POS no tiene un dispositivo configurado.');
         return;
       }
-      const authenticated = await edge.login({ pin, deviceId: deviceIdentity.deviceId,deviceCredential:deviceIdentity.credential });
-      const active=await markDeviceAuthorizationStatus(deviceIdentity.deviceId,'ACTIVE');
-      if(active){deviceIdentityRef.current=active;setDeviceIdentity(active);}
+      const authenticated = await edge.login({
+        pin,
+        deviceId: deviceIdentity.deviceId,
+        deviceCredential: deviceIdentity.credential,
+      });
+      const active = await markDeviceAuthorizationStatus(deviceIdentity.deviceId, 'ACTIVE');
+      if (active) {
+        deviceIdentityRef.current = active;
+        setDeviceIdentity(active);
+      }
       window.localStorage.setItem(sessionTokenStorageKey, authenticated.token);
       setAuthUser(authenticated.user);
       setPin('');
       setLoadingCatalog(true);
     } catch (problem) {
       setPin('');
-      if(problem instanceof EdgeClientError&&problem.code==='DEVICE_REVOKED'){
-        const revoked=await markDeviceAuthorizationStatus(deviceIdentity!.deviceId,'REVOKED');
-        if(revoked){deviceIdentityRef.current=revoked;setDeviceIdentity(revoked);}
-      } else if(problem instanceof EdgeClientError&&['DEVICE_NOT_PAIRED','DEVICE_NOT_AUTHORIZED','DEVICE_CREDENTIAL_INVALID'].includes(problem.code)){
-        const unknown=await markDeviceAuthorizationStatus(deviceIdentity!.deviceId,'UNKNOWN');
-        if(unknown){deviceIdentityRef.current=unknown;setDeviceIdentity(unknown);}
+      if (problem instanceof EdgeClientError && problem.code === 'DEVICE_REVOKED') {
+        const revoked = await markDeviceAuthorizationStatus(deviceIdentity!.deviceId, 'REVOKED');
+        if (revoked) {
+          deviceIdentityRef.current = revoked;
+          setDeviceIdentity(revoked);
+        }
+      } else if (
+        problem instanceof EdgeClientError &&
+        ['DEVICE_NOT_PAIRED', 'DEVICE_NOT_AUTHORIZED', 'DEVICE_CREDENTIAL_INVALID'].includes(
+          problem.code,
+        )
+      ) {
+        const unknown = await markDeviceAuthorizationStatus(deviceIdentity!.deviceId, 'UNKNOWN');
+        if (unknown) {
+          deviceIdentityRef.current = unknown;
+          setDeviceIdentity(unknown);
+        }
       }
-      setLoginError(problem instanceof EdgeClientError && problem.code === 'EDGE_UNREACHABLE'?'No fue posible conectar con el Edge local.':
-        problem instanceof EdgeClientError && problem.code==='DEVICE_REVOKED'?'Este dispositivo fue revocado y ya no puede iniciar sesión. Empareja el dispositivo nuevamente para registrarlo como uno nuevo.':
-        problem instanceof EdgeClientError && ['DEVICE_NOT_PAIRED','DEVICE_NOT_AUTHORIZED','DEVICE_CREDENTIAL_INVALID'].includes(problem.code)?'Este dispositivo no está autorizado. Empareja el dispositivo antes de iniciar sesión.':'PIN incorrecto o acceso temporalmente bloqueado.');
+      setLoginError(
+        problem instanceof EdgeClientError && problem.code === 'EDGE_UNREACHABLE'
+          ? 'No fue posible conectar con el servicio local.'
+          : problem instanceof EdgeClientError && problem.code === 'DEVICE_REVOKED'
+            ? 'Este dispositivo fue revocado y ya no puede iniciar sesión. Empareja el dispositivo nuevamente para registrarlo como uno nuevo.'
+            : problem instanceof EdgeClientError &&
+                [
+                  'DEVICE_NOT_PAIRED',
+                  'DEVICE_NOT_AUTHORIZED',
+                  'DEVICE_CREDENTIAL_INVALID',
+                ].includes(problem.code)
+              ? 'Este dispositivo no está autorizado. Empareja el dispositivo antes de iniciar sesión.'
+              : 'PIN incorrecto o acceso temporalmente bloqueado.',
+      );
     } finally {
       setLoginPending(false);
       setAuthChecking(false);
     }
   }
-  async function beginPairing(){if(!deviceIdentity||pairingPending)return;setPairingError(null);setPairingNotice(null);setPairingCopyFeedback('');setPairingPending(true);try{
-    const displayName=pairingDisplayName.trim();if(!displayName){setPairingError('Asigna un nombre a este dispositivo.');return;}
-    const namedIdentity=deviceIdentity.displayName===displayName?deviceIdentity:{...deviceIdentity,displayName};
-    if(namedIdentity!==deviceIdentity){await saveDeviceIdentity(namedIdentity);deviceIdentityRef.current=namedIdentity;setDeviceIdentity(namedIdentity);}
-    const requested=await requestPairingWithRevokedIdentityRotation({identity:namedIdentity,
-      requestPairing:(identity)=>edge.createPairing({deviceId:identity.deviceId,deviceType:'POS',displayName:identity.displayName,credential:identity.credential}),
-      rotateIdentity:rotateDeviceIdentity,onIdentityRotated:(replacement)=>{pairingGenerationRef.current+=1;
-        deviceIdentityRef.current=replacement;setDeviceIdentity(replacement);setPairing(null);}});
-    if(!requested)return;
-    const next=createClientDevicePairing(requested.pairing);const saved=await saveDevicePairing(next);
-    if(!saved||deviceIdentityRef.current?.deviceId!==requested.identity.deviceId)return;
-    pairingGenerationRef.current+=1;setPairing(next);setPairingNotice('Solicitud creada. Autorízala desde Administración y conserva esta pantalla abierta.');
-  }catch(problem){setPairingError(getErrorMessage(problem));}finally{setPairingPending(false);}}
-  async function copyPairingAuthorizationData(){
-    if(!pairing||!deviceIdentity||pairing.currentStatus!=='PENDING'||!pairingBelongsToIdentity(pairing,deviceIdentity))return;
-    const value=serializePairingAuthorizationData(createPairingAuthorizationData(pairing,deviceIdentity));
-    try{await navigator.clipboard.writeText(value);setPairingCopyFeedback('Datos de autorización copiados.');}
-    catch{setPairingCopyFeedback('No fue posible copiar. Selecciona el bloque y cópialo manualmente.');}
+  async function beginPairing() {
+    if (!deviceIdentity || pairingPending) return;
+    setPairingError(null);
+    setPairingNotice(null);
+    setPairingCopyFeedback('');
+    setPairingPending(true);
+    try {
+      const displayName = pairingDisplayName.trim();
+      if (!displayName) {
+        setPairingError('Asigna un nombre a este dispositivo.');
+        return;
+      }
+      const namedIdentity =
+        deviceIdentity.displayName === displayName
+          ? deviceIdentity
+          : { ...deviceIdentity, displayName };
+      if (namedIdentity !== deviceIdentity) {
+        await saveDeviceIdentity(namedIdentity);
+        deviceIdentityRef.current = namedIdentity;
+        setDeviceIdentity(namedIdentity);
+      }
+      const requested = await requestPairingWithRevokedIdentityRotation({
+        identity: namedIdentity,
+        requestPairing: (identity) =>
+          edge.createPairing({
+            deviceId: identity.deviceId,
+            deviceType: 'POS',
+            displayName: identity.displayName,
+            credential: identity.credential,
+          }),
+        rotateIdentity: rotateDeviceIdentity,
+        onIdentityRotated: (replacement) => {
+          pairingGenerationRef.current += 1;
+          deviceIdentityRef.current = replacement;
+          setDeviceIdentity(replacement);
+          setPairing(null);
+        },
+      });
+      if (!requested) return;
+      const next = createClientDevicePairing(requested.pairing);
+      const saved = await saveDevicePairing(next);
+      if (!saved || deviceIdentityRef.current?.deviceId !== requested.identity.deviceId) return;
+      pairingGenerationRef.current += 1;
+      setPairing(next);
+      setPairingNotice(
+        'Solicitud creada. Autorízala desde Administración y conserva esta pantalla abierta.',
+      );
+    } catch (problem) {
+      setPairingError(getErrorMessage(problem));
+    } finally {
+      setPairingPending(false);
+    }
   }
-  async function finishBootstrap(){if(!pairing||!deviceIdentity||bootstrapPending||pairing.currentStatus!=='PENDING'||!pairingBelongsToIdentity(pairing,deviceIdentity))return;setPairingError(null);setBootstrapPending(true);try{const authorization=JSON.parse(bootstrapAuthorization);await edge.completeBootstrap({pairingId:pairing.pairingId,pairingCode:pairing.pairingCode,requestToken:pairing.requestToken,authorization,ownerPin:bootstrapPin});const active=await markDeviceAuthorizationStatus(deviceIdentity.deviceId,'ACTIVE');if(active){deviceIdentityRef.current=active;setDeviceIdentity(active);}pairingGenerationRef.current+=1;setPairing(null);await clearDevicePairing(pairing.pairingId);setBootstrapAuthorization('');setBootstrapPin('');setPairingNotice('Dispositivo autorizado. Ya puedes iniciar sesión.');}catch(problem){setPairingError(problem instanceof SyntaxError?'La autorización pegada no tiene un formato válido.':getErrorMessage(problem));}finally{setBootstrapPending(false);}}
-  async function restartPairing(){if(!pairing)return;pairingGenerationRef.current+=1;const previousId=pairing.pairingId;setPairing(null);setBootstrapAuthorization('');setBootstrapPin('');await clearDevicePairing(previousId);await beginPairing();}
-  async function refreshDeviceAdmin(action:'refresh'|null=null){if(action)setDeviceAdminBusy(action);setDeviceAdminLoading(true);setDeviceAdminError(null);try{setDeviceAdmin(await loadDeviceAdminState(edge));}catch(problem){if(isGlobalDeviceAdminError(problem))setError(deviceAdminErrorMessage(problem));else setDeviceAdminError(deviceAdminErrorMessage(problem));}finally{setDeviceAdminLoading(false);if(action)setDeviceAdminBusy(null);}}
-  async function openDeviceAdmin(){setDeviceAdminOpen(true);setDeviceAdminNotice(null);await refreshDeviceAdmin();}
-  async function approveDevice(){if(deviceAdminBusy)return;const action=`approve:${approvalPairingId}` as const;setDeviceAdminBusy(action);setDeviceAdminError(null);setDeviceAdminNotice(null);try{await edge.approvePairing({commandId:crypto.randomUUID(),pairingId:approvalPairingId,pairingCode:approvalCode});clearPairingApproval(setApprovalPairingId,setApprovalCode);setDeviceAdminNotice('Dispositivo aprobado correctamente.');setDeviceAdmin(await loadDeviceAdminState(edge));}catch(problem){if(isGlobalDeviceAdminError(problem))setError(deviceAdminErrorMessage(problem));else setDeviceAdminError(deviceAdminErrorMessage(problem));}finally{setDeviceAdminBusy(null);}}
-  async function cancelDevicePairing(request:PairingStatusResponse){if(deviceAdminBusy)return;const action=`cancel:${request.pairingId}` as const;setDeviceAdminBusy(action);setDeviceAdminError(null);setDeviceAdminNotice(null);try{await edge.cancelPairing(request.pairingId,{commandId:crypto.randomUUID()});if(approvalPairingId===request.pairingId)clearPairingApproval(setApprovalPairingId,setApprovalCode);setDeviceAdminNotice('Solicitud cancelada. El historial permanece disponible en Edge.');setDeviceAdmin(await loadDeviceAdminState(edge));}catch(problem){if(isGlobalDeviceAdminError(problem))setError(deviceAdminErrorMessage(problem));else setDeviceAdminError(deviceAdminErrorMessage(problem));}finally{setDeviceAdminBusy(null);}}
-  async function revokeDevice(device:Device){if(deviceAdminBusy)return;const action=`revoke:${device.deviceId}` as const;setDeviceAdminBusy(action);setDeviceAdminError(null);setDeviceAdminNotice(null);try{await edge.revokeDevice(device.deviceId,{commandId:crypto.randomUUID(),reason:'Revocación administrativa local'});setDeviceAdminNotice(`${device.displayName} fue revocado. Sus sesiones activas quedaron cerradas.`);setDeviceAdmin(await loadDeviceAdminState(edge));}catch(problem){if(isGlobalDeviceAdminError(problem))setError(deviceAdminErrorMessage(problem));else setDeviceAdminError(deviceAdminErrorMessage(problem));}finally{setDeviceAdminBusy(null);}}
-  async function createBackup(destinationType:'LOCAL'|'OFF_DEVICE'){setDeviceAdminBusy(destinationType==='LOCAL'?'backup-local':'backup-off-device');setDeviceAdminError(null);try{await edge.createBackup({commandId:crypto.randomUUID(),destinationType});setDeviceAdminNotice(destinationType==='LOCAL'?'Backup local creado y verificado correctamente.':'Backup externo creado y verificado correctamente.');setDeviceAdmin(await loadDeviceAdminState(edge));}catch(problem){setDeviceAdminError(deviceAdminErrorMessage(problem));}finally{setDeviceAdminBusy(null);}}
-  async function configureOffDeviceBackup(directoryPath:string){setDeviceAdminBusy('backup-config');setDeviceAdminError(null);try{await edge.configureOffDeviceBackup({commandId:crypto.randomUUID(),directoryPath});setDeviceAdminNotice('Destino externo configurado.');setDeviceAdmin(await loadDeviceAdminState(edge));}catch(problem){setDeviceAdminError(deviceAdminErrorMessage(problem));}finally{setDeviceAdminBusy(null);}}
-  async function exportRecoveryKey(){setDeviceAdminBusy('recovery-key');setDeviceAdminError(null);try{const result=await edge.exportRecoveryKey({commandId:crypto.randomUUID(),confirmation:'EXPORT_RECOVERY_KEY'});setDeviceAdminNotice('Recovery Key entregada una sola vez. Guárdala fuera de este equipo.');setDeviceAdmin(await loadDeviceAdminState(edge));return result.recoveryKey;}catch(problem){setDeviceAdminError(deviceAdminErrorMessage(problem));throw problem;}finally{setDeviceAdminBusy(null);}}
-  async function restoreBackup(backupId:string){setDeviceAdminBusy('restore');setDeviceAdminError(null);try{await edge.restoreBackup({commandId:crypto.randomUUID(),backupId,confirmation:'RESTORE_VERIFIED_BACKUP'});setDeviceAdminNotice('Recuperación programada. Edge se reiniciará para aplicar y validar la copia.');}catch(problem){setDeviceAdminError(deviceAdminErrorMessage(problem));throw problem;}finally{setDeviceAdminBusy(null);}}
+  async function copyPairingAuthorizationData() {
+    if (
+      !pairing ||
+      !deviceIdentity ||
+      pairing.currentStatus !== 'PENDING' ||
+      !pairingBelongsToIdentity(pairing, deviceIdentity)
+    )
+      return;
+    const value = serializePairingAuthorizationData(
+      createPairingAuthorizationData(pairing, deviceIdentity),
+    );
+    try {
+      await navigator.clipboard.writeText(value);
+      setPairingCopyFeedback('Datos de autorización copiados.');
+    } catch {
+      setPairingCopyFeedback('No fue posible copiar. Selecciona el bloque y cópialo manualmente.');
+    }
+  }
+  async function finishBootstrap() {
+    if (
+      !pairing ||
+      !deviceIdentity ||
+      bootstrapPending ||
+      pairing.currentStatus !== 'PENDING' ||
+      !pairingBelongsToIdentity(pairing, deviceIdentity)
+    )
+      return;
+    setPairingError(null);
+    setBootstrapPending(true);
+    try {
+      const authorization = JSON.parse(bootstrapAuthorization);
+      await edge.completeBootstrap({
+        pairingId: pairing.pairingId,
+        pairingCode: pairing.pairingCode,
+        requestToken: pairing.requestToken,
+        authorization,
+        ownerPin: bootstrapPin,
+      });
+      const active = await markDeviceAuthorizationStatus(deviceIdentity.deviceId, 'ACTIVE');
+      if (active) {
+        deviceIdentityRef.current = active;
+        setDeviceIdentity(active);
+      }
+      pairingGenerationRef.current += 1;
+      setPairing(null);
+      await clearDevicePairing(pairing.pairingId);
+      setBootstrapAuthorization('');
+      setBootstrapPin('');
+      setPairingNotice('Dispositivo autorizado. Ya puedes iniciar sesión.');
+    } catch (problem) {
+      setPairingError(
+        problem instanceof SyntaxError
+          ? 'La autorización pegada no tiene un formato válido.'
+          : getErrorMessage(problem),
+      );
+    } finally {
+      setBootstrapPending(false);
+    }
+  }
+  async function restartPairing() {
+    if (!pairing) return;
+    pairingGenerationRef.current += 1;
+    const previousId = pairing.pairingId;
+    setPairing(null);
+    setBootstrapAuthorization('');
+    setBootstrapPin('');
+    await clearDevicePairing(previousId);
+    await beginPairing();
+  }
+  async function refreshDeviceAdmin(action: 'refresh' | null = null) {
+    const sequence = ++deviceReadSequence.current;
+    if (action) setDeviceAdminBusy(action);
+    setDeviceAdminLoading(true);
+    setDeviceAdminError(null);
+    try {
+      const next = await loadDeviceAdminState(edge);
+      if (sequence === deviceReadSequence.current) setDeviceAdmin(next);
+    } catch (problem) {
+      if (sequence !== deviceReadSequence.current) return;
+      if (isGlobalDeviceAdminError(problem)) setError(deviceAdminErrorMessage(problem));
+      else setDeviceAdminError(deviceAdminErrorMessage(problem));
+    } finally {
+      if (sequence === deviceReadSequence.current) {
+        setDeviceAdminLoading(false);
+        if (action) setDeviceAdminBusy(null);
+      }
+    }
+  }
+  async function reconcileDeviceMutation() {
+    const sequence = ++deviceReadSequence.current;
+    try {
+      const next = await loadDeviceAdminState(edge);
+      if (sequence === deviceReadSequence.current) setDeviceAdmin(next);
+    } catch (problem) {
+      if (sequence === deviceReadSequence.current)
+        setDeviceAdminError(`El cambio fue confirmado. No se pudo consultar el estado actualizado: ${deviceAdminErrorMessage(problem)}`);
+    }
+  }
+  async function openDeviceAdmin() {
+    setDeviceAdminOpen(true);
+    setDeviceAdminNotice(null);
+    await refreshDeviceAdmin();
+  }
+  function canNavigateToGuidance(target: TypedNavigationTarget) {
+    return target.surface === 'system'
+      ? hasPermission(PermissionCodes.DEVICE_VIEW)
+      : target.section === 'personnel'
+        ? hasPermission(PermissionCodes.PERSONNEL_VIEW)
+        : hasPermission(PermissionCodes.ADMINISTRATION_VIEW);
+  }
+  function navigateToGuidance(target: TypedNavigationTarget) {
+    if (!canNavigateToGuidance(target)) return;
+    if (target.surface === 'administration') {
+      if (!canNavigateToGuidance(target)) return;
+      setDeviceAdminOpen(false);
+      setAdministrationTarget(target);
+      setAdministrationOpen(true);
+      return;
+    }
+    const id = {
+      devices: 'devices-title',
+      readiness: 'installation-summary-title',
+      'backup-recovery': 'backup-title',
+    }[target.section];
+    const reveal = () =>
+      window.requestAnimationFrame(() =>
+        document
+          .getElementById(id)
+          ?.scrollIntoView({
+            behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches
+              ? 'auto'
+              : 'smooth',
+            block: 'start',
+          }),
+      );
+    if (!deviceAdminOpen) {
+      setAdministrationOpen(false);
+      void openDeviceAdmin().then(reveal);
+    } else reveal();
+  }
+  async function approveDevice() {
+    if (deviceAdminBusy) return;
+    const action = `approve:${approvalPairingId}` as const;
+    setDeviceAdminBusy(action);
+    setDeviceAdminError(null);
+    setDeviceAdminNotice(null);
+    try {
+      await edge.approvePairing({
+        commandId: crypto.randomUUID(),
+        pairingId: approvalPairingId,
+        pairingCode: approvalCode,
+      });
+      clearPairingApproval(setApprovalPairingId, setApprovalCode);
+      setDeviceAdminNotice('Dispositivo aprobado correctamente.');
+      await reconcileDeviceMutation();
+    } catch (problem) {
+      if (isGlobalDeviceAdminError(problem)) setError(deviceAdminErrorMessage(problem));
+      else setDeviceAdminError(deviceAdminErrorMessage(problem));
+    } finally {
+      setDeviceAdminBusy(null);
+    }
+  }
+  async function cancelDevicePairing(request: PairingStatusResponse) {
+    if (deviceAdminBusy) return;
+    const action = `cancel:${request.pairingId}` as const;
+    setDeviceAdminBusy(action);
+    setDeviceAdminError(null);
+    setDeviceAdminNotice(null);
+    try {
+      await edge.cancelPairing(request.pairingId, { commandId: crypto.randomUUID() });
+      if (approvalPairingId === request.pairingId)
+        clearPairingApproval(setApprovalPairingId, setApprovalCode);
+      setDeviceAdminNotice('Solicitud cancelada. El historial permanece disponible en Edge.');
+      await reconcileDeviceMutation();
+    } catch (problem) {
+      if (isGlobalDeviceAdminError(problem)) setError(deviceAdminErrorMessage(problem));
+      else setDeviceAdminError(deviceAdminErrorMessage(problem));
+    } finally {
+      setDeviceAdminBusy(null);
+    }
+  }
+  async function revokeDevice(device: Device) {
+    if (deviceAdminBusy) return;
+    const action = `revoke:${device.deviceId}` as const;
+    setDeviceAdminBusy(action);
+    setDeviceAdminError(null);
+    setDeviceAdminNotice(null);
+    try {
+      await edge.revokeDevice(device.deviceId, {
+        commandId: crypto.randomUUID(),
+        reason: 'Revocación administrativa local',
+      });
+      setDeviceAdminNotice(
+        `${device.displayName} fue revocado. Sus sesiones activas quedaron cerradas.`,
+      );
+      await reconcileDeviceMutation();
+    } catch (problem) {
+      if (isGlobalDeviceAdminError(problem)) setError(deviceAdminErrorMessage(problem));
+      else setDeviceAdminError(deviceAdminErrorMessage(problem));
+    } finally {
+      setDeviceAdminBusy(null);
+    }
+  }
+  async function createBackup(destinationType: 'LOCAL' | 'OFF_DEVICE') {
+    setDeviceAdminBusy(destinationType === 'LOCAL' ? 'backup-local' : 'backup-off-device');
+    setDeviceAdminError(null);
+    try {
+      await edge.createBackup({ commandId: crypto.randomUUID(), destinationType });
+      setDeviceAdminNotice(
+        destinationType === 'LOCAL'
+          ? 'Backup local creado y verificado correctamente.'
+          : 'Backup externo creado y verificado correctamente.',
+      );
+      await reconcileDeviceMutation();
+    } catch (problem) {
+      setDeviceAdminError(deviceAdminErrorMessage(problem));
+    } finally {
+      setDeviceAdminBusy(null);
+    }
+  }
+  async function configureOffDeviceBackup(directoryPath: string) {
+    setDeviceAdminBusy('backup-config');
+    setDeviceAdminError(null);
+    try {
+      await edge.configureOffDeviceBackup({ commandId: crypto.randomUUID(), directoryPath });
+      setDeviceAdminNotice('Destino externo configurado.');
+      await reconcileDeviceMutation();
+    } catch (problem) {
+      setDeviceAdminError(deviceAdminErrorMessage(problem));
+    } finally {
+      setDeviceAdminBusy(null);
+    }
+  }
+  async function exportRecoveryKey() {
+    setDeviceAdminBusy('recovery-key');
+    setDeviceAdminError(null);
+    try {
+      const result = await edge.exportRecoveryKey({
+        commandId: crypto.randomUUID(),
+        confirmation: 'EXPORT_RECOVERY_KEY',
+      });
+      setDeviceAdminNotice('Recovery Key entregada una sola vez. Guárdala fuera de este equipo.');
+      await reconcileDeviceMutation();
+      return result.recoveryKey;
+    } catch (problem) {
+      setDeviceAdminError(deviceAdminErrorMessage(problem));
+      throw problem;
+    } finally {
+      setDeviceAdminBusy(null);
+    }
+  }
+  async function restoreBackup(backupId: string) {
+    setDeviceAdminBusy('restore');
+    setDeviceAdminError(null);
+    try {
+      await edge.restoreBackup({
+        commandId: crypto.randomUUID(),
+        backupId,
+        confirmation: 'RESTORE_VERIFIED_BACKUP',
+      });
+      setDeviceAdminNotice(
+        'Recuperación programada. Edge se reiniciará para aplicar y validar la copia.',
+      );
+    } catch (problem) {
+      setDeviceAdminError(deviceAdminErrorMessage(problem));
+      throw problem;
+    } finally {
+      setDeviceAdminBusy(null);
+    }
+  }
 
   async function logout() {
     try {
@@ -1132,15 +1729,68 @@ export function App() {
     }
   }
 
-  const deviceOnboardingState=getDeviceOnboardingState(deviceIdentity,pairing);
+  const deviceOnboardingState = getDeviceOnboardingState(deviceIdentity, pairing);
+  const operationalFeedback = (
+    <PosFeedback
+      message={error}
+      guidance={errorGuidance}
+      success={showPayment ? null : notice}
+      onNavigate={navigateToGuidance}
+      canNavigate={canNavigateToGuidance}
+      onReview={() => {
+        if (order) void refreshRealtimeOrder(order.id);
+      }}
+    />
+  );
+  const operationReason = isBusy
+    ? 'Espera la confirmación de la operación en curso.'
+    : connection !== 'CONNECTED'
+      ? 'Restablece la conexión local para confirmar operaciones.'
+      : !licensing
+        ? 'Espera a que se verifique la licencia.'
+        : !licenseAllowsNewOrders && licensing.mode !== 'PROTECTED_OPERATIONS'
+          ? 'La licencia actual restringe esta operación. Consulta a administración.'
+          : !order
+            ? 'Crea o selecciona una venta primero.'
+            : order.status !== 'OPEN'
+              ? 'Esta venta ya no está abierta.'
+              : null;
+  const createReason = isBusy
+    ? 'Espera la operación en curso.'
+    : connection !== 'CONNECTED'
+      ? 'Restablece la conexión local.'
+      : !hasPermission(PermissionCodes.ORDER_CREATE)
+        ? 'Tu rol no permite crear ventas.'
+        : !licenseAllowsNewOrders
+          ? 'La licencia no permite iniciar nuevas ventas.'
+          : null;
+  const editReason = !hasPermission(PermissionCodes.ORDER_EDIT_DRAFT)
+    ? 'Tu rol no permite editar productos.'
+    : operationReason;
 
-  async function emergencyRestore(event:FormEvent){event.preventDefault();setEmergencyRecoveryBusy(true);setLoginError(null);try{
-    const authorization=emergencyRecovery.authorization.trim()?JSON.parse(emergencyRecovery.authorization):undefined;
-    await edge.emergencyRestore({commandId:crypto.randomUUID(),backupId:emergencyRecovery.backupId,
-      artifactPath:emergencyRecovery.artifactPath,recoveryKey:emergencyRecovery.recoveryKey,
-      confirmation:'RESTORE_VERIFIED_BACKUP',...(authorization?{recoveryAuthorization:authorization}:{})});
-    setLoginError('Copia validada. Reinicia Edge para completar la recuperación.');
-  }catch(problem){setLoginError(getErrorMessage(problem));}finally{setEmergencyRecoveryBusy(false);}}
+  async function emergencyRestore(event: FormEvent) {
+    event.preventDefault();
+    setEmergencyRecoveryBusy(true);
+    setLoginError(null);
+    try {
+      const authorization = emergencyRecovery.authorization.trim()
+        ? JSON.parse(emergencyRecovery.authorization)
+        : undefined;
+      await edge.emergencyRestore({
+        commandId: crypto.randomUUID(),
+        backupId: emergencyRecovery.backupId,
+        artifactPath: emergencyRecovery.artifactPath,
+        recoveryKey: emergencyRecovery.recoveryKey,
+        confirmation: 'RESTORE_VERIFIED_BACKUP',
+        ...(authorization ? { recoveryAuthorization: authorization } : {}),
+      });
+      setLoginError('Copia validada. Reinicia Edge para completar la recuperación.');
+    } catch (problem) {
+      setLoginError(getErrorMessage(problem));
+    } finally {
+      setEmergencyRecoveryBusy(false);
+    }
+  }
 
   if (authChecking) {
     return (
@@ -1154,16 +1804,77 @@ export function App() {
   }
 
   if (!authUser) {
-    if(recoveryRequired)return <main className="pos-login-shell"><form className="pos-login-card recovery-card" onSubmit={event=>void emergencyRestore(event)}>
-      <div className="brand pos-login-brand"><span className="brand-mark">C</span><div><strong>ComanView</strong><span>Recuperación local</span></div></div>
-      <div className="inline-alert inline-alert--error" role="alert"><strong>Recuperación requerida</strong><span>La base operacional no es segura. No se creó una base vacía y las ventas permanecen bloqueadas.</span></div>
-      <label>Backup ID<input required value={emergencyRecovery.backupId} onChange={event=>setEmergencyRecovery({...emergencyRecovery,backupId:event.target.value})}/></label>
-      <label>Ruta del backup<input required value={emergencyRecovery.artifactPath} onChange={event=>setEmergencyRecovery({...emergencyRecovery,artifactPath:event.target.value})}/></label>
-      <label>Recovery Key<input required type="password" autoComplete="off" value={emergencyRecovery.recoveryKey} onChange={event=>setEmergencyRecovery({...emergencyRecovery,recoveryKey:event.target.value})}/></label>
-      <label>Recovery Authorization <small>Solo para reemplazo de hardware</small><textarea value={emergencyRecovery.authorization} onChange={event=>setEmergencyRecovery({...emergencyRecovery,authorization:event.target.value})}/></label>
-      <button className="danger-button" disabled={emergencyRecoveryBusy}>{emergencyRecoveryBusy?'Validando…':'Validar e iniciar recuperación'}</button>
-      <div className="pin-feedback" role="status">{loginError??'La Recovery Key y la autorización nunca se guardan en el navegador.'}</div>
-    </form></main>;
+    if (recoveryRequired)
+      return (
+        <main className="pos-login-shell">
+          <form
+            className="pos-login-card recovery-card"
+            onSubmit={(event) => void emergencyRestore(event)}
+          >
+            <div className="brand pos-login-brand">
+              <span className="brand-mark">C</span>
+              <div>
+                <strong>ComanView</strong>
+                <span>Recuperación local</span>
+              </div>
+            </div>
+            <div className="inline-alert inline-alert--error" role="alert">
+              <strong>Recuperación requerida</strong>
+              <span>
+                La base operacional no es segura. No se creó una base vacía y las ventas permanecen
+                bloqueadas.
+              </span>
+            </div>
+            <label>
+              Backup ID
+              <input
+                required
+                value={emergencyRecovery.backupId}
+                onChange={(event) =>
+                  setEmergencyRecovery({ ...emergencyRecovery, backupId: event.target.value })
+                }
+              />
+            </label>
+            <label>
+              Ruta del backup
+              <input
+                required
+                value={emergencyRecovery.artifactPath}
+                onChange={(event) =>
+                  setEmergencyRecovery({ ...emergencyRecovery, artifactPath: event.target.value })
+                }
+              />
+            </label>
+            <label>
+              Recovery Key
+              <input
+                required
+                type="password"
+                autoComplete="off"
+                value={emergencyRecovery.recoveryKey}
+                onChange={(event) =>
+                  setEmergencyRecovery({ ...emergencyRecovery, recoveryKey: event.target.value })
+                }
+              />
+            </label>
+            <label>
+              Recovery Authorization <small>Solo para reemplazo de hardware</small>
+              <textarea
+                value={emergencyRecovery.authorization}
+                onChange={(event) =>
+                  setEmergencyRecovery({ ...emergencyRecovery, authorization: event.target.value })
+                }
+              />
+            </label>
+            <button className="danger-button" disabled={emergencyRecoveryBusy}>
+              {emergencyRecoveryBusy ? 'Validando…' : 'Validar e iniciar recuperación'}
+            </button>
+            <div className="pin-feedback" role="status">
+              {loginError ?? 'La Recovery Key y la autorización nunca se guardan en el navegador.'}
+            </div>
+          </form>
+        </main>
+      );
     return (
       <main className="pos-login-shell">
         <form className="pos-login-card" onSubmit={(event) => void login(event)}>
@@ -1215,35 +1926,153 @@ export function App() {
           <div className="pin-feedback" role="status">
             {loginError ?? '\u00a0'}
           </div>
-          {!shouldShowPairingOnLogin(deviceOnboardingState)?<div className="device-authorized-hint" role="status">
-            <span aria-hidden="true">✓</span><div><strong>{deviceIdentity?.displayName}</strong><small>Dispositivo autorizado · inicia sesión con tu PIN.</small></div>
-          </div>:<section className="device-pairing-panel">
-            <div className="pairing-panel-heading"><div><strong>Este dispositivo</strong><small>Autorízalo una sola vez para operar contra el Edge local.</small></div>
-              {pairing?<span className={`admin-status admin-status--${pairing.currentStatus.toLowerCase()}`}>{pairing.currentStatus}</span>:null}</div>
-            {!pairing ? <><label>Nombre del dispositivo<input value={pairingDisplayName} maxLength={120} onChange={(event)=>setPairingDisplayName(event.target.value)} placeholder="Ej. Caja barra"/></label>
-              <button className="primary-button" type="button" onClick={()=>void beginPairing()} disabled={!deviceIdentity||pairingPending||!pairingDisplayName.trim()}>{pairingPending?'Creando solicitud…':deviceOnboardingState==='REVOKED'?'Emparejar dispositivo nuevamente':'Emparejar dispositivo'}</button></> : <>
-              {getPairingUxState(pairing.currentStatus)==='PENDING'&&<>
-                <div className="pairing-code"><span>Código temporal</span><strong>{pairing.pairingCode}</strong><small>Válido hasta {new Date(pairing.expiresAt).toLocaleTimeString()}</small></div>
-                <details><summary>Detalles técnicos</summary><code>{pairing.pairingId}</code><code>{deviceIdentity?.deviceId}</code></details>
-                <label>Datos para autorizar este dispositivo
-                  <textarea readOnly aria-label="Datos para autorizar este dispositivo"
-                    value={deviceIdentity?serializePairingAuthorizationData(createPairingAuthorizationData(pairing,deviceIdentity)):''}/>
-                </label>
-                <button type="button" onClick={()=>void copyPairingAuthorizationData()}>Copiar datos de autorización</button>
-                <small role="status">{pairingCopyFeedback||'El bloque no incluye credential, request token ni PIN.'}</small>
-                <label>Autorización de instalación<textarea aria-label="Autorización de instalación" placeholder="Pega aquí la autorización emitida por Super Admin" value={bootstrapAuthorization} onChange={e=>setBootstrapAuthorization(e.target.value)}/></label>
-                <label>PIN inicial OWNER<input aria-label="PIN inicial OWNER" type="password" inputMode="numeric" placeholder="4 a 12 dígitos" value={bootstrapPin} onChange={e=>setBootstrapPin(e.target.value.replace(/\D/g,'').slice(0,12))}/></label>
-                <button className="primary-button" type="button" onClick={()=>void finishBootstrap()} disabled={bootstrapPending||!bootstrapAuthorization||bootstrapPin.length<4}>{bootstrapPending?'Completando…':'Completar instalación inicial'}</button>
-              </>}
-              {getPairingUxState(pairing.currentStatus)==='AUTHORIZED'&&<p>Dispositivo autorizado. Ya puedes iniciar sesión.</p>}
-              {getPairingUxState(pairing.currentStatus)==='RETRY'&&<>
-                <p>La solicitud de emparejamiento está {pairing.currentStatus==='EXPIRED'?'expirada':'cancelada'} y ya no puede completar la instalación.</p>
-                <button type="button" onClick={()=>void restartPairing()}>Solicitar código nuevo</button>
-              </>}
-            </>}
-            <div className="pairing-feedback" aria-live="polite">{pairingError?<span className="inline-alert inline-alert--error">{pairingError}</span>:pairingNotice?<span className="inline-alert inline-alert--success">{pairingNotice}</span>:<span>&nbsp;</span>}</div>
-          </section>}
-          <small>La identidad se valida directamente en el Edge local.</small>
+          {!shouldShowPairingOnLogin(deviceOnboardingState) ? (
+            <div className="device-authorized-hint" role="status">
+              <span aria-hidden="true">✓</span>
+              <div>
+                <strong>{deviceIdentity?.displayName}</strong>
+                <small>Dispositivo autorizado · inicia sesión con tu PIN.</small>
+              </div>
+            </div>
+          ) : (
+            <section className="device-pairing-panel">
+              <div className="pairing-panel-heading">
+                <div>
+                  <strong>Este dispositivo</strong>
+                  <small>Autorízalo una sola vez para operar en este restaurante.</small>
+                </div>
+                {pairing ? (
+                  <span
+                    className={`admin-status admin-status--${pairing.currentStatus.toLowerCase()}`}
+                  >
+                    {pairing.currentStatus}
+                  </span>
+                ) : null}
+              </div>
+              {!pairing ? (
+                <>
+                  <label>
+                    Nombre del dispositivo
+                    <input
+                      value={pairingDisplayName}
+                      maxLength={120}
+                      onChange={(event) => setPairingDisplayName(event.target.value)}
+                      placeholder="Ej. Caja barra"
+                    />
+                  </label>
+                  <button
+                    className="primary-button"
+                    type="button"
+                    onClick={() => void beginPairing()}
+                    disabled={!deviceIdentity || pairingPending || !pairingDisplayName.trim()}
+                  >
+                    {pairingPending
+                      ? 'Creando solicitud…'
+                      : deviceOnboardingState === 'REVOKED'
+                        ? 'Emparejar dispositivo nuevamente'
+                        : 'Emparejar dispositivo'}
+                  </button>
+                </>
+              ) : (
+                <>
+                  {getPairingUxState(pairing.currentStatus) === 'PENDING' && (
+                    <>
+                      <div className="pairing-code">
+                        <span>Código temporal</span>
+                        <strong>{pairing.pairingCode}</strong>
+                        <small>
+                          Válido hasta {new Date(pairing.expiresAt).toLocaleTimeString()}
+                        </small>
+                      </div>
+                      <details>
+                        <summary>Detalles técnicos</summary>
+                        <code>{pairing.pairingId}</code>
+                        <code>{deviceIdentity?.deviceId}</code>
+                      </details>
+                      <label>
+                        Datos para autorizar este dispositivo
+                        <textarea
+                          readOnly
+                          aria-label="Datos para autorizar este dispositivo"
+                          value={
+                            deviceIdentity
+                              ? serializePairingAuthorizationData(
+                                  createPairingAuthorizationData(pairing, deviceIdentity),
+                                )
+                              : ''
+                          }
+                        />
+                      </label>
+                      <button type="button" onClick={() => void copyPairingAuthorizationData()}>
+                        Copiar datos de autorización
+                      </button>
+                      <small role="status">
+                        {pairingCopyFeedback ||
+                          'El bloque no incluye credential, request token ni PIN.'}
+                      </small>
+                      <label>
+                        Autorización de instalación
+                        <textarea
+                          aria-label="Autorización de instalación"
+                          placeholder="Pega aquí la autorización emitida por Super Admin"
+                          value={bootstrapAuthorization}
+                          onChange={(e) => setBootstrapAuthorization(e.target.value)}
+                        />
+                      </label>
+                      <label>
+                        PIN inicial de propietario
+                        <input
+                          aria-label="PIN inicial de propietario"
+                          type="password"
+                          inputMode="numeric"
+                          placeholder="4 a 12 dígitos"
+                          value={bootstrapPin}
+                          onChange={(e) =>
+                            setBootstrapPin(e.target.value.replace(/\D/g, '').slice(0, 12))
+                          }
+                        />
+                      </label>
+                      <button
+                        className="primary-button"
+                        type="button"
+                        onClick={() => void finishBootstrap()}
+                        disabled={
+                          bootstrapPending || !bootstrapAuthorization || bootstrapPin.length < 4
+                        }
+                      >
+                        {bootstrapPending ? 'Completando…' : 'Completar instalación inicial'}
+                      </button>
+                    </>
+                  )}
+                  {getPairingUxState(pairing.currentStatus) === 'AUTHORIZED' && (
+                    <p>Dispositivo autorizado. Ya puedes iniciar sesión.</p>
+                  )}
+                  {getPairingUxState(pairing.currentStatus) === 'RETRY' && (
+                    <>
+                      <p>
+                        La solicitud de emparejamiento está{' '}
+                        {pairing.currentStatus === 'EXPIRED' ? 'expirada' : 'cancelada'} y ya no
+                        puede completar la instalación.
+                      </p>
+                      <button type="button" onClick={() => void restartPairing()}>
+                        Solicitar código nuevo
+                      </button>
+                    </>
+                  )}
+                </>
+              )}
+              <div className="pairing-feedback" aria-live="polite">
+                {pairingError ? (
+                  <span className="inline-alert inline-alert--error">{pairingError}</span>
+                ) : pairingNotice ? (
+                  <span className="inline-alert inline-alert--success">{pairingNotice}</span>
+                ) : (
+                  <span>&nbsp;</span>
+                )}
+              </div>
+            </section>
+          )}
+          <small>Tu acceso se valida en este restaurante.</small>
         </form>
       </main>
     );
@@ -1256,20 +2085,35 @@ export function App() {
           <span className="brand-mark">C</span>
           <div>
             <strong>ComanView</strong>
-            <span>Point of Sale</span>
+            <span>Punto de venta</span>
           </div>
         </div>
         <div className="topbar-statuses">
           <div className="operator-identity">
             <div>
               <strong>{authUser.displayName}</strong>
-              <span>{authUser.roles.join(' · ')}</span>
+              <span>{authUser.roles.map(roleLabel).join(' · ')}</span>
             </div>
             <button type="button" onClick={() => void logout()}>
               Cerrar sesión
             </button>
-            {(hasPermission(PermissionCodes.ADMINISTRATION_VIEW)||hasPermission(PermissionCodes.PERSONNEL_VIEW))&&<button type="button" onClick={()=>setAdministrationOpen(true)}>Restaurante</button>}
-            {hasPermission(PermissionCodes.DEVICE_VIEW)&&<button type="button" onClick={()=>void openDeviceAdmin()}>Dispositivos y respaldo</button>}
+            {(hasPermission(PermissionCodes.ADMINISTRATION_VIEW) ||
+              hasPermission(PermissionCodes.PERSONNEL_VIEW)) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setAdministrationTarget(null);
+                  setAdministrationOpen(true);
+                }}
+              >
+                Restaurante
+              </button>
+            )}
+            {hasPermission(PermissionCodes.DEVICE_VIEW) && (
+              <button type="button" onClick={() => void openDeviceAdmin()}>
+                Dispositivos y respaldo
+              </button>
+            )}
           </div>
           <button
             className={`cash-status ${cashSession ? 'cash-status--open' : ''}`}
@@ -1299,76 +2143,94 @@ export function App() {
                 ? 'Sin permiso de caja'
                 : cashSession
                   ? `${cashSession.businessDate} · ${cashSession.expectedCash ? `Esperado ${formatMoney(cashSession.expectedCash.amount, cashSession.expectedCash.currency)}` : 'Arqueo ciego'}`
-                  : 'Puedes tomar y enviar pedidos · abre caja antes de cobrar'}
+                  : !hasPermission(PermissionCodes.CASH_SESSION_OPEN)
+                    ? 'Solicita apertura a un responsable'
+                    : 'Abrir para cobrar'}
             </span>
           </button>
-          <div className={`connection connection--${connection.toLowerCase()}`} role="status">
-            <span className="connection-dot" />
-            <div>
-              <strong>
-                {connection === 'CONNECTED'
-                  ? 'Edge conectado'
-                  : connection === 'CHECKING'
-                    ? 'Verificando Edge'
-                    : 'Conexión local perdida'}
-              </strong>
-              <span>
-                {connection === 'CONNECTED'
-                  ? 'Operación local disponible'
-                  : 'Operaciones sin confirmar'}
-              </span>
-            </div>
-            {connection === 'DISCONNECTED' && (
-              <button
-                className="connection-retry"
-                type="button"
-                onClick={() => void retryConnection()}
-              >
-                Reintentar
-              </button>
-            )}
-          </div>
+          <ConnectionStatus
+            connection={connection}
+            networkAvailable={networkAvailable}
+            degraded={operationalDegraded}
+            onRetry={() => void retryConnection()}
+          />
         </div>
       </header>
-      {deviceAdminOpen&&<DeviceAdminPanel state={deviceAdmin} loading={deviceAdminLoading} error={deviceAdminError} notice={deviceAdminNotice}
-        busyAction={deviceAdminBusy} currentDeviceId={deviceIdentity?.deviceId??null}
-        canPair={hasPermission(PermissionCodes.DEVICE_PAIR)} canRevoke={hasPermission(PermissionCodes.DEVICE_REVOKE)}
-        approvalPairingId={approvalPairingId} approvalCode={approvalCode} onApprovalPairingId={setApprovalPairingId}
-        onApprovalCode={setApprovalCode} onApprove={()=>void approveDevice()} onCancel={cancelDevicePairing}
-        onRevoke={revokeDevice} onRefresh={()=>void refreshDeviceAdmin('refresh')}
-        onCreateBackup={createBackup} onConfigureOffDevice={configureOffDeviceBackup} onExportRecoveryKey={exportRecoveryKey} onRestoreBackup={restoreBackup}
-        onClose={()=>{if(!deviceAdminBusy){setDeviceAdminOpen(false);setDeviceAdminError(null);setDeviceAdminNotice(null);}}}/>
-      }
-      {administrationOpen&&authUser&&<AdministrationPanel edge={edge} currentUserId={authUser.id} permissions={authUser.permissions} onClose={()=>setAdministrationOpen(false)}/>}
+      {deviceAdminOpen && (
+        <DeviceAdminPanel
+          state={deviceAdmin}
+          loading={deviceAdminLoading}
+          error={deviceAdminError}
+          notice={deviceAdminNotice}
+          busyAction={deviceAdminBusy}
+          currentDeviceId={deviceIdentity?.deviceId ?? null}
+          canPair={hasPermission(PermissionCodes.DEVICE_PAIR)}
+          canRevoke={hasPermission(PermissionCodes.DEVICE_REVOKE)}
+          approvalPairingId={approvalPairingId}
+          approvalCode={approvalCode}
+          onApprovalPairingId={setApprovalPairingId}
+          onApprovalCode={setApprovalCode}
+          onApprove={() => void approveDevice()}
+          onCancel={cancelDevicePairing}
+          onRevoke={revokeDevice}
+          onRefresh={() => void refreshDeviceAdmin('refresh')}
+          onCreateBackup={createBackup}
+          onConfigureOffDevice={configureOffDeviceBackup}
+          onExportRecoveryKey={exportRecoveryKey}
+          onRestoreBackup={restoreBackup}
+          onNavigate={navigateToGuidance}
+          canNavigate={canNavigateToGuidance}
+          onClose={() => {
+            if (!deviceAdminBusy) {
+              setDeviceAdminOpen(false);
+              setDeviceAdminError(null);
+              setDeviceAdminNotice(null);
+            }
+          }}
+        />
+      )}
+      {administrationOpen && authUser && (
+        <AdministrationPanel
+          edge={edge}
+          currentUserId={authUser.id}
+          permissions={authUser.permissions}
+          initialTarget={administrationTarget}
+          onNavigate={navigateToGuidance}
+          onClose={() => setAdministrationOpen(false)}
+        />
+      )}
+      {recoveryRequired && (
+        <InlineAlert tone="critical" title="Recuperación requerida" urgent>
+          La instalación requiere una recuperación segura. Las ventas no deben continuar hasta
+          validar su estado.
+        </InlineAlert>
+      )}
       {connection === 'DISCONNECTED' && (
         <div className="critical-banner" role="alert">
-          <strong>Edge no está disponible.</strong> Ninguna operación financiera se confirma sin la
-          autoridad local.
+          <strong>Servicio local no disponible.</strong> Las operaciones pendientes de respuesta no
+          están confirmadas. No las repitas sin revisar su estado.
         </div>
       )}
-      {licensing && !['FULL','FULL_WITH_WARNING'].includes(licensing.mode) && (
-        <div className={`license-banner license-banner--${licensing.mode.toLowerCase()}`} role="status">
-          <strong>{licensing.mode}</strong>
-          <span>{licensing.mode === 'GRACE_OPERATING'
-            ? `Licencia en grace hasta ${licensing.graceUntil ? new Date(licensing.graceUntil).toLocaleString('es-MX') : 'fecha no disponible'}.`
-            : licensing.mode === 'GUARANTEED_SHIFT'
-              ? 'Turno actual protegido. Cierra la caja para aplicar la política pendiente.'
-              : licensing.mode === 'PROTECTED_OPERATIONS' || licensing.mode === 'GUARANTEED_SHIFT_RECOVERY'
-                ? 'Modo de recuperación: solo pueden liquidarse Orders protegidas existentes.'
-                : 'La licencia bloquea nueva operación. Contacta administración.'}</span>
-        </div>
-      )}
-      {(error || notice) && (
+      {licensing && !['FULL', 'FULL_WITH_WARNING'].includes(licensing.mode) && (
         <div
-          className={`feedback ${error ? 'feedback--error' : 'feedback--success'}`}
+          className={`license-banner license-banner--${licensing.mode.toLowerCase()}`}
           role="status"
         >
-          <span>{error ?? notice}</span>
-          <button type="button" aria-label="Cerrar mensaje" onClick={clearFeedback}>
-            ×
-          </button>
+          <strong>{licenseModeLabel(licensing.mode)}</strong>
+          <span>
+            {licensing.mode === 'GRACE_OPERATING'
+              ? `Período de gracia hasta ${licensing.graceUntil ? new Date(licensing.graceUntil).toLocaleString('es-MX') : 'fecha no disponible'}.`
+              : licensing.mode === 'GUARANTEED_SHIFT'
+                ? 'Turno actual protegido. Cierra la caja para aplicar la política pendiente.'
+                : licensing.mode === 'PROTECTED_OPERATIONS' ||
+                    licensing.mode === 'GUARANTEED_SHIFT_RECOVERY'
+                  ? 'Modo de recuperación: solo pueden liquidarse ventas protegidas existentes.'
+                  : 'La licencia bloquea nueva operación. Contacta administración.'}
+          </span>
         </div>
       )}
+      {!showPayment && !showOpenTables && !showOpenCounterOrders && !configuredProduct && !showOpenCash && !showCashOperations && !voidPaymentId && operationalFeedback}
+      {operationConfirmation}
 
       <main className="workspace">
         <aside className="categories-panel" aria-label="Categorías">
@@ -1423,14 +2285,20 @@ export function App() {
             <input
               type="search"
               value={productSearch}
+              aria-label="Buscar producto"
               placeholder="Buscar producto..."
               onChange={(event) => setProductSearch(event.target.value)}
             />
           </label>
-          {loadingCatalog ? (
+          {!hasPermission(PermissionCodes.CATALOG_VIEW) ? (
+            <div className="empty-state">
+              <strong>Tu rol no permite consultar el menú</strong>
+              <p>Solicita a un responsable el acceso que necesitas.</p>
+            </div>
+          ) : loadingCatalog ? (
             <div className="empty-state">
               <span className="spinner" />
-              <strong>Cargando catálogo desde Edge</strong>
+              <strong>Cargando productos</strong>
             </div>
           ) : visibleProducts.length === 0 ? (
             <div className="empty-state">
@@ -1440,7 +2308,8 @@ export function App() {
           ) : (
             <div className="product-grid">
               {visibleProducts.map((product) => (
-                <button
+                <PosAction
+                  reason={!product.available ? 'Este producto está agotado.' : editReason}
                   type="button"
                   className={`product-card ${!product.available ? 'product-card--unavailable' : ''}`}
                   key={product.id}
@@ -1470,7 +2339,7 @@ export function App() {
                         : 'Agotado'}
                     </span>
                   </span>
-                </button>
+                </PosAction>
               ))}
             </div>
           )}
@@ -1494,34 +2363,57 @@ export function App() {
               </h2>
               {order && (
                 <span className="order-meta">
-                  Versión {order.version} · {order.items.length} productos
+                  {order.orderType === 'TABLE' ? 'Pedido de mesa' : 'Venta de mostrador'} ·{' '}
+                  {order.items.length} líneas
                 </span>
               )}
             </div>
             <div className="order-header-actions">
-              <button
-                type="button"
-                className="open-tables-button"
-                disabled={isBusy || connection !== 'CONNECTED'}
-                onClick={() => {setShowOpenCounterOrders(true);void refreshCounterSales();}}
-              >
-                Ventas abiertas · <span>{openCounterOrders.length}</span>
-              </button>
-              <button
+              <PosAction
+                reason={
+                  !hasPermission(PermissionCodes.ORDER_VIEW)
+                    ? 'Tu rol no permite consultar ventas.'
+                    : isBusy
+                      ? 'Espera la operación en curso.'
+                      : 'Restablece la conexión local.'
+                }
                 type="button"
                 className="open-tables-button"
                 disabled={
                   isBusy || connection !== 'CONNECTED' || !hasPermission(PermissionCodes.ORDER_VIEW)
                 }
                 onClick={() => {
+                  clearFeedback();
+                  setShowOpenCounterOrders(true);
+                  void refreshCounterSales();
+                }}
+              >
+                Ventas abiertas · <span>{openCounterOrders.length}</span>
+              </PosAction>
+              <PosAction
+                reason={
+                  !hasPermission(PermissionCodes.ORDER_VIEW)
+                    ? 'Tu rol no permite consultar ventas.'
+                    : isBusy
+                      ? 'Espera la operación en curso.'
+                      : 'Restablece la conexión local.'
+                }
+                type="button"
+                className="open-tables-button"
+                disabled={
+                  isBusy || connection !== 'CONNECTED' || !hasPermission(PermissionCodes.ORDER_VIEW)
+                }
+                onClick={() => {
+                  clearFeedback();
                   setOpenTablesError(null);
                   setShowOpenTables(true);
                   void refreshOperationalState();
                 }}
               >
                 Mesas abiertas · <span>{openTableAccounts.length}</span>
-              </button>
-              <button
+              </PosAction>
+              <PosAction
+                reason={createReason}
                 type="button"
                 className="new-order-button"
                 disabled={
@@ -1533,15 +2425,16 @@ export function App() {
                 onClick={() => void createOrder()}
               >
                 {pendingAction === 'create-order' ? 'Creando…' : order ? 'Nueva' : 'Crear venta'}
-              </button>
+              </PosAction>
             </div>
           </div>
           {!order ? (
             <div className="order-empty">
               <span>＋</span>
               <strong>Inicia una venta de mostrador</strong>
-              <p>Crea una Order local y agrega productos.</p>
-              <button
+              <p>Crea una venta y agrega productos.</p>
+              <PosAction
+                reason={createReason}
                 type="button"
                 className="primary-button"
                 disabled={
@@ -1552,8 +2445,8 @@ export function App() {
                 }
                 onClick={() => void createOrder()}
               >
-                Crear venta COUNTER
-              </button>
+                Crear venta de mostrador
+              </PosAction>
             </div>
           ) : (
             <>
@@ -1561,16 +2454,21 @@ export function App() {
                 {order.items.length === 0 && (
                   <div className="order-empty compact">
                     <strong>La venta está vacía</strong>
-                    <p>Selecciona un producto o descarta esta venta.</p>
-                    {hasPermission(PermissionCodes.ORDER_CANCEL) && isDiscardableCounterSale(order) && (
-                      <button
-                        type="button"
-                        disabled={isBusy}
-                        onClick={() => void cancelEmptyCounterOrder()}
-                      >
-                        Descartar venta vacía
-                      </button>
-                    )}
+                    <p>
+                      Selecciona un producto. Solo puedes descartar una venta de mostrador abierta
+                      sin productos, rondas ni pagos.
+                    </p>
+                    {hasPermission(PermissionCodes.ORDER_CANCEL) &&
+                      isDiscardableCounterSale(order) && (
+                        <Button
+                          variant="danger"
+                          type="button"
+                          disabled={isBusy}
+                          onClick={() => void cancelEmptyCounterOrder()}
+                        >
+                          Descartar venta vacía
+                        </Button>
+                      )}
                   </div>
                 )}
                 {draftItems.length > 0 && (
@@ -1578,7 +2476,7 @@ export function App() {
                     <div className="item-group-heading">
                       <h3>
                         <span className="status-dot status-dot--draft" />
-                        Borrador
+                        Sin enviar
                       </h3>
                       <span>{draftItems.length} sin enviar</span>
                     </div>
@@ -1607,7 +2505,9 @@ export function App() {
                           {item.specialInstructions && (
                             <p className="special-instructions">Nota: {item.specialInstructions}</p>
                           )}
-                          <span>DRAFT · aún no enviado</span>
+                          <span>
+                            {itemStatusLabel(item.status)} · Cantidad: {item.quantity ?? 1}
+                          </span>
                         </div>
                         <div className="order-item-actions">
                           <strong>
@@ -1616,7 +2516,8 @@ export function App() {
                               item.productSnapshot.basePrice.currency,
                             )}
                           </strong>
-                          <button
+                          <PosAction
+                            reason={editReason}
                             type="button"
                             className="edit-button"
                             disabled={
@@ -1625,8 +2526,9 @@ export function App() {
                             onClick={() => beginEditDraftItem(item)}
                           >
                             Editar
-                          </button>
-                          <button
+                          </PosAction>
+                          <PosAction
+                            reason={editReason}
                             type="button"
                             disabled={
                               !canOperateOrder || !hasPermission(PermissionCodes.ORDER_EDIT_DRAFT)
@@ -1634,7 +2536,7 @@ export function App() {
                             onClick={() => void removeItem(item.id)}
                           >
                             Eliminar
-                          </button>
+                          </PosAction>
                         </div>
                       </article>
                     ))}
@@ -1676,7 +2578,9 @@ export function App() {
                               Nota: {item.specialInstructions}
                             </p>
                           )}
-                          <span>SENT · historial protegido</span>
+                          <span>
+                            {itemStatusLabel(item.status)} · Cantidad: {item.quantity ?? 1}
+                          </span>
                         </div>
                         <strong>
                           {formatMoney(
@@ -1700,9 +2604,9 @@ export function App() {
                         key={payment.id}
                       >
                         <div>
-                          <strong>{payment.method}</strong>
+                          <strong>{paymentMethodLabel(payment.method)}</strong>
                           <span>
-                            {payment.status}
+                            {paymentStatusLabel(payment.status)}
                             {payment.tipAmount.amount > 0
                               ? ` · Propina ${formatMoney(payment.tipAmount.amount, payment.tipAmount.currency)}`
                               : ''}
@@ -1742,10 +2646,18 @@ export function App() {
                   <strong>{order.rounds.length}</strong>
                 </div>
                 <div className="financial-lines">
-                  {order.taxTotal && <>
-                    <div><span>Base</span><strong>{formatMoney(order.subtotal.amount, order.currency)}</strong></div>
-                    <div><span>Impuestos</span><strong>{formatMoney(order.taxTotal.amount, order.currency)}</strong></div>
-                  </>}
+                  {order.taxTotal && (
+                    <>
+                      <div>
+                        <span>Base</span>
+                        <strong>{formatMoney(order.subtotal.amount, order.currency)}</strong>
+                      </div>
+                      <div>
+                        <span>Impuestos</span>
+                        <strong>{formatMoney(order.taxTotal.amount, order.currency)}</strong>
+                      </div>
+                    </>
+                  )}
                   <div>
                     <span>Total</span>
                     <strong>{formatMoney(order.total.amount, order.total.currency)}</strong>
@@ -1765,7 +2677,13 @@ export function App() {
                 </div>
                 {order.status === 'OPEN' && (
                   <div className="order-actions">
-                    <button
+                    <PosAction
+                      reason={
+                        !hasPermission(PermissionCodes.ORDER_SEND)
+                          ? 'Tu rol no permite enviar pedidos.'
+                          : (operationReason ??
+                            (draftItems.length === 0 ? 'No hay productos sin enviar.' : null))
+                      }
                       type="button"
                       className="send-button"
                       disabled={
@@ -1776,9 +2694,17 @@ export function App() {
                       onClick={() => void sendRound()}
                     >
                       <span>{pendingAction === 'send-round' ? 'Enviando…' : 'Enviar ronda'}</span>
-                      <small>{draftItems.length} DRAFT</small>
-                    </button>
-                    <button
+                      <small>{draftItems.length} sin enviar</small>
+                    </PosAction>
+                    <PosAction
+                      reason={
+                        !hasPermission(PermissionCodes.PRINT_PRECHECK)
+                          ? 'Tu rol no permite solicitar precuentas.'
+                          : (operationReason ??
+                            (order?.items.length === 0
+                              ? 'Agrega productos antes de pedir la precuenta.'
+                              : null))
+                      }
                       type="button"
                       className="secondary-order-button"
                       disabled={
@@ -1789,8 +2715,18 @@ export function App() {
                       onClick={() => void requestPrint('PRECHECK')}
                     >
                       {pendingAction === 'precheck' ? 'Encolando…' : 'Precuenta'}
-                    </button>
-                    <button
+                    </PosAction>
+                    <PosAction
+                      reason={
+                        !hasPermission(PermissionCodes.PAYMENT_CREATE)
+                          ? 'Tu rol no permite registrar pagos.'
+                          : (operationReason ??
+                            (order?.items.length === 0
+                              ? 'Agrega productos a la venta.'
+                              : order?.balanceDue.amount === 0
+                                ? 'La venta no tiene saldo pendiente.'
+                                : null))
+                      }
                       type="button"
                       className="payment-button"
                       disabled={
@@ -1801,11 +2737,19 @@ export function App() {
                       }
                       onClick={beginPayment}
                     >
-                      Cobrar
-                    </button>
+                      {cashSession ? 'Cobrar' : 'Abrir caja para cobrar'}
+                    </PosAction>
                     {order.balanceDue.amount === 0 && order.items.length > 0 && (
                       <>
-                        <button
+                        <PosAction
+                          reason={
+                            !hasPermission(PermissionCodes.ORDER_CLOSE)
+                              ? 'Tu rol no permite cerrar ventas.'
+                              : (operationReason ??
+                                (draftItems.length > 0
+                                  ? 'Envía o elimina los productos sin enviar.'
+                                  : null))
+                          }
                           type="button"
                           className="close-order-button"
                           disabled={
@@ -1816,7 +2760,7 @@ export function App() {
                           onClick={() => void closeOrder()}
                         >
                           {pendingAction === 'close-order' ? 'Cerrando…' : 'Cerrar venta'}
-                        </button>
+                        </PosAction>
                         {draftItems.length > 0 && (
                           <p className="close-order-hint" role="status">
                             Envía o elimina los productos pendientes antes de cerrar la venta.
@@ -1829,7 +2773,14 @@ export function App() {
                 {order.status === 'CLOSED' && (
                   <>
                     <div className="closed-callout">✓ Venta cerrada y balanceada</div>
-                    <button
+                    <PosAction
+                      reason={
+                        !hasPermission(PermissionCodes.PRINT_RECEIPT)
+                          ? 'Tu rol no permite solicitar recibos.'
+                          : isBusy
+                            ? 'Espera la operación en curso.'
+                            : 'Restablece la conexión local.'
+                      }
                       type="button"
                       className="secondary-order-button receipt-button"
                       disabled={
@@ -1840,7 +2791,7 @@ export function App() {
                       onClick={() => void requestPrint('CUSTOMER_RECEIPT')}
                     >
                       {pendingAction === 'receipt' ? 'Encolando…' : 'Generar recibo'}
-                    </button>
+                    </PosAction>
                   </>
                 )}
                 {!cashSession &&
@@ -1854,6 +2805,14 @@ export function App() {
                       Abre la caja para poder cobrar
                     </button>
                   )}
+                {!cashSession &&
+                  order.status === 'OPEN' &&
+                  !hasPermission(PermissionCodes.CASH_SESSION_OPEN) && (
+                    <p className="close-order-hint">
+                      Para cobrar, solicita a un responsable que abra el turno de caja. Tu rol no
+                      permite abrirlo.
+                    </p>
+                  )}
               </footer>
             </>
           )}
@@ -1861,22 +2820,16 @@ export function App() {
       </main>
 
       {showOpenTables && (
-        <div className="modal-backdrop">
-          <section
-            className="payment-modal open-tables-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="open-tables-title"
-          >
-            <div className="modal-heading">
-              <div>
-                <span className="eyebrow">Servicio en mesa</span>
-                <h2 id="open-tables-title">Mesas abiertas</h2>
-              </div>
-              <button type="button" onClick={() => setShowOpenTables(false)}>
-                ×
-              </button>
-            </div>
+        <PosDialog
+          title="Mesas abiertas"
+          className="payment-modal open-tables-modal"
+          busy={isBusy}
+          onClose={() => {
+            setShowOpenTables(false);
+          }}
+        >
+          {operationalFeedback}
+          <div inert={isBusy} aria-busy={isBusy}>
             <p className="open-tables-help">Selecciona una cuenta para recuperarla y cobrarla.</p>
             <div className="open-table-account-list">
               {openTableAccounts.map((account) => (
@@ -1888,9 +2841,11 @@ export function App() {
                 >
                   <span>
                     <strong>{account.tableNames.join(' + ')}</strong>
-                    <small>Order #{account.orderNumber}</small>
+                    <small>Pedido #{account.orderNumber}</small>
                     {account.balanceDue && (
-                      <small>Saldo {formatMoney(account.balanceDue.amount, account.balanceDue.currency)}</small>
+                      <small>
+                        Saldo {formatMoney(account.balanceDue.amount, account.balanceDue.currency)}
+                      </small>
                     )}
                     {(account.readyItemCount > 0 || account.preparingItemCount > 0) && (
                       <small>
@@ -1910,84 +2865,73 @@ export function App() {
             <div className="modal-error-slot" role="alert">
               {openTablesError ?? '\u00a0'}
             </div>
-          </section>
-        </div>
+          </div>
+        </PosDialog>
       )}
 
       {showOpenCounterOrders && (
-        <div className="modal-backdrop">
-          <section className="payment-modal open-tables-modal" role="dialog" aria-modal="true" aria-labelledby="open-counter-orders-title">
-            <div className="modal-heading">
-              <div><span className="eyebrow">Mostrador</span><h2 id="open-counter-orders-title">Ventas abiertas</h2></div>
-              <button type="button" onClick={() => setShowOpenCounterOrders(false)}>×</button>
-            </div>
-            <p className="open-tables-help">Recupera una venta o abre una vacía para descartarla de forma segura.</p>
-            {counterError&&<p role="alert">{counterError}</p>}
-            <button type="button" disabled={isBusy} onClick={()=>void refreshCounterSales()}>Actualizar</button>
+        <PosDialog
+          title="Ventas abiertas"
+          className="payment-modal open-tables-modal"
+          busy={isBusy}
+          onClose={() => {
+            setShowOpenCounterOrders(false);
+          }}
+        >
+          {operationalFeedback}
+          <div inert={isBusy} aria-busy={isBusy}>
+            <p className="open-tables-help">
+              Recupera una venta o abre una vacía para descartarla de forma segura.
+            </p>
+            {counterError && <p role="alert">{counterError}</p>}
+            <Button variant="secondary" type="button" disabled={isBusy} onClick={() => void refreshCounterSales()}>
+              Actualizar
+            </Button>
             <div className="open-table-account-list">
               {openCounterOrders.map((candidate) => (
-                <button key={candidate.id} type="button" disabled={isBusy} onClick={() => void openCounterOrder(candidate)}>
-                  <span><strong>{candidate.items.length === 0 ? 'Venta vacía' : `${candidate.items.length} productos`}</strong><small>{new Date(candidate.createdAt).toLocaleString('es-MX')}</small></span>
+                <button
+                  key={candidate.id}
+                  type="button"
+                  disabled={isBusy}
+                  onClick={() => void openCounterOrder(candidate)}
+                >
+                  <span>
+                    <strong>
+                      {candidate.items.length === 0
+                        ? 'Venta vacía'
+                        : `${candidate.items.length} productos`}
+                    </strong>
+                    <small>{new Date(candidate.createdAt).toLocaleString('es-MX')}</small>
+                  </span>
                   <b>{formatMoney(candidate.balanceDue.amount, candidate.balanceDue.currency)}</b>
                 </button>
               ))}
-              {openCounterOrders.length === 0 && <div className="open-tables-empty">No hay ventas de mostrador abiertas.</div>}
+              {openCounterOrders.length === 0 && (
+                <div className="open-tables-empty">No hay ventas de mostrador abiertas.</div>
+              )}
             </div>
-          </section>
-        </div>
+          </div>
+        </PosDialog>
       )}
 
-      {printJobs.some((job) => job.status === 'FAILED' || job.status === 'UNKNOWN') && (
-        <div className="print-alert" role="status">
-          Hay impresiones pendientes de atención. La venta continúa operativa.
-        </div>
-      )}
-      {import.meta.env.DEV && printJobs.length > 0 && (
-        <details className="print-debug">
-          <summary>Cola de impresión · {printJobs.length} recientes</summary>
-          {printJobs.slice(0, 8).map((job) => (
-            <div key={job.printJobId}>
-              <span>
-                {job.jobType}
-                {job.stationId ? ` · ${job.stationId.slice(-4)}` : ''}
-              </span>
-              <strong>
-                {job.status} · intento {job.attempts}
-              </strong>
-            </div>
-          ))}
-        </details>
-      )}
+      <PrintingStatus jobs={printJobs} unavailable={printStatusUnavailable} />
 
       {configuredProduct && (
-        <div className="modal-backdrop">
-          <section
-            className="payment-modal modifier-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="modifier-title"
-          >
-            <div className="modal-heading">
-              <div>
-                <span className="eyebrow">
-                  {editingConfiguredItemId ? 'Edita el borrador' : 'Configura el producto'}
-                </span>
-                <h2 id="modifier-title">{configuredProduct.name}</h2>
-              </div>
-              <button
-                type="button"
-                aria-label="Cerrar configuración"
-                onClick={() => {
-                  setConfiguredProduct(null);
-                  setEditingConfiguredItemId(null);
-                  setSelectedModifierIds([]);
-                  setModifierValidation(null);
-                  setConfiguredSpecialInstructions('');
-                }}
-              >
-                ×
-              </button>
-            </div>
+        <PosDialog
+          title="Configurar producto"
+          className="payment-modal modifier-modal"
+          busy={isBusy}
+          onClose={() => {
+            setConfiguredProduct(null);
+            setEditingConfiguredItemId(null);
+            setSelectedModifierIds([]);
+            setModifierValidation(null);
+            setConfiguredSpecialInstructions('');
+          }}
+        >
+          {operationalFeedback}
+          <div inert={isBusy} aria-busy={isBusy}>
+            <h3>{configuredProduct.name}</h3>
             <p className="modifier-base-price">
               Precio base{' '}
               <strong>
@@ -2114,48 +3058,42 @@ export function App() {
                 (editingConfiguredItemId
                   ? `edit-${editingConfiguredItemId}`
                   : `add-${configuredProduct.id}`)
-                  ? 'Confirmando con Edge…'
+                  ? 'Confirmando…'
                   : editingConfiguredItemId
                     ? 'Guardar cambios'
                     : 'Agregar a la venta'}
               </button>
             </footer>
-          </section>
-        </div>
+          </div>
+        </PosDialog>
       )}
 
       {showOpenCash && hasPermission(PermissionCodes.CASH_SESSION_OPEN) && (
-        <div className="modal-backdrop">
-          <section
-            className="payment-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="cash-title"
-          >
-            <div className="modal-heading">
-              <div>
-                <span className="eyebrow">
-                  {licensing?.mode === 'PROTECTED_OPERATIONS' ? 'Recuperación restringida' : 'Inicio de turno'}
-                </span>
-                <h2 id="cash-title">
-                  {licensing?.mode === 'PROTECTED_OPERATIONS' ? 'Abrir caja de recuperación' : 'Abrir caja'}
-                </h2>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setOpenCashError(null);
-                  setShowOpenCash(false);
-                }}
-              >
-                ×
-              </button>
-            </div>
+        <PosDialog
+          title="Abrir turno de caja"
+          className="payment-modal"
+          busy={isBusy}
+          onClose={() => {
+            setOpenCashError(null);
+            setShowOpenCash(false);
+          }}
+        >
+          {operationalFeedback}
+          <div inert={isBusy} aria-busy={isBusy}>
+            <PosFeedback
+              message={openCashError}
+              guidance={cashGuidance}
+              onNavigate={navigateToGuidance}
+              canNavigate={canNavigateToGuidance}
+            />
             <form onSubmit={(event) => void openCash(event)}>
               <label>
                 Fecha de referencia del dispositivo
                 <input type="date" value={getLocalBusinessDate()} readOnly />
-                <small>Edge determina el día de negocio según la zona horaria y la hora de inicio configuradas.</small>
+                <small>
+                  El día de negocio lo determina la configuración del restaurante, no esta fecha de
+                  referencia.
+                </small>
               </label>
               <label>
                 Fondo inicial
@@ -2171,69 +3109,59 @@ export function App() {
               </label>
               <p className="field-help">
                 {licensing?.mode === 'PROTECTED_OPERATIONS'
-                  ? 'Esta sesión solo permite cobrar y cerrar las Orders protegidas existentes.'
-                  : 'Se guarda en minor units exactos. El efectivo esperado parte de este fondo.'}
+                  ? 'Esta sesión solo permite cobrar y cerrar las ventas protegidas existentes.'
+                  : 'Indica el efectivo disponible al iniciar el turno. El arqueo partirá de este fondo.'}
               </p>
-              <div
-                className={`modal-form-feedback${openCashError ? ' modal-form-feedback--error' : ''}`}
-                role="status"
-              >
-                {openCashError ?? ''}
-              </div>
+
               <button className="confirm-payment" disabled={isBusy} type="submit">
-                {pendingAction === 'open-cash' ? 'Abriendo…' : 'Abrir CashSession'}
+                {pendingAction === 'open-cash' ? 'Abriendo…' : 'Abrir turno de caja'}
               </button>
             </form>
-          </section>
-        </div>
+          </div>
+        </PosDialog>
       )}
 
       {showCashOperations && (
-        <div className="modal-backdrop">
-          <section
-            className="payment-modal cash-operations-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="cash-operations-title"
-          >
-            <div className="modal-heading">
-              <div>
-                <span className="eyebrow">Operación local</span>
-                <h2 id="cash-operations-title">Caja y cortes</h2>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setCashModalError(null);
-                  setShowCashOperations(false);
-                }}
-              >
-                ×
-              </button>
-            </div>
+        <PosDialog
+          title="Caja y cortes"
+          className="payment-modal cash-operations-modal"
+          busy={isBusy}
+          onClose={() => {
+            setCashModalError(null);
+            setShowCashOperations(false);
+          }}
+        >
+          {operationalFeedback}
+          <div inert={isBusy} aria-busy={isBusy}>
+            <PosFeedback
+              message={cashModalError}
+              guidance={cashGuidance}
+              onNavigate={navigateToGuidance}
+              canNavigate={canNavigateToGuidance}
+            />
 
             {cashSession ? (
               <>
                 <div className="cash-session-brief">
-                  <span>Business date</span>
+                  <span>Día de negocio</span>
                   <strong>{cashSession.businessDate}</strong>
                   <small>
-                    CashSession OPEN · Arqueo {cashSession.blindCashCount ? 'ciego' : 'visible'}.
+                    Turno de caja abierto · Arqueo{' '}
+                    {cashSession.blindCashCount ? 'ciego' : 'visible'}.
                   </small>
                 </div>
 
-                <div
-                  className={`modal-form-feedback cash-modal-feedback${cashModalError ? ' modal-form-feedback--error' : ''}`}
-                  role="status"
-                >
-                  {cashModalError ?? ''}
-                </div>
-
                 {hasPermission(PermissionCodes.CASH_MOVEMENT_CREATE) && (
-                  <form className="cash-operation-section" onSubmit={(event) => void createCashMovement(event)}>
+                  <form
+                    className="cash-operation-section"
+                    onSubmit={(event) => void createCashMovement(event)}
+                  >
                     <div className="cash-operation-heading">
                       <h3>Movimiento de efectivo</h3>
-                      <CashMovementTypeSelector value={cashMovementType} onChange={setCashMovementType}/>
+                      <CashMovementTypeSelector
+                        value={cashMovementType}
+                        onChange={setCashMovementType}
+                      />
                     </div>
                     <div className="cash-movement-fields">
                       <label>
@@ -2279,7 +3207,10 @@ export function App() {
                 </div>
 
                 {hasPermission(PermissionCodes.CASH_SESSION_CLOSE) && (
-                  <form className="cash-operation-section blind-count" onSubmit={(event) => void previewCashClose(event)}>
+                  <form
+                    className="cash-operation-section blind-count"
+                    onSubmit={(event) => void previewCashClose(event)}
+                  >
                     <div className="cash-operation-heading">
                       <div>
                         <h3>Cerrar caja · Corte Z</h3>
@@ -2311,8 +3242,10 @@ export function App() {
               </>
             ) : (
               <div className="cash-session-brief cash-session-closed">
-                <strong>CashSession CLOSED</strong>
-                <span>El Corte Z quedó persistido. Puedes abrir una nueva caja con otro fondo.</span>
+                <strong>Turno de caja cerrado</strong>
+                <span>
+                  El Corte Z quedó persistido. Puedes abrir una nueva caja con otro fondo.
+                </span>
               </div>
             )}
 
@@ -2321,7 +3254,11 @@ export function App() {
                 <div className="cash-operation-heading">
                   <div>
                     <span className="eyebrow">
-                      {cashReport?.reportType === 'Z' ? 'Corte Z' : cashReport ? 'Corte X' : 'Resultado del arqueo'}
+                      {cashReport?.reportType === 'Z'
+                        ? 'Corte Z'
+                        : cashReport
+                          ? 'Corte X'
+                          : 'Resultado del arqueo'}
                     </span>
                     <h3>Resumen financiero</h3>
                   </div>
@@ -2330,14 +3267,64 @@ export function App() {
                   )}
                 </div>
                 <div className="cash-report-grid">
-                  <span>Fondo inicial<strong>{formatMoney(visibleCashSummary.openingFloat.amount, visibleCashSummary.currency)}</strong></span>
-                  <span>Ventas CASH<strong>{formatMoney(visibleCashSummary.salesByMethod.CASH.amount, visibleCashSummary.currency)}</strong></span>
-                  <span>Ventas CARD<strong>{formatMoney(visibleCashSummary.salesByMethod.CARD.amount, visibleCashSummary.currency)}</strong></span>
-                  <span>CASH_IN<strong>{formatMoney(visibleCashSummary.cashIn.amount, visibleCashSummary.currency)}</strong></span>
-                  <span>CASH_OUT<strong>{formatMoney(visibleCashSummary.cashOut.amount, visibleCashSummary.currency)}</strong></span>
-                  <span>Esperado<strong>{formatMoney(visibleCashSummary.expectedCash.amount, visibleCashSummary.currency)}</strong></span>
+                  <span>
+                    Fondo inicial
+                    <strong>
+                      {formatMoney(
+                        visibleCashSummary.openingFloat.amount,
+                        visibleCashSummary.currency,
+                      )}
+                    </strong>
+                  </span>
+                  <span>
+                    Ventas en efectivo
+                    <strong>
+                      {formatMoney(
+                        visibleCashSummary.salesByMethod.CASH.amount,
+                        visibleCashSummary.currency,
+                      )}
+                    </strong>
+                  </span>
+                  <span>
+                    Ventas con tarjeta
+                    <strong>
+                      {formatMoney(
+                        visibleCashSummary.salesByMethod.CARD.amount,
+                        visibleCashSummary.currency,
+                      )}
+                    </strong>
+                  </span>
+                  <span>
+                    Entradas de efectivo
+                    <strong>
+                      {formatMoney(visibleCashSummary.cashIn.amount, visibleCashSummary.currency)}
+                    </strong>
+                  </span>
+                  <span>
+                    Salidas de efectivo
+                    <strong>
+                      {formatMoney(visibleCashSummary.cashOut.amount, visibleCashSummary.currency)}
+                    </strong>
+                  </span>
+                  <span>
+                    Esperado
+                    <strong>
+                      {formatMoney(
+                        visibleCashSummary.expectedCash.amount,
+                        visibleCashSummary.currency,
+                      )}
+                    </strong>
+                  </span>
                   {visibleCashSummary.countedCash && (
-                    <span>Contado<strong>{formatMoney(visibleCashSummary.countedCash.amount, visibleCashSummary.currency)}</strong></span>
+                    <span>
+                      Contado
+                      <strong>
+                        {formatMoney(
+                          visibleCashSummary.countedCash.amount,
+                          visibleCashSummary.currency,
+                        )}
+                      </strong>
+                    </span>
                   )}
                   {cashDifference && (
                     <span className={`cash-difference cash-difference--${cashDifference.tone}`}>
@@ -2353,34 +3340,30 @@ export function App() {
                     disabled={isBusy}
                     onClick={() => void confirmCashClose()}
                   >
-                    {pendingAction === 'close-cash' ? 'Cerrando…' : 'Confirmar Corte Z y cerrar caja'}
+                    {pendingAction === 'close-cash'
+                      ? 'Cerrando…'
+                      : 'Confirmar Corte Z y cerrar caja'}
                   </button>
                 )}
               </section>
             )}
-          </section>
-        </div>
+          </div>
+        </PosDialog>
       )}
 
       {voidPaymentId && order && (
-        <div className="modal-backdrop">
-          <section
-            className="payment-modal override-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="override-title"
-          >
-            <div className="modal-heading">
-              <div>
-                <span className="eyebrow">Operación sensible</span>
-                <h2 id="override-title">Anular Payment</h2>
-              </div>
-              <button type="button" aria-label="Cancelar anulación" onClick={cancelPaymentVoid}>
-                ×
-              </button>
-            </div>
+        <PosDialog
+          title="Anular pago"
+          className="payment-modal override-modal"
+          busy={isBusy}
+          onClose={() => {
+            cancelPaymentVoid();
+          }}
+        >
+          {operationalFeedback}
+          <div inert={isBusy} aria-busy={isBusy}>
             <p className="override-summary">
-              Esta acción conserva el Payment histórico como VOIDED y registra quién operó y quién
+              Esta acción conserva el pago histórico como anulado y registra quién operó y quién
               autorizó.
             </p>
             <form onSubmit={(event) => void submitPaymentVoid(event)}>
@@ -2396,7 +3379,7 @@ export function App() {
               </label>
               {!hasPermission(PermissionCodes.PAYMENT_VOID) && (
                 <label>
-                  PIN de Manager u Owner
+                  PIN de gerente o propietario
                   <input
                     type="password"
                     inputMode="numeric"
@@ -2420,7 +3403,11 @@ export function App() {
                 {overrideError ?? '\u00a0'}
               </div>
               <div className="override-actions">
-                <button type="button" className="secondary-order-button" onClick={cancelPaymentVoid}>
+                <button
+                  type="button"
+                  className="secondary-order-button"
+                  onClick={cancelPaymentVoid}
+                >
                   Cancelar
                 </button>
                 <button
@@ -2432,39 +3419,33 @@ export function App() {
                     (!hasPermission(PermissionCodes.PAYMENT_VOID) && overridePin.length < 4)
                   }
                 >
-                  {pendingAction === `void-${voidPaymentId}` ? 'Autorizando…' : 'Autorizar y anular'}
+                  {pendingAction === `void-${voidPaymentId}`
+                    ? 'Autorizando…'
+                    : 'Autorizar y anular'}
                 </button>
               </div>
             </form>
-          </section>
-        </div>
+          </div>
+        </PosDialog>
       )}
 
       {showPayment && order && (
-        <div className="modal-backdrop">
-          <section
-            className="payment-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="payment-title"
-          >
-            <div className="modal-heading">
-              <div>
-                <span className="eyebrow">Cobro local</span>
-                <h2 id="payment-title">Registrar pago</h2>
-              </div>
-              <button type="button" onClick={() => setShowPayment(false)}>
-                ×
-              </button>
-            </div>
-            <div className="payment-balance">
-              <span>Saldo pendiente</span>
-              <strong>{formatMoney(order.balanceDue.amount, order.balanceDue.currency)}</strong>
-            </div>
+        <PosDialog
+          title="Registrar pago"
+          className="payment-modal payment-workspace"
+          busy={isBusy}
+          onClose={() => {
+            setShowPayment(false);
+          }}
+        >
+          {operationalFeedback}
+          <div className="payment-workspace-grid" inert={isBusy} aria-busy={isBusy}>
+            <PaymentSummary order={order} />
             <form onSubmit={(event) => void submitPayment(event)}>
-              <div className="method-selector">
+              <div className="method-selector" role="group" aria-label="Método de pago">
                 <button
                   type="button"
+                  aria-pressed={paymentMethod === 'CASH'}
                   className={paymentMethod === 'CASH' ? 'active' : ''}
                   onClick={() => setPaymentMethod('CASH')}
                 >
@@ -2472,6 +3453,7 @@ export function App() {
                 </button>
                 <button
                   type="button"
+                  aria-pressed={paymentMethod === 'CARD'}
                   className={paymentMethod === 'CARD' ? 'active' : ''}
                   onClick={() => {
                     setPaymentMethod('CARD');
@@ -2591,7 +3573,7 @@ export function App() {
                       disabled={cashTenderInput.quickHistory.length === 0}
                       onClick={() => setCashTenderInput((current) => undoCashDenomination(current))}
                     >
-                      Undo
+                      Deshacer
                     </button>
                   </div>
                   <div
@@ -2613,7 +3595,7 @@ export function App() {
                     <strong>
                       {formatMoney(cashTenderPreview.changeMinorUnits, order.currency)}
                     </strong>
-                    <small>Edge confirma el valor definitivo</small>
+                    <small>El servicio local confirma el cambio definitivo</small>
                   </div>
                 </>
               ) : (
@@ -2631,12 +3613,12 @@ export function App() {
                 type="submit"
               >
                 {pendingAction === 'payment'
-                  ? 'Confirmando con Edge…'
+                  ? 'Confirmando…'
                   : `Registrar ${paymentMethod === 'CASH' ? 'efectivo' : 'tarjeta'}`}
               </button>
             </form>
-          </section>
-        </div>
+          </div>
+        </PosDialog>
       )}
     </div>
   );

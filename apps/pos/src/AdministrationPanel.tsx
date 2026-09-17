@@ -1,160 +1,284 @@
-import { useEffect,useRef,useState,type FormEvent } from 'react';import { EdgeClientError,type EdgeClient } from '@comanview/client-sdk';
-import type { RestaurantAdministrationState,TaxAdministrationState,PersonnelList,ProductResponse,EdgeConfiguration } from '@comanview/contracts';
-import { TimeZoneField, CurrencyField, BusinessCutoffField } from '@comanview/ui';
-import { PersonnelPinDialog, validPersonnelPin } from './PersonnelPinDialog.js';
-import { AdministrationDrafts, administrationSections, loadAdministrationResources } from './administrationLoading.js';
-import { parseMoneyInputToMinorUnits } from './posLogic.js';
-type Props={edge:EdgeClient;currentUserId:string;permissions:readonly string[];onClose():void};const commandId=()=>crypto.randomUUID();
-const sections=['Negocio','Día y moneda','Cajas','Estaciones','Zonas y mesas','Impuestos','Propinas','Personal'] as const;
-export function AdministrationPanel({edge,currentUserId,permissions,onClose}:Props){const [admin,setAdmin]=useState<RestaurantAdministrationState|null>(null),[tax,setTax]=useState<TaxAdministrationState|null>(null),
-  [people,setPeople]=useState<PersonnelList|null>(null),[configuration,setConfiguration]=useState<EdgeConfiguration|null>(null),[products,setProducts]=useState<ProductResponse[]>([]),[error,setError]=useState<string|null>(null),[notice,setNotice]=useState(''),[busy,setBusy]=useState(false),[draftTick,setDraftTick]=useState(0);
-  const drafts=useRef(new AdministrationDrafts()).current;
-  const markDirty=(key:string)=>{drafts.mark(key);setDraftTick(x=>x+1);};
-  const [section,setSection]=useState(()=>administrationSections(permissions)[0]??0);
-  const [loaded,setLoaded]=useState(false),[resourceErrors,setResourceErrors]=useState<Record<string,string>>({});
-  const [profileVersion,setProfileVersion]=useState(0),[dayVersion,setDayVersion]=useState(0),[currencyVersion,setCurrencyVersion]=useState(0);
-  const [pinRequest,setPinRequest]=useState<{requireCurrent:boolean;submit(values:{newPin:string;oldPin?:string}):void}|null>(null);
-  const capturePin=(requireCurrent:boolean,submit:(values:{newPin:string;oldPin?:string})=>void)=>setPinRequest({requireCurrent,submit});
-  useEffect(()=>{const warn=(event:BeforeUnloadEvent)=>{if(drafts.dirty){event.preventDefault();event.returnValue='';}};
-    window.addEventListener('beforeunload',warn);return()=>window.removeEventListener('beforeunload',warn);},[drafts,draftTick]);
-  const [profile,setProfile]=useState({commercialName:'',legalName:'',phone:'',email:'',line1:'',city:'',region:'',postalCode:'',countryCode:'MX'}),
-    [hours,setHours]=useState<Array<{day:number;closed:boolean;open:string|null;close:string|null}>>([]),[logo,setLogo]=useState<RestaurantAdministrationState['businessProfile']['logo']>(null),
-    [policy,setPolicy]=useState({timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone,rollover:'04:00',currency:'MXN'}),
-    [register,setRegister]=useState({name:'Caja principal',blindCashCount:true}),[station,setStation]=useState({name:'Cocina',purpose:'KITCHEN'}),
-    [zone,setZone]=useState('Salón'),[table,setTable]=useState({name:'Mesa 1',capacity:'4',zoneId:''}),[taxForm,setTaxForm]=useState({name:'IVA',rate:'16',mode:'TAX_INCLUDED' as const}),
-    [person,setPerson]=useState({displayName:'',pin:'',role:'CASHIER' as 'OWNER'|'MANAGER'|'CASHIER'|'WAITER'|'KITCHEN'}),[assignment,setAssignment]=useState({productId:'',stationId:''}),
-    [productForm,setProductForm]=useState({name:'',amount:'',taxProfileId:''});
-  async function load(){
-    setBusy(true);
-    try {
-      const resources=await loadAdministrationResources(edge,permissions);
-      const errors:Record<string,string>={};
-      for(const [key,result] of Object.entries(resources))if(result.status==='rejected')errors[key]=message(result.reason);
-      setResourceErrors(errors);
-      const a=resources.admin.status==='fulfilled'?resources.admin.value:null;
-      if(a){
-        setAdmin(a);
-        drafts.refresh('profile',()=>{
-          setProfile({commercialName:a.businessProfile.commercialName??'',legalName:a.businessProfile.legalName??'',phone:a.businessProfile.phone??'',email:a.businessProfile.email??'',
-            line1:a.businessProfile.address.line1,city:a.businessProfile.address.city,region:a.businessProfile.address.region,postalCode:a.businessProfile.address.postalCode,countryCode:a.businessProfile.address.countryCode??'MX'});
-          setHours(a.businessProfile.operatingHours);setLogo(a.businessProfile.logo);setProfileVersion(a.businessProfile.version);
-        });
-        setPolicy(current=>({...current,
-          ...(!drafts.has('day')?{timeZone:a.operational.timeZone??Intl.DateTimeFormat().resolvedOptions().timeZone,rollover:a.operational.rollover??'04:00'}:{}),
-          ...(!drafts.has('currency')?{currency:a.operational.currency??'MXN'}:{})}));
-        if(!drafts.has('day'))setDayVersion(a.operational.version);
-        if(!drafts.has('currency'))setCurrencyVersion(a.operational.version);
-        if(!drafts.has('table'))setTable(x=>({...x,zoneId:a.zones.find(z=>z.active)?.id??''}));
-      }
-      if(resources.tax.status==='fulfilled')setTax(resources.tax.value);
-      if(resources.people.status==='fulfilled')setPeople(resources.people.value);
-      if(resources.products.status==='fulfilled')setProducts(resources.products.value);
-      if(resources.configuration.status==='fulfilled')setConfiguration(resources.configuration.value);
-    }finally{setBusy(false);setLoaded(true);}
-  }
-  useEffect(()=>{void load();},[]);
-  async function run(work:()=>Promise<unknown>,ok:string,savedDraft?:string){
-    setBusy(true);setError(null);
-    try{await work();drafts.saved(savedDraft);setDraftTick(x=>x+1);setNotice(ok);
-      if(savedDraft==='person')setPerson(x=>({...x,pin:''}));
-      await load();
-    }catch(e){setError(message(e));}finally{setBusy(false);}
-  }
-  if(!loaded)return <div className="modal-backdrop"><section className="modal-card"><h2>Administración</h2><p>Cargando configuración…</p><button onClick={onClose}>Cerrar</button></section></div>;
-  const close=()=>{if(!busy&&(!drafts.dirty||window.confirm('Hay cambios sin guardar. ¿Cerrar Administración y descartarlos?')))onClose();};
-  const reason='Actualización explícita desde Administración POS';
-  const registerCreationIssue=cashRegisterCreationIssue(admin?.operational.currency??null,register.name);
-  const ask=(label:string,current:string)=>window.prompt(label,current)?.trim()||null;
-  const confirmDeactivate=(label:string)=>window.confirm(`${drafts.dirty?'Hay borradores pendientes que se conservarán. ':''}Desactivar ${label} puede impedir nuevas operaciones y nunca elimina su historial. ¿Continuar?`);
-  const changeRoles=(user:PersonnelList['users'][number])=>{const raw=ask('Roles separados por coma (OWNER, MANAGER, CASHIER, WAITER, KITCHEN)',user.roles.join(', '));if(!raw)return;const roles=raw.split(',').map(x=>x.trim().toUpperCase()).filter(Boolean) as Array<'OWNER'|'MANAGER'|'CASHIER'|'WAITER'|'KITCHEN'>;void run(()=>edge.executePersonnel({kind:'CHANGE_AUTHORIZATION',commandId:commandId(),userId:user.userId,expectedVersion:user.version,reason,roles}),'Roles actualizados; las sesiones anteriores quedaron invalidadas.');};
-  const tipPolicy=configuration?.tipPolicy,effectiveTipPercentages=tipPolicy?.allowPercentages?(admin?.operational.tipPreferences?.percentageOptionsBasisPoints??tipPolicy.allowedPercentagesBasisPoints):(configuration?.payment.tipPercentageOptionsBasisPoints??[]);
-  return <div className="administration-backdrop"><section className="administration-panel" role="dialog" aria-modal="true" aria-label="Administración del restaurante" inert={Boolean(pinRequest)} onChangeCapture={e=>{const key=(e.target as HTMLElement).closest('[data-draft]')?.getAttribute('data-draft');if(key)markDirty(key);}}>
-    <header className="administration-header"><div><small>ADMINISTRACIÓN LOCAL</small><h2>Tu restaurante</h2><p>Configura tu negocio y la operación de cada día.</p></div><button onClick={close}>Volver al POS</button></header>
-    <nav className="administration-nav" aria-label="Secciones del restaurante">{sections.map((label,index)=>administrationSections(permissions).includes(index)&&<button key={label} type="button" aria-current={section===index?'page':undefined} disabled={busy} onClick={()=>{setSection(index);setNotice(drafts.dirty?'Los borradores pendientes se conservan al cambiar de sección.':'');}}>{label}</button>)}</nav>
-    <div className="administration-content">
-    {error&&<div role="alert" className="error-banner">{error}</div>}{notice&&<div role="status" className="notice-banner">{notice}</div>}
-    <p className="administration-hint">{drafts.dirty?'Tienes cambios sin guardar. Guarda antes de salir o realizar otra operación.':'Los cambios se aplican al pulsar el botón de guardar de cada apartado.'}</p>
-    {Object.entries(resourceErrors).filter(([key])=>key==='admin'&&section!==7||key==='people'&&section===7||key==='tax'&&[3,5].includes(section)||key==='products'&&section===3||key==='configuration'&&section===6).map(([key,text])=><p key={key} role="alert">{text} <button disabled={busy} onClick={()=>void load()}>Reintentar</button></p>)}
-    <div className={`administration-grid administration-section-${section}`} inert={busy}>
-      {admin?<form data-draft="profile" onSubmit={(e)=>{e.preventDefault();void run(()=>edge.executeRestaurantAdministration({kind:'UPDATE_BUSINESS_PROFILE',commandId:commandId(),expectedVersion:profileVersion,reason,
-        commercialName:profile.commercialName,legalName:nullable(profile.legalName),phone:nullable(profile.phone),email:nullable(profile.email),address:{line1:profile.line1,line2:admin.businessProfile.address.line2,
-          city:profile.city,region:profile.region,postalCode:profile.postalCode,countryCode:profile.countryCode?profile.countryCode.toUpperCase():null},operatingHours:hours,logo,confirmed:true}),'Perfil confirmado.','profile');}}>
-        <h3>Negocio</h3><Field label="Nombre comercial" value={profile.commercialName} set={v=>setProfile({...profile,commercialName:v})}/><Field label="Razón social (privada)" value={profile.legalName} set={v=>setProfile({...profile,legalName:v})}/>
-        <Field label="Teléfono" value={profile.phone} set={v=>setProfile({...profile,phone:v})}/><Field label="Email" value={profile.email} set={v=>setProfile({...profile,email:v})}/><Field label="Dirección" value={profile.line1} set={v=>setProfile({...profile,line1:v})}/>
-        <Field label="Ciudad" value={profile.city} set={v=>setProfile({...profile,city:v})}/><Field label="Estado/región" value={profile.region} set={v=>setProfile({...profile,region:v})}/><Field label="Código postal" value={profile.postalCode} set={v=>setProfile({...profile,postalCode:v})}/>
-        <div className="restaurant-logo-upload">{logo?<img src={`data:${logo.mime};base64,${logo.base64}`} alt="Vista previa del logo del restaurante"/>:<div className="restaurant-logo-placeholder" aria-hidden="true">Tu logo</div>}
-          <div><label>Logo del restaurante<input type="file" accept="image/png,image/jpeg" aria-describedby="restaurant-logo-help" onChange={e=>{const file=e.target.files?.[0];if(file)void readLogo(file).then(setLogo).catch(x=>setError(message(x)));e.target.value='';}}/></label>
-          <small id="restaurant-logo-help">Elige una imagen PNG o JPG. Hasta 1 MiB y 2048 × 2048 píxeles. Se guardará con el perfil.</small>
-          {logo&&<button type="button" onClick={()=>{setLogo(null);markDirty('profile');}}>Quitar logo</button>}</div></div>
-        <details><summary>Horarios estructurados</summary>{['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'].map((name,day)=>{const value=hours.find(x=>x.day===day)??{day,closed:true,open:null,close:null};const update=(next:typeof value)=>setHours([...hours.filter(x=>x.day!==day),next].sort((a,b)=>a.day-b.day));return <div key={day}><label><input type="checkbox" checked={!value.closed} onChange={e=>update({...value,closed:!e.target.checked,open:e.target.checked?(value.open??'09:00'):null,close:e.target.checked?(value.close??'18:00'):null})}/>{name}</label>{!value.closed&&<><input type="time" value={value.open??'09:00'} onChange={e=>update({...value,open:e.target.value})}/><input type="time" value={value.close??'18:00'} onChange={e=>update({...value,close:e.target.value})}/></>}</div>;})}</details>
-        <button disabled={busy}>Guardar perfil</button>
-      </form>:<div/>}
-      {admin?<section><h3>Día de negocio y moneda</h3><div data-draft="day"><TimeZoneField value={policy.timeZone} onChange={v=>setPolicy({...policy,timeZone:v})}/><BusinessCutoffField value={policy.rollover} onChange={v=>setPolicy({...policy,rollover:v})}/>
-        <button disabled={busy} onClick={()=>void run(()=>edge.executeRestaurantAdministration({kind:'SET_BUSINESS_DAY_POLICY',commandId:commandId(),expectedVersion:dayVersion,reason,timeZone:policy.timeZone,rollover:policy.rollover}),'Política de día guardada.','day')}>Guardar día de negocio</button></div>
-        <div data-draft="currency"><CurrencyField value={policy.currency} disabled={busy||admin.operational.currencyLocked} onChange={v=>setPolicy({...policy,currency:v})}/><button disabled={busy||admin.operational.currencyLocked} onClick={()=>void run(()=>edge.executeRestaurantAdministration({kind:'SET_CURRENCY',commandId:commandId(),expectedVersion:currencyVersion,reason,currency:policy.currency}),'Moneda guardada.','currency')}>Establecer moneda</button></div>
-        {admin.operational.currencyLocked&&<p>Moneda bloqueada por actividad financiera.</p>}
-      </section>:<div/>}
-      {admin?<form data-draft="register" onSubmit={(e)=>{e.preventDefault();if(registerCreationIssue){setError(registerCreationIssue);return;}void run(()=>edge.executeRestaurantAdministration({kind:'CREATE_CASH_REGISTER',commandId:commandId(),expectedVersion:0,reason,name:register.name,blindCashCount:register.blindCashCount,makeDefault:true,displayOrder:admin.cashRegisters.length*10}),'Caja creada.','register');}}><h3>Cajas</h3>
-        <ul>{admin.cashRegisters.map(x=><li key={x.id}>{x.name} · {x.currency} · {x.active?'activa':'inactiva'} {admin.operational.defaultCashRegisterId===x.id?'(predeterminada)':''}
-          <button type="button" disabled={busy} onClick={()=>{const name=ask('Nombre de caja',x.name);if(name)void run(()=>edge.executeRestaurantAdministration({kind:'UPDATE_CASH_REGISTER',commandId:commandId(),expectedVersion:x.version,reason,cashRegisterId:x.id,name,active:x.active,blindCashCount:x.blindCashCount,makeDefault:admin.operational.defaultCashRegisterId===x.id,displayOrder:x.displayOrder}),'Caja renombrada.');}}>Renombrar</button>
-          <button type="button" disabled={busy} onClick={()=>void run(()=>edge.executeRestaurantAdministration({kind:'UPDATE_CASH_REGISTER',commandId:commandId(),expectedVersion:x.version,reason,cashRegisterId:x.id,name:x.name,active:x.active,blindCashCount:!x.blindCashCount,makeDefault:admin.operational.defaultCashRegisterId===x.id,displayOrder:x.displayOrder}),'Política de conteo actualizada.')}>{x.blindCashCount?'Conteo visible':'Conteo ciego'}</button>
-          <button type="button" disabled={busy} onClick={()=>{const order=ask('Orden de caja',String(x.displayOrder));if(order!==null)void run(()=>edge.executeRestaurantAdministration({kind:'UPDATE_CASH_REGISTER',commandId:commandId(),expectedVersion:x.version,reason,cashRegisterId:x.id,name:x.name,active:x.active,blindCashCount:x.blindCashCount,makeDefault:admin.operational.defaultCashRegisterId===x.id,displayOrder:Number(order)}),'Orden de caja actualizado.');}}>Orden</button>
-          <button type="button" disabled={busy} onClick={()=>void run(()=>edge.executeRestaurantAdministration({kind:'UPDATE_CASH_REGISTER',commandId:commandId(),expectedVersion:x.version,reason,cashRegisterId:x.id,name:x.name,active:x.active,blindCashCount:x.blindCashCount,makeDefault:true,displayOrder:x.displayOrder}),'Caja predeterminada actualizada.')}>Usar</button>
-          <button type="button" disabled={busy} onClick={()=>{if(!x.active||confirmDeactivate(`la caja ${x.name}`))void run(()=>edge.executeRestaurantAdministration({kind:'UPDATE_CASH_REGISTER',commandId:commandId(),expectedVersion:x.version,reason,cashRegisterId:x.id,name:x.name,active:!x.active,blindCashCount:x.blindCashCount,makeDefault:false,displayOrder:x.displayOrder}),x.active?'Caja desactivada.':'Caja activada.');}}>{x.active?'Desactivar':'Activar'}</button></li>)}</ul>
-        <Field label="Nueva caja" value={register.name} set={v=>setRegister({...register,name:v})}/><label><input type="checkbox" checked={register.blindCashCount} onChange={e=>setRegister({...register,blindCashCount:e.target.checked})}/> Conteo ciego</label><CashRegisterCreateAction busy={busy} issue={registerCreationIssue}/>
-      </form>:<div/>}
-      {admin?<form data-draft="station" onSubmit={(e)=>{e.preventDefault();void run(()=>edge.executeRestaurantAdministration({kind:'CREATE_STATION',commandId:commandId(),expectedVersion:0,reason,name:station.name,purpose:nullable(station.purpose),kdsVisible:true,displayOrder:admin.stations.length*10}),'Estación creada.','station');}}><h3>Estaciones</h3>
-        <ul>{admin.stations.map(x=><li key={x.id}>{x.name} · {x.purpose??'sin propósito'} · KDS {x.kdsVisible?'visible':'oculta'} · {x.active?'activa':'inactiva'}
-          <button type="button" disabled={busy} onClick={()=>{const name=ask('Nombre de estación',x.name);if(name)void run(()=>edge.executeRestaurantAdministration({kind:'UPDATE_STATION',commandId:commandId(),expectedVersion:x.version,reason,stationId:x.id,name,purpose:x.purpose,kdsVisible:x.kdsVisible,active:x.active,displayOrder:x.displayOrder}),'Estación renombrada.');}}>Renombrar</button>
-          <button type="button" disabled={busy} onClick={()=>{const purpose=ask('Propósito lógico',x.purpose??'');if(purpose!==null)void run(()=>edge.executeRestaurantAdministration({kind:'UPDATE_STATION',commandId:commandId(),expectedVersion:x.version,reason,stationId:x.id,name:x.name,purpose,kdsVisible:x.kdsVisible,active:x.active,displayOrder:x.displayOrder}),'Propósito actualizado.');}}>Propósito</button>
-          <button type="button" disabled={busy} onClick={()=>{const order=ask('Orden de estación',String(x.displayOrder));if(order!==null)void run(()=>edge.executeRestaurantAdministration({kind:'UPDATE_STATION',commandId:commandId(),expectedVersion:x.version,reason,stationId:x.id,name:x.name,purpose:x.purpose,kdsVisible:x.kdsVisible,active:x.active,displayOrder:Number(order)}),'Orden de estación actualizado.');}}>Orden</button>
-          <button type="button" disabled={busy} onClick={()=>void run(()=>edge.executeRestaurantAdministration({kind:'UPDATE_STATION',commandId:commandId(),expectedVersion:x.version,reason,stationId:x.id,name:x.name,purpose:x.purpose,kdsVisible:!x.kdsVisible,active:x.active,displayOrder:x.displayOrder}),'Visibilidad KDS actualizada.')}>KDS</button>
-          <button type="button" disabled={busy} onClick={()=>{if(!x.active||confirmDeactivate(`la estación ${x.name}`))void run(()=>edge.executeRestaurantAdministration({kind:'UPDATE_STATION',commandId:commandId(),expectedVersion:x.version,reason,stationId:x.id,name:x.name,purpose:x.purpose,kdsVisible:x.kdsVisible,active:!x.active,displayOrder:x.displayOrder}),x.active?'Estación desactivada.':'Estación activada.');}}>{x.active?'Desactivar':'Activar'}</button></li>)}</ul><Field label="Nombre" value={station.name} set={v=>setStation({...station,name:v})}/><Field label="Propósito" value={station.purpose} set={v=>setStation({...station,purpose:v})}/><button disabled={busy}>Crear estación</button>
-        <div data-draft="assignment"><select value={assignment.productId} onChange={e=>setAssignment({...assignment,productId:e.target.value})}><option value="">Producto…</option>{products.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select><select value={assignment.stationId} onChange={e=>setAssignment({...assignment,stationId:e.target.value})}><option value="">Sin estación</option>{admin.stations.filter(s=>s.active).map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select><button type="button" disabled={busy||!assignment.productId||!tax} onClick={()=>{const product=tax?.products.find(p=>p.id===assignment.productId);if(product)void run(()=>edge.executeRestaurantAdministration({kind:'ASSIGN_PRODUCT_STATION',commandId:commandId(),expectedVersion:product.version,reason,productId:assignment.productId,stationId:assignment.stationId||null}),'Asignación actualizada.','assignment');}}>Asignar producto</button></div>
-      </form>:<div/>}
-      {admin?<section><h3>Zonas y mesas</h3><form data-draft="zone" onSubmit={(e)=>{e.preventDefault();void run(()=>edge.executeRestaurantAdministration({kind:'CREATE_ZONE',commandId:commandId(),expectedVersion:0,reason,name:zone,displayOrder:admin.zones.length*10}),'Zona creada.','zone');}}><Field label="Nueva zona" value={zone} set={setZone}/><button disabled={busy}>Crear zona</button></form>
-        <ul>{admin.zones.map(x=><li key={x.id}>{x.name} · orden {x.displayOrder} · {x.active?'activa':'inactiva'} <button type="button" disabled={busy} onClick={()=>{const name=ask('Nombre de zona',x.name);if(name)void run(()=>edge.executeRestaurantAdministration({kind:'UPDATE_ZONE',commandId:commandId(),expectedVersion:x.version,reason,zoneId:x.id,name,active:x.active,displayOrder:x.displayOrder}),'Zona renombrada.');}}>Renombrar</button> <button type="button" disabled={busy} onClick={()=>{const order=ask('Orden',String(x.displayOrder));if(order!==null)void run(()=>edge.executeRestaurantAdministration({kind:'UPDATE_ZONE',commandId:commandId(),expectedVersion:x.version,reason,zoneId:x.id,name:x.name,active:x.active,displayOrder:Number(order)}),'Orden actualizado.');}}>Orden</button> <button type="button" disabled={busy} onClick={()=>{if(!x.active||confirmDeactivate(`la zona ${x.name}`))void run(()=>edge.executeRestaurantAdministration({kind:'UPDATE_ZONE',commandId:commandId(),expectedVersion:x.version,reason,zoneId:x.id,name:x.name,active:!x.active,displayOrder:x.displayOrder}),x.active?'Zona desactivada.':'Zona activada.');}}>{x.active?'Desactivar':'Activar'}</button></li>)}</ul>
-        <ul>{admin.tables.map(x=><li key={x.id}>{x.name} · {admin.zones.find(z=>z.id===x.zoneId)?.name??'sin zona'} · {x.capacity??'—'} lugares
-          <button type="button" disabled={busy||!x.zoneId} onClick={()=>{const name=ask('Nombre de mesa',x.name),zoneId=x.zoneId;if(name&&zoneId)void run(()=>edge.executeRestaurantAdministration({kind:'UPDATE_TABLE',commandId:commandId(),expectedVersion:x.version,reason,tableId:x.id,zoneId,name,capacity:x.capacity,active:x.active,displayOrder:x.displayOrder}),'Mesa renombrada.');}}>Renombrar</button>
-          <button type="button" disabled={busy||!x.zoneId} onClick={()=>{const capacity=ask('Capacidad (vacío no permitido en edición)',String(x.capacity??'')),zoneId=x.zoneId;if(capacity&&zoneId)void run(()=>edge.executeRestaurantAdministration({kind:'UPDATE_TABLE',commandId:commandId(),expectedVersion:x.version,reason,tableId:x.id,zoneId,name:x.name,capacity:Number(capacity),active:x.active,displayOrder:x.displayOrder}),'Capacidad actualizada.');}}>Capacidad</button>
-          <button type="button" disabled={busy||!x.zoneId} onClick={()=>{const order=ask('Orden de mesa',String(x.displayOrder)),zoneId=x.zoneId;if(order!==null&&zoneId)void run(()=>edge.executeRestaurantAdministration({kind:'UPDATE_TABLE',commandId:commandId(),expectedVersion:x.version,reason,tableId:x.id,zoneId,name:x.name,capacity:x.capacity,active:x.active,displayOrder:Number(order)}),'Orden de mesa actualizado.');}}>Orden</button>
-          <select aria-label={`Mover ${x.name}`} value={x.zoneId??''} disabled={busy} onChange={e=>void run(()=>edge.executeRestaurantAdministration({kind:'UPDATE_TABLE',commandId:commandId(),expectedVersion:x.version,reason,tableId:x.id,zoneId:e.target.value,name:x.name,capacity:x.capacity,active:x.active,displayOrder:x.displayOrder}),'Mesa movida.')}>{admin.zones.filter(z=>z.active).map(z=><option key={z.id} value={z.id}>{z.name}</option>)}</select>
-          <button type="button" disabled={busy||!x.zoneId} onClick={()=>{const zoneId=x.zoneId;if(zoneId&&(!x.active||confirmDeactivate(`la mesa ${x.name}`)))void run(()=>edge.executeRestaurantAdministration({kind:'UPDATE_TABLE',commandId:commandId(),expectedVersion:x.version,reason,tableId:x.id,zoneId,name:x.name,capacity:x.capacity,active:!x.active,displayOrder:x.displayOrder}),x.active?'Mesa desactivada.':'Mesa activada.');}}>{x.active?'Desactivar':'Activar'}</button></li>)}</ul>
-        <form data-draft="table" onSubmit={(e)=>{e.preventDefault();void run(()=>edge.executeRestaurantAdministration({kind:'CREATE_TABLE',commandId:commandId(),expectedVersion:0,reason,zoneId:table.zoneId,name:table.name,capacity:table.capacity?Number(table.capacity):null,displayOrder:admin.tables.length*10}),'Mesa creada.','table');}}>
-          <select value={table.zoneId} onChange={e=>setTable({...table,zoneId:e.target.value})}>{admin.zones.filter(z=>z.active).map(z=><option key={z.id} value={z.id}>{z.name}</option>)}</select><Field label="Mesa" value={table.name} set={v=>setTable({...table,name:v})}/><Field label="Capacidad" value={table.capacity} set={v=>setTable({...table,capacity:v})}/><button disabled={busy||!table.zoneId}>Crear mesa</button></form>
-      </section>:<div/>}
-      {admin&&tax?<section><h3>Impuestos</h3><ul>{tax.profiles.map(x=><li key={x.id}>{x.name} · {(x.rateBasisPoints/100).toFixed(2)}% · {x.calculationMode==='TAX_INCLUDED'?'incluido':'agregado'} · rev {x.version} · {x.active?'activo':'inactivo'}
-          <button disabled={busy||tax.defaultTaxProfileId===x.id||!x.active} onClick={()=>void run(()=>edge.executeTaxAdministration({kind:'SET_DEFAULT_TAX_PROFILE',commandId:commandId(),expectedVersion:tax.configurationVersion,reason,profileId:x.id}),'Impuesto predeterminado guardado.')}>Predeterminado</button>
-          <button disabled={busy||!x.active} onClick={()=>{const text=ask('Nuevo porcentaje (por ejemplo 16 u 8.25)',String(x.rateBasisPoints/100));if(text===null)return;const rate=parseMoneyInputToMinorUnits(text);if(rate===null){setError('Introduce un porcentaje con hasta dos decimales.');return;}void run(()=>edge.executeTaxAdministration({kind:'REVISE_TAX_PROFILE',commandId:commandId(),expectedVersion:x.version,reason,profileId:x.id,name:x.name,rateBasisPoints:rate,calculationMode:x.calculationMode}),'Nueva revisión fiscal creada.')}}>Cambiar porcentaje</button>
-          <button disabled={busy||!x.active} onClick={()=>void run(()=>edge.executeTaxAdministration({kind:'REVISE_TAX_PROFILE',commandId:commandId(),expectedVersion:x.version,reason,profileId:x.id,name:x.name,rateBasisPoints:x.rateBasisPoints,calculationMode:x.calculationMode==='TAX_INCLUDED'?'TAX_ADDED':'TAX_INCLUDED'}),'Nueva revisión con modo fiscal actualizado.')}>Cambiar modo</button>
-          <button disabled={busy||!x.active} onClick={()=>{if(confirmDeactivate(`el perfil fiscal ${x.name}`))void run(()=>edge.executeTaxAdministration({kind:'DEACTIVATE_TAX_PROFILE',commandId:commandId(),expectedVersion:x.version,reason,profileId:x.id}),'Perfil fiscal desactivado.');}}>Desactivar</button></li>)}</ul>
-        <form data-draft="tax" onSubmit={(e)=>{e.preventDefault();const rate=parseMoneyInputToMinorUnits(taxForm.rate);if(rate===null){setError('Introduce un porcentaje válido, por ejemplo 16 o 8.25.');return;}void run(()=>edge.executeTaxAdministration({kind:'CREATE_TAX_PROFILE',commandId:commandId(),expectedVersion:0,reason,name:taxForm.name,rateBasisPoints:rate,calculationMode:taxForm.mode}),'Perfil fiscal creado.','tax');}}><Field label="Nombre del impuesto" value={taxForm.name} set={v=>setTaxForm({...taxForm,name:v})}/><Field label="Porcentaje (%)" value={taxForm.rate} set={v=>setTaxForm({...taxForm,rate:v})} inputMode="decimal"/><small>Por ejemplo: 16 equivale al 16 %. Usa 0 para un impuesto de tasa cero.</small><label>Cómo se aplica<select value={taxForm.mode} onChange={e=>setTaxForm({...taxForm,mode:e.target.value as typeof taxForm.mode})}><option value="TAX_INCLUDED">Incluido en el precio</option><option value="TAX_ADDED">Se agrega al precio</option></select></label><button disabled={busy}>Crear perfil</button></form>
-        <form data-draft="product" onSubmit={(e)=>{e.preventDefault();const selected=tax.profiles.find(x=>x.id===productForm.taxProfileId),currency=admin.operational.currency,amount=parseMoneyInputToMinorUnits(productForm.amount);if(!selected||!currency||amount===null)return;void run(()=>edge.createProduct({name:productForm.name,description:'',productType:'STANDARD',taxProfileId:selected.id,taxProfileRevision:selected.version,basePrice:{amount,currency}}),'Producto creado con la revisión fiscal seleccionada.','product');}}>
-          <h4>Crear producto</h4><Field label="Nombre del producto" value={productForm.name} set={v=>setProductForm({...productForm,name:v})}/><Field label={`Precio (${admin.operational.currency??'moneda pendiente'})`} value={productForm.amount} set={v=>setProductForm({...productForm,amount:v})} inputMode="decimal"/><small>Escribe el importe, por ejemplo 100.00. El impuesto se incluye o se agrega según el perfil seleccionado.</small>
-          <select aria-label="Perfil fiscal del producto" value={productForm.taxProfileId} onChange={e=>setProductForm({...productForm,taxProfileId:e.target.value})}><option value="">Seleccione perfil fiscal…</option>{tax.profiles.filter(x=>x.active).map(x=><option key={x.id} value={x.id}>{x.name} · rev {x.version}</option>)}</select>
-          <button disabled={busy||!admin.operational.currency||!productForm.name.trim()||!productForm.taxProfileId||parseMoneyInputToMinorUnits(productForm.amount)===null}>Crear producto</button>{!admin.operational.currency&&<small>Configure primero la moneda.</small>}
-        </form>
-        <h4>Asignación fiscal de productos</h4>{tax.products.map(product=><div key={product.id}>{product.name}<select aria-label={`Impuesto de ${product.name}`} value={product.taxProfileId} disabled={busy} onChange={e=>void run(()=>edge.executeTaxAdministration({kind:'ASSIGN_PRODUCT_TAX_PROFILE',commandId:commandId(),expectedVersion:product.version,reason,productId:product.id,profileId:e.target.value}),'Impuesto de producto actualizado.')}><option value="">Seleccione…</option>{tax.profiles.filter(p=>p.active).map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></div>)}
-      </section>:<div/>}
-      {admin&&configuration?<section><h3>Propinas</h3><p>Control Cloud firmado: {tipPolicy?tipPolicy.ownerConfigurable?'delegado al OWNER':'no delegable':'configuración legacy (sin delegación)'}. Preferencia local: {admin.operational.tipPreferences?'configurada':'no configurada'}. Efectiva: {effectiveTipPercentages.map(x=>`${x/100}%`).join(', ')||'sin porcentajes'}.</p>
-        <button disabled={busy||!tipPolicy?.ownerConfigurable} onClick={()=>void run(()=>edge.executeRestaurantAdministration({kind:'SET_TIP_PREFERENCES',commandId:commandId(),expectedVersion:admin.operational.version,reason,preferences:{enabled:true,percentageOptionsBasisPoints:tipPolicy?.allowPercentages?tipPolicy.allowedPercentagesBasisPoints:[],fixedAmountEnabled:tipPolicy?.allowFixedAmount??false}}),'Preferencias locales habilitadas dentro de la política Cloud.')}>Habilitar lo permitido</button>
-        <button disabled={busy||!tipPolicy?.ownerConfigurable} onClick={()=>void run(()=>edge.executeRestaurantAdministration({kind:'SET_TIP_PREFERENCES',commandId:commandId(),expectedVersion:admin.operational.version,reason,preferences:{enabled:false,percentageOptionsBasisPoints:[],fixedAmountEnabled:false}}),'Propinas locales deshabilitadas.')}>Deshabilitar localmente</button>
-      </section>:<div/>}
-      {people?<form data-draft="person" onSubmit={(e:FormEvent)=>{e.preventDefault();if(!validPersonnelPin(person.pin))return;const id=commandId();void run(()=>edge.executePersonnel({kind:'ENROLL',commandId:id,userId:commandId(),expectedVersion:0,reason,displayName:person.displayName,newPin:person.pin,roles:[person.role],status:'ACTIVE'}),'Persona creada.','person');}}><h3>Personal</h3>
-        {people.ownerRecoveryRequired&&<p className="error-banner">Owner Recovery requerido.</p>}<ul>{people.users.map(x=><li key={x.userId}>{x.displayName} · {x.roles.join(', ')} · {x.status}{x.restrictions.length?` · ${x.restrictions.join(', ')}`:''}
-          <button type="button" disabled={busy} onClick={()=>{const displayName=ask('Nombre visible',x.displayName);if(displayName)void run(()=>edge.executePersonnel({kind:'RENAME',commandId:commandId(),userId:x.userId,expectedVersion:x.version,reason,displayName}),'Persona renombrada; vuelva a iniciar sesión si corresponde.');}}>Renombrar</button>
-          <button type="button" disabled={busy} onClick={()=>changeRoles(x)}>Roles</button>
-          <button type="button" disabled={busy} onClick={()=>{capturePin(x.userId===currentUserId,({newPin,oldPin})=>{void run(()=>edge.executePersonnel({kind:'ROTATE_CREDENTIAL',commandId:commandId(),userId:x.userId,expectedVersion:x.version,reason,newPin,...(oldPin?{oldPin}:{})}),'PIN cambiado; las sesiones anteriores quedaron invalidadas.');});}}>Cambiar PIN</button>
-          <button type="button" disabled={busy} onClick={()=>void run(()=>edge.executePersonnel({kind:'INVALIDATE_SESSIONS',commandId:commandId(),userId:x.userId,expectedVersion:x.version,reason}),'Sesiones invalidadas.')}>Invalidar sesiones</button>
-          {x.restrictions.some(r=>r!=='USER_DISABLED')&&<button type="button" disabled={busy} onClick={()=>{capturePin(false,({newPin})=>{const kind=x.restrictions.includes('USER_SECURITY_REPAIR_REQUIRED')?'REPAIR':'RESOLVE_RESTORED_USER';void run(()=>edge.executePersonnel({kind,commandId:commandId(),userId:x.userId,expectedVersion:x.version,reason,newPin,roles:x.roles as Array<'OWNER'|'MANAGER'|'CASHIER'|'WAITER'|'KITCHEN'>,status:'ACTIVE'}),'Persona revalidada mediante una decisión OWNER nueva.');});}}>Revalidar</button>}
-          <button type="button" disabled={busy||x.roles.includes('OWNER')} onClick={()=>{if(x.status==='ACTIVE'){if(confirmDeactivate(`a ${x.displayName}`))void run(()=>edge.executePersonnel({kind:'DISABLE',commandId:commandId(),userId:x.userId,expectedVersion:x.version,reason}),'Persona desactivada.');}else{capturePin(false,({newPin})=>{void run(()=>edge.executePersonnel({kind:'REENABLE',commandId:commandId(),userId:x.userId,expectedVersion:x.version,reason,newPin,roles:x.roles as Array<'OWNER'|'MANAGER'|'CASHIER'|'WAITER'|'KITCHEN'>}),'Persona reactivada con credencial nueva.');});}}}>{x.status==='ACTIVE'?'Desactivar':'Reactivar'}</button></li>)}</ul>
-        <Field label="Nombre" value={person.displayName} set={v=>setPerson({...person,displayName:v})}/><Field label="PIN nuevo" value={person.pin} set={v=>setPerson({...person,pin:v})}/><select value={person.role} onChange={e=>setPerson({...person,role:e.target.value as typeof person.role})}>{['MANAGER','CASHIER','WAITER','KITCHEN'].map(r=><option key={r}>{r}</option>)}</select><button disabled={busy}>Crear persona</button>
-      </form>:<div/>}
-    </div></div></section>{pinRequest&&<PersonnelPinDialog requireCurrent={pinRequest.requireCurrent} onCancel={()=>setPinRequest(null)} onSubmit={values=>{const request=pinRequest;setPinRequest(null);request.submit(values);}}/>}</div>;
+import {
+  Button,
+  InlineAlert,
+  TechnicalDetails,
+  getUserGuidance,
+  guidanceTone,
+} from '@comanview/ui';
+import { AdministrationShell, PrerequisiteSummary } from './AdministrationShell.js';
+import { ActiveAdministrationSection } from './AdministrationSections.js';
+import {
+  useAdministrationController,
+  type AdministrationProps,
+} from './useAdministrationController.js';
+import { PersonnelPinDialog } from './PersonnelPinDialog.js';
+export {
+  CashRegisterCreateAction,
+  cashRegisterCreationIssue,
+  administrationErrorMessage,
+  administrationErrorGuidance,
+} from './AdministrationFields.js';
+
+export function AdministrationPanel(props: AdministrationProps) {
+  const state = useAdministrationController(props);
+  const {
+    permissions,
+    admin,
+    people,
+    error,
+    errorGuidance,
+    notice,
+    busy,
+    drafts,
+    markDirty,
+    activeSection,
+    section,
+    confirm,
+    dialogs,
+    dialogOpen,
+    lastEdit,
+    clearEdit,
+    conflict,
+    setConflict,
+    conflictConsulted,
+    conflictDraft,
+    loaded,
+    resourceErrors,
+    setProfileVersion,
+    setDayVersion,
+    setCurrencyVersion,
+    pinRequest,
+    setPinRequest,
+    profile,
+    setRegister,
+    setStation,
+    setZone,
+    setTable,
+    setTaxForm,
+    setPerson,
+    setAssignment,
+    setProductForm,
+    load,
+    close,
+    navigate,
+    permitted,
+  } = state;
+  return (
+    <AdministrationShell
+      section={activeSection}
+      permissions={permissions}
+      busy={busy}
+      dirtySections={[
+        ...new Set(
+          drafts.pendingKeys.flatMap((key) => (drafts.get(key) ? [drafts.get(key)!.section] : [])),
+        ),
+      ]}
+      onNavigate={(target) => void navigate(target)}
+      onClose={() => void close()}
+    >
+      <PrerequisiteSummary
+        admin={permissions.includes('ADMINISTRATION_VIEW') ? admin : null}
+        people={permissions.includes('PERSONNEL_VIEW') ? people : null}
+        permissions={permissions}
+        readiness={state.readiness}
+        onReadiness={() => void state.consultReadiness()}
+        onNavigate={(target) => void navigate(target)}
+      />
+      <div
+        onChangeCapture={(e) => {
+          const key = (e.target as HTMLElement).closest('[data-draft]')?.getAttribute('data-draft');
+          if (key) markDirty(key);
+        }}
+      >
+        {error && !conflict && (
+          <InlineAlert
+            tone={errorGuidance ? guidanceTone(errorGuidance) : 'error'}
+            title={errorGuidance?.title}
+            urgent
+          >
+            {error}
+            {errorGuidance?.action ? (
+              <Button type="button" onClick={() => navigate(errorGuidance.action!.target)}>
+                {errorGuidance.action.label}
+              </Button>
+            ) : null}
+          </InlineAlert>
+        )}
+        {notice && !error && !conflict && !drafts.dirty && !state.reconciliationPending && <InlineAlert tone="success">{notice}</InlineAlert>}
+        {state.reconciliationPending && !busy && <InlineAlert tone="warning" title="Guardado confirmado; consulta pendiente">
+          No repitas el cambio. Consulta el estado guardado antes de realizar otra operación.
+          <Button type="button" onClick={()=>void load(true)}>Consultar guardado</Button>
+        </InlineAlert>}
+        <p className="administration-hint">
+          {drafts.dirty
+            ? 'Hay borradores sin guardar. Puedes cambiar de apartado sin perderlos; guárdalos antes de salir.'
+            : 'Los cambios se aplican al pulsar el botón de guardar de cada apartado.'}
+        </p>
+        {Object.entries(resourceErrors).map(([key, text]) => (
+          <InlineAlert key={key} tone="error" urgent>
+            {text}{' '}
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={busy}
+              onClick={() => void load(true)}
+            >
+              Reintentar
+            </Button>
+          </InlineAlert>
+        ))}
+        <div className="admin-section-toolbar">
+          {!conflict && (lastEdit || Object.keys(resourceErrors).length > 0) && (
+            <Button type="button" variant="secondary" disabled={busy} onClick={() => void load(true)}>
+              Actualizar sección
+            </Button>
+          )}
+          {drafts.keys(activeSection).some((key) => drafts.has(key)) && (
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={busy}
+              onClick={async () => {
+                if (
+                  await confirm(
+                    'Se descartarán solamente los cambios pendientes de este apartado y se consultará la configuración guardada. ¿Continuar?',
+                  )
+                ) {
+                  for (const key of drafts.keys(activeSection)) {
+                    drafts.saved(key);
+                    if (key.startsWith('choice:')) state.discardChoice(key);
+                  }
+                  if (activeSection === 'registers')
+                    setRegister({ name: 'Caja principal', blindCashCount: true });
+                  if (activeSection === 'stations') {
+                    setStation({ name: 'Cocina', purpose: 'KITCHEN' });
+                    setAssignment({ productId: '', stationId: '', version: 0 });
+                  }
+                  if (activeSection === 'zones-tables') {
+                    setZone('Salón');
+                    setTable({
+                      name: 'Mesa 1',
+                      capacity: '4',
+                      zoneId: admin?.zones.find((z) => z.active)?.id ?? '',
+                    });
+                  }
+                  if (activeSection === 'taxes') {
+                    setTaxForm({ name: 'IVA', rate: '16', mode: 'TAX_INCLUDED' });
+                    setProductForm({ name: '', amount: '', taxProfileId: '' });
+                  }
+                  if (activeSection === 'personnel')
+                    setPerson({ displayName: '', pin: '', role: 'CASHIER' });
+                  setConflict(false);
+                  await load(true);
+                }
+              }}
+            >
+              Descartar borrador de este apartado
+            </Button>
+          )}
+        </div>
+        {lastEdit && !busy && !dialogOpen && !conflict && (
+          <InlineAlert tone="warning" title="Edición pendiente">
+            <p>
+              {lastEdit.label}: {lastEdit.value}
+            </p>
+            <p>
+              Actualiza la lista y vuelve a abrir la edición del mismo elemento para aplicar este
+              valor sobre su estado actual.
+            </p>
+            <Button type="button" variant="ghost" onClick={clearEdit}>
+              Descartar esta edición
+            </Button>
+          </InlineAlert>
+        )}
+        {conflict && (
+          <InlineAlert tone="warning" title="La configuración cambió" urgent>
+            Tu intención local se conserva. Consulta el estado actual antes de volver a guardar.
+            {lastEdit && <p><strong>Edición pendiente</strong><br/>{lastEdit.label}: {lastEdit.value}</p>}
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={busy}
+              onClick={() => void load(true)}
+            >
+              Consultar estado actual
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={
+                busy ||
+                !conflictConsulted ||
+                !conflictDraft ||
+                !['profile', 'day', 'currency'].includes(conflictDraft)
+              }
+              onClick={async () => {
+                if (
+                  await confirm(
+                    'Revisa los datos actuales. Usar esta base conservará tu borrador y permitirá enviarlo sobre la versión consultada.',
+                  )
+                ) {
+                  if (admin) {
+                    if (conflictDraft)
+                      drafts.rebase(
+                        conflictDraft,
+                        conflictDraft === 'profile'
+                          ? admin.businessProfile.version
+                          : admin.operational.version,
+                      );
+                    if (activeSection === 'business-profile')
+                      setProfileVersion(admin.businessProfile.version);
+                    if (conflictDraft === 'day') setDayVersion(admin.operational.version);
+                    if (conflictDraft === 'currency') setCurrencyVersion(admin.operational.version);
+                  }
+                  setConflict(false);
+                }
+              }}
+            >
+              Usar la base consultada
+            </Button>
+            <TechnicalDetails>
+              <pre>
+                {JSON.stringify(
+                  activeSection === 'business-profile'
+                    ? {
+                        commercialName: admin?.businessProfile.commercialName,
+                        version: admin?.businessProfile.version,
+                      }
+                    : activeSection === 'day-currency'
+                      ? admin?.operational
+                      : { message: 'Actualiza la lista y vuelve a abrir la edición afectada.' },
+                  null,
+                  2,
+                )}
+              </pre>
+            </TechnicalDetails>
+          </InlineAlert>
+        )}
+        {!loaded ? (
+          <InlineAlert>Cargando sección…</InlineAlert>
+        ) : !permitted ? (
+          <InlineAlert tone="warning" urgent>
+            {getUserGuidance('PERMISSION_DENIED').explanation}
+          </InlineAlert>
+        ) : (
+          <div className="administration-grid" inert={busy || state.reconciliationPending} aria-busy={busy}>
+            <ActiveAdministrationSection state={state} />
+          </div>
+        )}
+      </div>
+      {dialogs}
+      {pinRequest && (
+        <PersonnelPinDialog
+          requireCurrent={pinRequest.requireCurrent}
+          onCancel={() => setPinRequest(null)}
+          onSubmit={(values) => {
+            const request = pinRequest;
+            setPinRequest(null);
+            request.submit(values);
+          }}
+        />
+      )}
+    </AdministrationShell>
+  );
 }
-function Field({label,value,set,inputMode}:{label:string;value:string;set(v:string):void;inputMode?:'decimal'|'numeric'}){return <label>{label}<input type={label==='PIN nuevo'?'password':label==='Email'?'email':label==='Teléfono'?'tel':'text'} inputMode={label==='PIN nuevo'?'numeric':inputMode} minLength={label==='PIN nuevo'?4:undefined} maxLength={label==='PIN nuevo'?12:undefined} pattern={label==='PIN nuevo'?'[0-9]{4,12}':undefined} required={label==='PIN nuevo'} autoComplete={label==='PIN nuevo'?'new-password':undefined} value={value} onChange={e=>set(e.target.value)}/></label>;}function nullable(v:string){return v.trim()||null;}
-export function cashRegisterCreationIssue(currency:string|null,name:string){if(!currency)return 'Establece y guarda primero la moneda en Día y moneda para crear una caja.';if(!name.trim())return 'Escribe un nombre para la caja.';return null;}
-export function CashRegisterCreateAction({busy,issue}:{busy:boolean;issue:string|null}){return <><button disabled={busy||Boolean(issue)}>Crear como predeterminada</button>{issue&&<small role="status">{issue}</small>}</>;}
-export function administrationErrorMessage(e:unknown){if(e instanceof EdgeClientError&&e.code==='CURRENCY_REQUIRED')return 'Establece y guarda primero la moneda en Día y moneda para crear una caja.';return e instanceof Error?e.message:'Error de administración';}
-function message(e:unknown){return administrationErrorMessage(e);}
-async function readLogo(file:File){if(file.size>1048576)throw new Error('El logo excede 1 MiB.');const data=await file.arrayBuffer(),url=URL.createObjectURL(file);try{const image=new Image();await new Promise<void>((ok,fail)=>{image.onload=()=>ok();image.onerror=()=>fail(new Error('Imagen inválida.'));image.src=url;});if(image.naturalWidth>2048||image.naturalHeight>2048)throw new Error('El logo excede 2048 px.');let binary='';for(const byte of new Uint8Array(data))binary+=String.fromCharCode(byte);return{base64:btoa(binary),mime:file.type as 'image/png'|'image/jpeg',width:image.naturalWidth,height:image.naturalHeight};}finally{URL.revokeObjectURL(url);}}

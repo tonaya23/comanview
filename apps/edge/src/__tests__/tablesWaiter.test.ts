@@ -511,7 +511,9 @@ describe('Tables + Waiter vertical slice', () => {
     });
     expect(paymentRejected.statusCode).toBe(409);
     expect(paymentRejected.json().error).toBe('ORDER_EMPTY_CANCEL_NOT_ALLOWED');
-    expect(paymentRejected.json().details).toBeUndefined();
+    expect(paymentRejected.json().details).toEqual({
+      diagnosticId: expect.stringMatching(/^[A-Za-z0-9._:-]{1,160}$/),
+    });
   });
 
   it('returns 403 to a valid role without Waiter permissions', async () => {

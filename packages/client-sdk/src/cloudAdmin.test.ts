@@ -55,4 +55,13 @@ describe('Cloud Admin client', () => {
     expect(error).toBeInstanceOf(CloudAdminClientError);
     expect(error).toMatchObject({ code: 'CLOUD_LOCATION_UNPROVISIONED', status: 409 });
   });
+
+  it('does not retain malformed Cloud error payloads',async()=>{
+    const fetch:CloudAdminFetch=async()=>({ok:false,status:409,
+      headers:{get:(name:string)=>name.toLowerCase()==='x-request-id'?'cloud-req-1':null},
+      async json(){return{error:'NOT_CONTRACTUAL',message:'private',token:'cloud-secret'};}});
+    const error=await createCloudAdminClient({fetch}).getSession().catch((cause:unknown)=>cause);
+    expect(error).toMatchObject({code:'UNKNOWN_CLOUD_ERROR',status:409,details:{diagnosticId:'cloud-req-1'}});
+    expect(JSON.stringify(error)).not.toContain('cloud-secret');
+  });
 });

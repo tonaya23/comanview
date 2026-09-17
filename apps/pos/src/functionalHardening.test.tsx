@@ -1,20 +1,23 @@
+// @vitest-environment jsdom
 import { createElement } from 'react';
+import { cleanup,render,screen } from '@testing-library/react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe,it,expect,vi } from 'vitest';
+import { afterEach,describe,it,expect,vi } from 'vitest';
 import type { EdgeClient } from '@comanview/client-sdk';
 import type { OrderResponse } from '@comanview/contracts';
 import { PersonnelPinDialog,validPersonnelPin } from './PersonnelPinDialog.js';
-import { CashRegisterCreateAction,administrationErrorMessage,cashRegisterCreationIssue } from './AdministrationPanel.js';
+import { CashRegisterCreateAction,administrationErrorGuidance,administrationErrorMessage,cashRegisterCreationIssue } from './AdministrationPanel.js';
 import { EdgeClientError } from '@comanview/client-sdk';
 import { AdministrationDrafts,administrationSections,loadAdministrationResources } from './administrationLoading.js';
 import { discardCounterSale,openCurrentCounterSale,isDiscardableCounterSale } from './counterSales.js';
 
+afterEach(cleanup);
 describe('1W functional hardening',()=>{
   it.each([true,false])('masks every PIN input (current PIN required: %s)',requireCurrent=>{
-    const html=renderToStaticMarkup(createElement(PersonnelPinDialog,{requireCurrent,onSubmit:vi.fn(),onCancel:vi.fn()}));
-    const inputs=html.match(/<input\b[^>]*>/g)??[];
+    render(createElement(PersonnelPinDialog,{requireCurrent,onSubmit:vi.fn(),onCancel:vi.fn()}));
+    const inputs=screen.getByRole('dialog',{name:'Actualizar PIN'}).querySelectorAll('input');
     expect(inputs).toHaveLength(requireCurrent?2:1);
-    for(const input of inputs){expect(input).toContain('type="password"');expect(input).toContain('maxLength="12"');expect(input).toContain('value=""');}
+    for(const input of inputs){expect(input.type).toBe('password');expect(input.maxLength).toBe(12);expect(input.value).toBe('');}
     expect(validPersonnelPin('1234')).toBe(true);expect(validPersonnelPin('123456789012')).toBe(true);
     for(const value of ['123','1234567890123','12ab',' 1234'])expect(validPersonnelPin(value)).toBe(false);
   });
@@ -38,10 +41,13 @@ describe('1W functional hardening',()=>{
     expect(cashRegisterCreationIssue('MXN','Caja principal')).toBeNull();
     expect(administrationErrorMessage(new EdgeClientError('La configuración no fue modificada.','CURRENCY_REQUIRED',409)))
       .toBe('Establece y guarda primero la moneda en Día y moneda para crear una caja.');
+    expect(administrationErrorGuidance(new EdgeClientError('La configuración cambió.','CURRENCY_REQUIRED',409))).toMatchObject({
+      code:'CURRENCY_REQUIRED',action:{target:{surface:'administration',section:'day-currency'}},
+    });
     const blocked=renderToStaticMarkup(createElement(CashRegisterCreateAction,{busy:false,issue:cashRegisterCreationIssue(null,'Caja principal')}));
-    expect(blocked).toContain('<button disabled="">');expect(blocked).toContain('guarda primero la moneda');
+    expect(blocked).toContain('disabled=""');expect(blocked).toContain('aria-describedby="cash-register-create-issue"');expect(blocked).toContain('guarda primero la moneda');
     const ready=renderToStaticMarkup(createElement(CashRegisterCreateAction,{busy:false,issue:cashRegisterCreationIssue('MXN','Caja principal')}));
-    expect(ready).toContain('<button>');expect(ready).not.toContain('disabled');
+    expect(ready).toContain('Crear como predeterminada');expect(ready).not.toContain('disabled');
   });
   it('loads Personnel without calling unauthorized independent endpoints',async()=>{
     const people={users:[],ownerRecoveryRequired:false};

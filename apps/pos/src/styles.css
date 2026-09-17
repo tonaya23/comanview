@@ -1,5 +1,29 @@
 @import '@comanview/ui/tokens.css';
 
+/* Acceptance round 1: compact, bounded status chrome; explanations are opt-in. */
+.pos-shell .topbar { display:grid; grid-template-columns:minmax(180px,1fr) auto; gap:8px 18px; padding:10px 20px; }
+.pos-shell .topbar-statuses { display:contents; }
+.pos-shell .operator-identity { grid-column:2; grid-row:1; padding:4px 8px; gap:8px; min-width:0; }
+.pos-shell .operator-identity>div { max-width:160px; min-width:0; }
+.pos-shell .operator-identity strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.pos-shell .operator-identity button { white-space:nowrap; min-height:40px; }
+.pos-shell .cash-status { grid-column:1; grid-row:2; min-width:0; flex-direction:row; justify-content:flex-start; align-items:center; gap:12px; padding:6px 10px; min-height:40px; }
+.pos-shell .pos-connection { grid-column:2; grid-row:2; min-width:0; max-width:none; padding:6px 10px; position:relative; }
+.pos-connection details>summary { cursor:pointer; font-weight:700; min-height:28px; align-content:center; }
+.pos-status-details { position:absolute; right:0; top:100%; z-index:20; width:min(340px,80vw); display:grid; gap:10px; padding:16px; background:var(--cv-brand-900); color:white; border:1px solid currentColor; border-radius:8px; box-shadow:0 8px 24px #0003; }
+.device-admin .readiness-components { display:flex; flex-direction:column; gap:8px; }
+.readiness-pending>div { margin:0; }
+.readiness-technical,.readiness-checked { margin:12px 0; }
+.readiness-technical>summary,.readiness-checked>summary,.admin-checklist details>summary { cursor:pointer; padding:8px 0; }
+.readiness-checked li,.admin-checklist li { margin:10px 0; }
+@media(max-width:850px){
+  .pos-shell .topbar { grid-template-columns:1fr 1fr; padding:8px 12px; }
+  .pos-shell .brand { grid-column:1/-1; }
+  .pos-shell .operator-identity { grid-column:1/-1; grid-row:2; flex-wrap:wrap; }
+  .pos-shell .cash-status,.pos-shell .pos-connection { grid-row:3; }
+  .pos-shell .cash-status { flex-direction:column; align-items:flex-start; gap:0; }
+}
+
 :root {
   color: var(--cv-text);
   background: var(--cv-app-bg);
@@ -929,8 +953,7 @@ button {
 .administration-panel button:hover:not(:disabled){border-color:#48795e;background:#e9f1e9}.administration-nav button[aria-current]:hover{background:#245440;color:white}
 .administration-panel button:disabled{opacity:.45;cursor:not-allowed}.administration-panel :focus-visible{outline:3px solid #8fbc54;outline-offset:3px}
 .administration-content{overflow-y:auto;padding:20px 32px 32px;flex:1;min-height:0}.administration-hint{font-size:13px;color:#617566;margin:0 0 18px}
-.administration-grid>section,.administration-grid>form{display:none;background:white;border:1px solid #dce5df;border-radius:14px;padding:24px;gap:16px;flex-direction:column}
-.administration-section-0>:nth-child(1),.administration-section-1>:nth-child(2),.administration-section-2>:nth-child(3),.administration-section-3>:nth-child(4),.administration-section-4>:nth-child(5),.administration-section-5>:nth-child(6),.administration-section-6>:nth-child(7),.administration-section-7>:nth-child(8){display:flex}
+.administration-grid>section,.administration-grid>form{display:flex;background:var(--cv-surface);border:1px solid var(--cv-border);border-radius:14px;padding:24px;gap:16px;flex-direction:column}
 .administration-grid h3{font-size:22px;margin:0 0 6px}.administration-grid h4{margin:18px 0 4px;padding-top:18px;border-top:1px solid #e2e8e3;font-size:17px}
 .administration-grid label{display:flex;flex-direction:column;gap:7px;font-size:14px;font-weight:600;color:#415b4c}
 .administration-grid input,.administration-grid select{font:inherit;min-height:44px;padding:10px 12px;border:1px solid #c5d4ca;border-radius:8px;background:#fff;color:#203c33;max-width:100%;width:100%}
@@ -941,6 +964,43 @@ button {
 .restaurant-logo-upload{display:flex;gap:22px;align-items:center;padding:22px;border:1px dashed #aebfae;border-radius:14px;background:#f6f9f3}.restaurant-logo-upload>div:last-child{flex:1;min-width:0;display:grid;gap:10px}.restaurant-logo-upload img,.restaurant-logo-placeholder{width:104px;height:104px;object-fit:contain;border-radius:14px;background:white;border:1px solid #dce5df;flex-shrink:0}.restaurant-logo-placeholder{display:grid;place-items:center;color:#6b806e;font-size:16px}.restaurant-logo-upload input[type=file]{border:0;padding:0;background:transparent;font-size:13px}.restaurant-logo-upload input::file-selector-button{border:0;border-radius:9px;padding:12px 18px;background:#245440;color:white;font:inherit;font-weight:650;margin-right:12px;cursor:pointer}.restaurant-logo-upload input::file-selector-button:hover{background:#173f34}.restaurant-logo-upload button{justify-self:start}
 @media(max-width:640px){.restaurant-logo-upload{align-items:flex-start;flex-direction:column}}
 @media(max-width:640px){.administration-backdrop{padding:0}.administration-panel{height:100dvh;border-radius:0}.administration-header{padding:18px;align-items:flex-start}.administration-header h2{font-size:23px}.administration-header p{font-size:13px}.administration-nav{padding:10px 12px}.administration-content{padding:16px}.administration-grid>section,.administration-grid>form{padding:16px}}
+.administration-shell {width:min(1200px,100%);height:min(920px,calc(100dvh - 32px));display:flex;flex-direction:column;overflow:hidden;padding:20px;background:var(--cv-surface-subtle)}
+.administration-shell>h2{margin:0}.administration-shell>p{margin:6px 0;color:var(--cv-text-muted)}
+.admin-shell-toolbar{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:10px 0;border-bottom:1px solid var(--cv-border)}
+.admin-shell-layout{display:grid;grid-template-columns:210px minmax(0,1fr);min-height:0;flex:1}
+.admin-save-actions { position:sticky; bottom:0; z-index:2; padding:10px 0; background:var(--cv-surface-subtle); box-shadow:0 -6px 10px var(--cv-surface-subtle); }
+.administration-shell .admin-shell-layout { overflow-y:auto; align-items:start; scroll-padding-block:16px 80px; }
+.administration-shell .admin-shell-navigation { position:sticky; top:0; overflow:visible; padding-top:6px; }
+.administration-shell .admin-shell-navigation h3 { margin-top:8px; }
+@media(max-height:800px) { .administration-shell .admin-shell-navigation { position:static; } }
+.administration-shell .administration-content { overflow:visible; }
+.administration-shell [data-draft] > .cv-button:not([type='button']) { position:sticky; bottom:0; z-index:1; box-shadow:0 0 0 6px var(--cv-surface-subtle); }
+.admin-shell-navigation{overflow-y:auto;padding:12px 12px 12px 0;border-right:1px solid var(--cv-border)}
+.admin-shell-navigation h3{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--cv-text-muted);margin:18px 10px 6px}
+.admin-shell-navigation .cv-button{display:flex;width:100%;justify-content:flex-start;text-align:left;margin:2px 0}
+.admin-shell-navigation .cv-button[aria-current]{background:var(--cv-brand-700);color:white}
+.administration-shell .administration-content{padding:18px;min-width:0}
+.admin-checklist{padding:12px;border:1px solid var(--cv-border);border-radius:var(--cv-radius-md);margin-bottom:16px}
+.admin-checklist summary{min-height:44px;align-content:center;font-weight:700}.admin-checklist .cv-alert{margin:8px 0}
+.admin-section-toolbar{display:flex;flex-wrap:wrap;gap:10px;margin:12px 0}
+.pos-connection{max-width:310px;display:grid;gap:4px;padding:12px;border-radius:var(--cv-radius-md);background:var(--cv-brand-800);color:white}.pos-connection small{line-height:1.4}.pos-connection--error{background:var(--cv-danger-text)}.pos-connection--warning{background:var(--cv-warning-bg);color:var(--cv-warning-text)}
+.pos-action{min-width:0;display:flex;flex-direction:column;gap:6px}.pos-action>button{width:100%;min-height:44px}.pos-action>small{font-size:.78rem;line-height:1.4;color:var(--cv-text-muted);text-align:left}.product-grid>.pos-action>.product-card{flex:1}.order-actions>.pos-action{min-width:0}
+.pos-shell>.cv-alert{margin:10px 18px}.pos-shell .order-item-actions button,.pos-shell .void-payment-button,.pos-shell .feedback button,.pos-shell .category-button{min-height:44px;min-width:44px}
+.pos-operational-dialog{position:relative;display:block;padding:24px;width:min(620px,100%)}.pos-operational-dialog>h2{padding-right:90px;margin:0 0 18px}.pos-dialog-close{position:absolute;right:14px;top:14px}.pos-operational-dialog button{min-height:44px;min-width:44px}.pos-operational-dialog label{display:grid;gap:7px}.pos-operational-dialog .cv-alert{margin:12px 0}.pos-operational-dialog input,.pos-operational-dialog textarea{font-size:16px}.pos-operational-dialog .modal-heading{display:none}.pos-operational-dialog form{clear:both}
+.pos-payment-summary{display:grid;gap:10px;padding:16px;background:var(--cv-surface-subtle);border-radius:var(--cv-radius-md)}.pos-payment-summary>div{display:flex;justify-content:space-between;gap:12px}.pos-payment-summary dd{margin:0;font-weight:750}.pos-payment-summary>div:last-child{font-size:1.25rem;border-top:1px solid var(--cv-border);padding-top:12px}
+.pos-print-status{padding:12px 18px}.pos-print-status summary{min-height:44px;align-content:center;font-weight:700}.pos-print-status ul{list-style:none;padding:0;display:grid;gap:10px}.pos-print-status li{display:flex;justify-content:space-between;gap:20px;padding:10px;border-bottom:1px solid var(--cv-border)}
+.pos-device-dialog>h2{padding:20px 24px 0;margin:0}.pos-device-dialog .device-admin-header{position:static}
+@media(max-width:1100px){.topbar-statuses{flex-wrap:wrap}.pos-connection{max-width:none;flex:1}.order-header-actions{flex-wrap:wrap}.order-header-actions>.pos-action{flex:1}.pos-shell .order-item{gap:12px}.pos-shell .order-item-actions{flex-wrap:wrap}}
+@media(max-width:900px){.pos-operational-dialog{width:min(680px,100%);max-height:calc(100dvh - 24px);padding:20px}.pos-shell .order-actions{grid-template-columns:repeat(2,minmax(0,1fr))}.pos-shell .product-grid{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}}
+.administration-shell .administration-grid .cv-button{align-self:flex-start}
+.administration-shell .administration-grid .cv-field>label{display:block}
+.administration-shell label:has(input[type=checkbox]),.administration-editor label:has(input[type=checkbox]){min-height:44px;display:flex;align-items:center;gap:10px;cursor:pointer}
+.administration-editor form{display:grid;gap:16px}.administration-editor fieldset{display:grid;gap:8px;border:1px solid var(--cv-border);border-radius:var(--cv-radius-sm)}
+.administration-shell fieldset{min-width:0}.administration-shell pre{white-space:pre-wrap;overflow-wrap:anywhere}
+.administration-shell .admin-edit-scope{border:0;padding:0;margin:0;display:grid;gap:16px}
+.admin-edit-scope>form,.admin-edit-scope>section{display:flex;flex-direction:column;gap:16px;padding:20px;background:var(--cv-surface);border:1px solid var(--cv-border);border-radius:var(--cv-radius-md)}
+@media(max-width:900px){.administration-shell{padding:12px}.admin-shell-layout{grid-template-columns:172px minmax(0,1fr)}.administration-shell .administration-content{padding:12px}.administration-grid li{padding:12px}.admin-shell-toolbar>span{max-width:28ch}}
+@media(max-width:600px){.admin-shell-layout{grid-template-columns:140px minmax(0,1fr)}.administration-shell{padding:8px}.admin-shell-navigation{padding-right:6px}.admin-shell-navigation .cv-button{padding:10px 8px}.administration-grid>section,.administration-grid>form{padding:12px}.admin-shell-toolbar>span{display:none}}
 
 .payment-modal {
   width: min(500px, 100%);
@@ -2134,4 +2194,55 @@ button {
   .device-admin-header,.admin-section { margin-left: 12px; margin-right: 12px; }.device-admin-header { padding-left: 4px; padding-right: 4px; }
   .device-admin-feedback { padding-left: 12px; padding-right: 12px; }
   .readiness-summary,.pairing-approval { grid-template-columns: 1fr; }
+}
+
+/* Round 2: the panel owns its scroll; financial actions remain in normal flex flow. */
+@media (min-width: 768px) {
+  .pos-shell { height: 100dvh; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+  .pos-shell > .topbar { flex: 0 0 auto; }
+  .pos-shell > .workspace { flex: 1; min-height: 0; width: 100%; overflow: hidden; padding: 8px 12px; }
+  .pos-shell .order-panel { position: static; height: 100%; min-height: 0; align-self: stretch; }
+  .pos-shell .products-panel,.pos-shell .categories-panel { min-height: 0; overflow: auto; padding: 12px; }
+  .pos-shell .order-header { flex: 0 0 auto; padding: 10px 12px; display: block; }
+  .pos-shell .order-header-actions { display: grid; grid-template-columns:1fr 1fr auto; gap: 6px; margin-top: 6px; }
+  .pos-shell .order-header h2 { margin:2px 0; font-size:1.2rem; }
+  .pos-shell .order-header-actions button { padding:4px 6px; font-size:.75rem; line-height:1.15; }
+  .pos-shell .order-header-actions .open-tables-button span { min-width:18px; min-height:18px; margin-left:2px; }
+  .pos-shell .order-items { min-height: 0; padding: 4px 10px 8px; }
+  .pos-shell .order-summary { flex: 0 0 auto; padding: 6px 10px; max-height: 55%; overflow: auto; }
+  .pos-shell .order-items { flex:1 1 auto; }
+  .pos-shell .order-actions { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 6px; }
+  .pos-shell .order-actions button { min-height: 44px; padding: 6px; }
+  .pos-shell .financial-lines { padding: 4px 0; }
+  .pos-shell .financial-lines > div { padding: 2px 0; }
+  .pos-shell .order-empty { min-height: 0; padding: 16px; }
+  .pos-shell > .pos-print-status { flex: 0 0 auto; margin: 0 12px 6px; max-height: 15vh; overflow: auto; padding:4px 6px; }
+  .pos-shell > .pos-print-status .cv-alert { padding: 6px 10px; }
+}
+.pos-shell .order-item { min-height: 64px; padding: 6px 8px; gap: 8px; margin-bottom: 5px; }
+.pos-shell .order-item-actions { display: grid; grid-template-columns: auto auto; gap: 4px; align-items: center; }
+.pos-shell .order-item-actions > strong { grid-column: 1/-1; text-align: right; }
+.pos-shell .order-item-actions button { min-width: 44px; min-height: 44px; }
+.pos-shell .item-group { margin-top: 6px; }
+.payment-workspace { width: min(960px,calc(100vw - 32px)); }
+.payment-workspace-grid { display: grid; grid-template-columns: minmax(200px,.7fr) minmax(0,1.3fr); gap: 20px; align-items: start; }
+.payment-workspace .pos-payment-summary { position: sticky; top: 0; margin: 0; }
+.payment-workspace form { min-width: 0; display: grid; gap: 8px; }
+.payment-workspace form > * { margin-top: 0; margin-bottom: 0; }
+.payment-workspace .tip-options { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px; }
+.payment-workspace .tip-options button { flex: 1 0 70px; min-height: 44px; padding: 6px; }
+.payment-workspace .method-selector button,.payment-workspace input { min-height: 44px; padding: 8px; }
+.payment-workspace .cash-tender-feedback { min-height: 0; padding: 0; }
+.payment-workspace .cash-quick-input { gap: 4px; }
+.payment-workspace .cash-quick-input button { min-height: 44px; padding: 4px; }
+.payment-workspace .change-row { padding: 6px 10px; }
+.payment-workspace .confirm-payment { position: sticky; bottom: 0; min-height: 44px; z-index: 1; margin: 0; box-shadow: 0 -4px 0 var(--cv-surface); }
+@media (max-width: 900px) and (min-width: 768px) {
+  .pos-shell > .workspace { grid-template-columns: minmax(0,1fr) minmax(340px,1fr); grid-template-rows: auto minmax(0,1fr); }
+  .pos-shell .categories-panel { grid-column: 1/-1; max-height: 64px; padding: 6px; }
+  .pos-shell .order-header h2 { font-size: 1.15rem; }
+}
+@media (max-width: 760px) {
+  .payment-workspace-grid { grid-template-columns: 1fr; gap: 8px; }
+  .payment-workspace .pos-payment-summary { position: static; padding: 8px; }
 }

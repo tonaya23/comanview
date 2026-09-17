@@ -5,7 +5,7 @@ import type { DeviceRepository } from '@comanview/database';
 import type { DeviceType, InstallationAuthorizationEnvelope } from '@comanview/contracts';
 import { hashPairingCode, verifyInstallationAuthorization } from '@comanview/licensing';
 import type { AuthenticatedActor } from '../../app/authContext.js';
-import { AppError } from '../../app/errorHandler.js';
+import { AppError,parseContractErrorCode } from '../../app/errorHandler.js';
 import type { EdgeLicenseManager } from '../licensing/EdgeLicenseManager.js';
 import { addRevokedDevice, type RecoverySecurityStore } from '../backup/RecoverySecurityStore.js';
 import type { BackupManager } from '../backup/BackupManager.js';
@@ -137,5 +137,5 @@ export class DeviceService {
   private pairing(row:{pairing:any;device:any},now:Date){return {pairingId:row.pairing.pairingId,status:row.pairing.expiresAt<=now&&row.pairing.status==='PENDING'?'EXPIRED':row.pairing.status,device:this.device(row.device),expiresAt:row.pairing.expiresAt.toISOString()};}
   private device(d:any){return {deviceId:d.id,displayName:d.name,type:d.deviceType,status:d.status,createdAt:d.createdAt.toISOString(),activatedAt:d.activatedAt?.toISOString()??null,revokedAt:d.revokedAt?.toISOString()??null};}
   private auditEntry(action:any,entityType:any,entityId:string,actorType:any,reason:string,now:Date,actor:AuthenticatedActor|null,authorizationId?:string,commandId:string|null=null,outcome:'SUCCESS'|'REJECTED'='SUCCESS'){return {auditId:EntityId.generate().toString(),occurredAt:now,tenantId:this.context.tenantId,locationId:this.context.locationId,deviceId:actor?.deviceId??null,sessionId:actor?.sessionId??null,actorUserId:actor?.userId??null,actorRole:actor?.roles[0]??null,actorType,authorizationId:authorizationId??null,source:actorType==='USER'?null:actorType==='SYSTEM'?'DEVICE_PAIRING_FLOW':'CLOUD_INSTALLATION_AUTHORIZATION',authorizedByUserId:null,authorizedByRole:null,action,entityType,entityId,outcome,reason,commandId,before:null,after:null,amountAffected:null,currency:null,eventId:null};}
-  private mapStateError(error:unknown):never{const code=error instanceof Error?error.message:'INTERNAL_ERROR';if(['PAIRING_ALREADY_CONSUMED','INSTALLATION_BOOTSTRAP_CLOSED','DEVICE_NOT_AUTHORIZED','DEVICE_ALREADY_REGISTERED'].includes(code))throw new AppError(code,409,code);throw error;}
+  private mapStateError(error:unknown):never{const code=parseContractErrorCode(error instanceof Error?error.message:null);if(code==='PAIRING_ALREADY_CONSUMED'||code==='INSTALLATION_BOOTSTRAP_CLOSED'||code==='DEVICE_NOT_AUTHORIZED'||code==='DEVICE_ALREADY_REGISTERED')throw new AppError(code,409,code);throw error;}
 }

@@ -1,9 +1,35 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { createEdgeClient, EdgeClientError, clearDevicePairing, createClientDevicePairing, createDeviceIdentity,
-  getDeviceOnboardingState, loadDeviceIdentity, loadDevicePairing, markDeviceAuthorizationStatus,
-  requestPairingWithIdentityRotation, saveDeviceIdentity, saveDevicePairing,
-  type ClientDeviceIdentity, type ClientDevicePairing } from '@comanview/client-sdk';
-import { DeviceOnboardingCard } from '@comanview/ui';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+  type FormEvent,
+} from 'react';
+import {
+  createEdgeClient,
+  EdgeClientError,
+  clearDevicePairing,
+  createClientDevicePairing,
+  createDeviceIdentity,
+  getDeviceOnboardingState,
+  loadDeviceIdentity,
+  loadDevicePairing,
+  markDeviceAuthorizationStatus,
+  requestPairingWithIdentityRotation,
+  saveDeviceIdentity,
+  saveDevicePairing,
+  type ClientDeviceIdentity,
+  type ClientDevicePairing,
+} from '@comanview/client-sdk';
+import {
+  Dialog,
+  InlineAlert,
+  LocalConnectionStatus,
+  type LocalConnection,
+  DeviceOnboardingCard,
+} from '@comanview/ui';
 import {
   PermissionCodes,
   OperationalRealtimeMessageSchema,
@@ -22,6 +48,8 @@ import {
   waiterError,
   tableStatusLabel,
 } from './waiterLogic.js';
+
+import { initialNavigation, waiterNavigation, waiterContextProblem } from './waiterNavigation.js';
 
 const tokenKey = 'comanview.waiter.sessionToken';
 const edge = createEdgeClient({
@@ -42,16 +70,19 @@ export function App() {
   const [pin, setPin] = useState('');
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loginPending, setLoginPending] = useState(false);
-  const [deviceIdentity,setDeviceIdentity]=useState<ClientDeviceIdentity|null>(null);
-  const [pairing,setPairing]=useState<ClientDevicePairing|null>(null);
-  const [pairingDisplayName,setPairingDisplayName]=useState('Waiter');
-  const [pairingPending,setPairingPending]=useState(false);
+  const [deviceIdentity, setDeviceIdentity] = useState<ClientDeviceIdentity | null>(null);
+  const [pairing, setPairing] = useState<ClientDevicePairing | null>(null);
+  const [pairingDisplayName, setPairingDisplayName] = useState('Waiter');
+  const [pairingPending, setPairingPending] = useState(false);
   const [tables, setTables] = useState<RestaurantTableResponse[]>([]);
   const [categories, setCategories] = useState<CategoryResponse[]>([]);
   const [products, setProducts] = useState<ProductResponse[]>([]);
-  const [categoryId, setCategoryId] = useState<string | null>(null);
+  const [navigation, navigate] = useReducer(waiterNavigation, initialNavigation);
+  const { categoryId, zoneId: selectedZone } = navigation;
+  const setCategoryId = (id: string | null) => navigate({ type: 'category', id });
+  const setSelectedZone = (id: string) => navigate({ type: 'zone', id });
   const [productSearch, setProductSearch] = useState('');
-  const [order, setOrder] = useState<OrderResponse | null>(null);
+  const [order, storeOrder] = useState<OrderResponse | null>(null);
   const [configuration, setConfiguration] = useState<ConfigurationState | null>(null);
   const [configurationError, setConfigurationError] = useState<string | null>(null);
   const [tablePickerOpen, setTablePickerOpen] = useState(false);
@@ -59,54 +90,163 @@ export function App() {
   const [tableError, setTableError] = useState<string | null>(null);
   const [cancelTableOpen, setCancelTableOpen] = useState(false);
   const [cancelTableError, setCancelTableError] = useState<string | null>(null);
-  const [selectedZone, setSelectedZone] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [connection, setConnection] = useState<'CONNECTED' | 'DISCONNECTED'>('CONNECTED');
+  const [connection, setConnection] = useState<LocalConnection>('CONNECTING');
+  const [realtime, setRealtime] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (!notice || !['Producto agregado.', 'Cambios guardados en el pedido.'].includes(notice)) return;
+    const timer = window.setTimeout(() => setNotice(null), 4000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+  useEffect(() => {
+    setNotice((current) => current === 'Producto agregado.' ? null : current);
+  }, [navigation.view]);
+  const viewRef = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    viewRef.current?.focus();
+  }, [navigation.view]);
+  const refreshSequence = useRef(0);
   const orderRef = useRef(order);
   orderRef.current = order;
+  const setOrder = useCallback((next: OrderResponse | null) => {
+    if (next && next.id === orderRef.current?.id && next.version < orderRef.current.version) return;
+    orderRef.current = next;
+    storeOrder(next);
+  }, []);
 
+  const invalidateContext = useCallback((message: string) => {
+    orderRef.current = null;
+    setOrder(null);
+    navigate({ type: 'invalidated' });
+    setConfiguration(null);
+    setTablePickerOpen(false);
+    setCancelTableOpen(false);
+    setNotice(message);
+  }, []);
   const clearSession = useCallback(() => {
     window.localStorage.removeItem(tokenKey);
     setUser(null);
+    orderRef.current = null;
     setOrder(null);
+    navigate({ type: 'reset' });
+    setConfiguration(null);
+    setTablePickerOpen(false);
+    setCancelTableOpen(false);
+    setError(null);
+    setNotice(null);
+    setConnection('CONNECTING');
     setTables([]);
   }, []);
-  useEffect(()=>{void loadDeviceIdentity().then(async(v)=>{const identity=v??createDeviceIdentity('WAITER','Waiter');if(!v)await saveDeviceIdentity(identity);setDeviceIdentity(identity);setPairingDisplayName(identity.displayName);});},[]);
-  useEffect(()=>{void loadDevicePairing().then(value=>{if(value)setPairing(value);});},[]);
-  useEffect(()=>{if(!user||!deviceIdentity||deviceIdentity.authorizationStatus==='ACTIVE')return;
-    void markDeviceAuthorizationStatus(deviceIdentity.deviceId,'ACTIVE').then(active=>{if(active)setDeviceIdentity(active);});
-  },[user,deviceIdentity]);
-  useEffect(()=>{if(!pairing?.requestToken||!deviceIdentity)return;const poll=()=>void edge.getPairingStatus(pairing.pairingId,pairing.requestToken)
-    .then(async status=>{if(status.status==='ACTIVE'){const active=await markDeviceAuthorizationStatus(deviceIdentity.deviceId,'ACTIVE');if(active)setDeviceIdentity(active);await clearDevicePairing(pairing.pairingId);setPairing(null);setLoginError(null);return;}
-      const next={...pairing,currentStatus:status.status};await saveDevicePairing(next,pairing.pairingId);setPairing(next);}).catch(()=>undefined);
-    poll();const timer=window.setInterval(poll,2_000);return()=>window.clearInterval(timer);},[pairing?.pairingId,pairing?.requestToken]);
+  useEffect(() => {
+    void loadDeviceIdentity().then(async (v) => {
+      const identity = v ?? createDeviceIdentity('WAITER', 'Waiter');
+      if (!v) await saveDeviceIdentity(identity);
+      setDeviceIdentity(identity);
+      setPairingDisplayName(identity.displayName);
+    });
+  }, []);
+  useEffect(() => {
+    void loadDevicePairing().then((value) => {
+      if (value) setPairing(value);
+    });
+  }, []);
+  useEffect(() => {
+    if (!user || !deviceIdentity || deviceIdentity.authorizationStatus === 'ACTIVE') return;
+    void markDeviceAuthorizationStatus(deviceIdentity.deviceId, 'ACTIVE').then((active) => {
+      if (active) setDeviceIdentity(active);
+    });
+  }, [user, deviceIdentity]);
+  useEffect(() => {
+    if (!pairing?.requestToken || !deviceIdentity) return;
+    const poll = () =>
+      void edge
+        .getPairingStatus(pairing.pairingId, pairing.requestToken)
+        .then(async (status) => {
+          if (status.status === 'ACTIVE') {
+            const active = await markDeviceAuthorizationStatus(deviceIdentity.deviceId, 'ACTIVE');
+            if (active) setDeviceIdentity(active);
+            await clearDevicePairing(pairing.pairingId);
+            setPairing(null);
+            setLoginError(null);
+            return;
+          }
+          const next = { ...pairing, currentStatus: status.status };
+          await saveDevicePairing(next, pairing.pairingId);
+          setPairing(next);
+        })
+        .catch(() => undefined);
+    poll();
+    const timer = window.setInterval(poll, 2_000);
+    return () => window.clearInterval(timer);
+  }, [pairing?.pairingId, pairing?.requestToken]);
 
   const refreshTables = useCallback(async () => {
     try {
-      setTables(await edge.getTables());
+      const next = await edge.getTables();
+      setTables(next);
       setConnection('CONNECTED');
+      return next;
     } catch (problem) {
-      setConnection('DISCONNECTED');
+      setConnection(
+        problem instanceof EdgeClientError && problem.code !== 'EDGE_UNREACHABLE'
+          ? 'CONNECTED'
+          : 'DISCONNECTED',
+      );
       if (problem instanceof EdgeClientError && problem.status === 401) clearSession();
       throw problem;
     }
   }, [clearSession]);
 
   const refreshOrder = useCallback(async () => {
-    if (!orderRef.current) return;
+    const previous = orderRef.current;
+    if (!previous) return;
+    const sequence = ++refreshSequence.current;
     try {
-      const current = await edge.getOrder(orderRef.current.id);
+      const current = await edge.getOrder(previous.id);
+      if (
+        sequence !== refreshSequence.current ||
+        orderRef.current?.id !== previous.id ||
+        current.version < orderRef.current.version
+      )
+        return;
       if (current.status !== 'OPEN') {
-        setOrder(null);
+        invalidateContext(
+          'Este pedido ya fue cerrado o cancelado. Volvimos a Mesas para que elijas dónde continuar.',
+        );
         await refreshTables();
-      } else {
-        setOrder(current);
+        return;
       }
+      const currentTables = await refreshTables();
+      // Ignore obsolete responses, including a poll begun before a command acknowledgement.
+      if (
+        sequence !== refreshSequence.current ||
+        orderRef.current?.id !== previous.id ||
+        current.version < orderRef.current.version
+      )
+        return;
+      const reason = waiterContextProblem(previous, current, currentTables);
+      if (reason) return invalidateContext(reason);
+      orderRef.current = current;
+      setOrder(current);
     } catch (problem) {
+      if (orderRef.current?.id !== previous.id || sequence !== refreshSequence.current) return;
+      if (problem instanceof EdgeClientError && problem.code === 'ORDER_NOT_FOUND')
+        return invalidateContext('El pedido ya no está disponible. Volvimos a Mesas.');
       setError(waiterError(problem));
     }
-  }, [refreshTables]);
+  }, [refreshTables, invalidateContext]);
+
+  useEffect(() => {
+    if (!configuration?.editingItemId || !order) return;
+    if (
+      order.items.some((item) => item.id === configuration.editingItemId && item.status === 'DRAFT')
+    )
+      return;
+    setConfiguration(null);
+    setNotice('El producto cambió o ya fue enviado. Revisa el pedido actualizado antes de editar.');
+  }, [order, configuration]);
 
   useEffect(() => {
     const restore = async () => {
@@ -135,9 +275,12 @@ export function App() {
         setProducts(nextProducts);
       })
       .catch((problem) => setError(waiterError(problem)));
-    const fallback = window.setInterval(() => void refreshTables().catch(() => undefined), 5_000);
+    const fallback = window.setInterval(() => {
+      void refreshTables().catch(() => undefined);
+      void refreshOrder();
+    }, 5_000);
     return () => window.clearInterval(fallback);
-  }, [user, refreshTables]);
+  }, [user, refreshTables, refreshOrder]);
 
   useEffect(() => {
     if (!user) return;
@@ -152,19 +295,22 @@ export function App() {
         const token = window.localStorage.getItem(tokenKey);
         if (!token) return socket?.close();
         socket?.send(JSON.stringify({ type: 'AUTHENTICATE', token }));
-        setConnection('CONNECTED');
       };
       socket.onmessage = (event) => {
         try {
           const raw = JSON.parse(String(event.data));
           if (raw?.type === 'AUTHENTICATED') {
-            void refreshTables();
+            setRealtime(true);
+            void refreshTables().catch((problem) => setError(waiterError(problem)));
             void refreshOrder();
             return;
           }
           const message = OperationalRealtimeMessageSchema.safeParse(raw);
           if (!message.success) return;
-          if (message.data.type === 'TABLES_CHANGED') void refreshTables();
+          if (message.data.type === 'TABLES_CHANGED') {
+            void refreshTables().catch((problem) => setError(waiterError(problem)));
+            void refreshOrder();
+          }
           if (
             message.data.type === 'ORDER_UPDATED' &&
             message.data.orderId === orderRef.current?.id
@@ -178,7 +324,7 @@ export function App() {
       socket.onerror = () => socket?.close();
       socket.onclose = () => {
         if (stopped) return;
-        setConnection('DISCONNECTED');
+        setRealtime(false);
         retry = window.setTimeout(connect, 1_500);
       };
     };
@@ -196,34 +342,91 @@ export function App() {
     setLoginPending(true);
     setLoginError(null);
     try {
-      const response = await edge.login({ pin, deviceId: deviceIdentity.deviceId,deviceCredential:deviceIdentity.credential });
+      const response = await edge.login({
+        pin,
+        deviceId: deviceIdentity.deviceId,
+        deviceCredential: deviceIdentity.credential,
+      });
       if (!response.user.permissions.includes(PermissionCodes.ORDER_VIEW)) {
         setLoginError('Este usuario no tiene acceso a comandería.');
         return;
       }
       window.localStorage.setItem(tokenKey, response.token);
-      const active=await markDeviceAuthorizationStatus(deviceIdentity.deviceId,'ACTIVE');
-      if(active)setDeviceIdentity(active);
+      const active = await markDeviceAuthorizationStatus(deviceIdentity.deviceId, 'ACTIVE');
+      if (active) setDeviceIdentity(active);
       setUser(response.user);
       setPin('');
     } catch (problem) {
       setPin('');
-      if(problem instanceof EdgeClientError&&problem.code==='DEVICE_REVOKED'){const revoked=await markDeviceAuthorizationStatus(deviceIdentity.deviceId,'REVOKED');if(revoked)setDeviceIdentity(revoked);}
-      else if(problem instanceof EdgeClientError&&['DEVICE_NOT_PAIRED','DEVICE_NOT_AUTHORIZED','DEVICE_CREDENTIAL_INVALID'].includes(problem.code)){const unknown=await markDeviceAuthorizationStatus(deviceIdentity.deviceId,'UNKNOWN');if(unknown)setDeviceIdentity(unknown);}
-      setLoginError(problem instanceof EdgeClientError&&problem.code==='DEVICE_REVOKED'?'Este dispositivo fue revocado. Empáralo nuevamente para crear una identidad nueva.':problem instanceof EdgeClientError&&['DEVICE_NOT_PAIRED','DEVICE_NOT_AUTHORIZED','DEVICE_CREDENTIAL_INVALID'].includes(problem.code)?'Este dispositivo no está autorizado. Empáralo primero.':'PIN incorrecto o acceso temporalmente bloqueado.');
+      if (problem instanceof EdgeClientError && problem.code === 'DEVICE_REVOKED') {
+        const revoked = await markDeviceAuthorizationStatus(deviceIdentity.deviceId, 'REVOKED');
+        if (revoked) setDeviceIdentity(revoked);
+      } else if (
+        problem instanceof EdgeClientError &&
+        ['DEVICE_NOT_PAIRED', 'DEVICE_NOT_AUTHORIZED', 'DEVICE_CREDENTIAL_INVALID'].includes(
+          problem.code,
+        )
+      ) {
+        const unknown = await markDeviceAuthorizationStatus(deviceIdentity.deviceId, 'UNKNOWN');
+        if (unknown) setDeviceIdentity(unknown);
+      }
+      setLoginError(
+        problem instanceof EdgeClientError && problem.code === 'DEVICE_REVOKED'
+          ? 'Este dispositivo fue revocado. Empáralo nuevamente para crear una identidad nueva.'
+          : problem instanceof EdgeClientError &&
+              ['DEVICE_NOT_PAIRED', 'DEVICE_NOT_AUTHORIZED', 'DEVICE_CREDENTIAL_INVALID'].includes(
+                problem.code,
+              )
+            ? 'Este dispositivo no está autorizado. Empáralo primero.'
+            : 'PIN incorrecto o acceso temporalmente bloqueado.',
+      );
     } finally {
       setLoginPending(false);
     }
   }
-  async function beginPairing(){if(!deviceIdentity||pairingPending)return;setPairingPending(true);setLoginError(null);try{
-    const displayName=pairingDisplayName.trim();if(!displayName){setLoginError('Asigna un nombre a este dispositivo.');return;}
-    const named=deviceIdentity.displayName===displayName?deviceIdentity:{...deviceIdentity,displayName};if(named!==deviceIdentity){await saveDeviceIdentity(named);setDeviceIdentity(named);}
-    const requested=await requestPairingWithIdentityRotation({identity:named,
-      requestPairing:(identity)=>edge.createPairing({deviceId:identity.deviceId,deviceType:'WAITER',displayName:identity.displayName,credential:identity.credential}),
-      onIdentityRotated:(identity)=>setDeviceIdentity(identity)});
-    const next=createClientDevicePairing(requested.pairing);await saveDevicePairing(next);setPairing(next);
-  }catch(problem){setLoginError(waiterError(problem));}finally{setPairingPending(false);}}
-  async function retryPairing(){if(pairing)await clearDevicePairing(pairing.pairingId);setPairing(null);await beginPairing();}
+  async function beginPairing() {
+    if (!deviceIdentity || pairingPending) return;
+    setPairingPending(true);
+    setLoginError(null);
+    try {
+      const displayName = pairingDisplayName.trim();
+      if (!displayName) {
+        setLoginError('Asigna un nombre a este dispositivo.');
+        return;
+      }
+      const named =
+        deviceIdentity.displayName === displayName
+          ? deviceIdentity
+          : { ...deviceIdentity, displayName };
+      if (named !== deviceIdentity) {
+        await saveDeviceIdentity(named);
+        setDeviceIdentity(named);
+      }
+      const requested = await requestPairingWithIdentityRotation({
+        identity: named,
+        requestPairing: (identity) =>
+          edge.createPairing({
+            deviceId: identity.deviceId,
+            deviceType: 'WAITER',
+            displayName: identity.displayName,
+            credential: identity.credential,
+          }),
+        onIdentityRotated: (identity) => setDeviceIdentity(identity),
+      });
+      const next = createClientDevicePairing(requested.pairing);
+      await saveDevicePairing(next);
+      setPairing(next);
+    } catch (problem) {
+      setLoginError(waiterError(problem));
+    } finally {
+      setPairingPending(false);
+    }
+  }
+  async function retryPairing() {
+    if (pairing) await clearDevicePairing(pairing.pairingId);
+    setPairing(null);
+    await beginPairing();
+  }
 
   async function logout() {
     try {
@@ -247,8 +450,18 @@ export function App() {
             currency: 'MXN',
             tableIds: [table.id],
           });
+      if (next.status !== 'OPEN' || !next.tableIds.includes(table.id))
+        return invalidateContext(
+          'El pedido o la asignación de mesa cambió. Revisa el mapa antes de continuar.',
+        );
+      // Keep a confirmed order even if the subsequent map refresh fails.
       setOrder(next);
-      await refreshTables();
+      navigate({ type: 'selected', orderId: next.id });
+      setNotice(null);
+      const currentTables = await refreshTables();
+      if (orderRef.current?.id !== next.id || orderRef.current.version > next.version) return;
+      const reason = waiterContextProblem(next, next, currentTables);
+      if (reason) invalidateContext(reason);
     } catch (problem) {
       setError(waiterError(problem));
       await refreshTables().catch(() => undefined);
@@ -258,6 +471,7 @@ export function App() {
   }
 
   function openConfiguration(product: ProductResponse, item?: OrderResponse['items'][number]) {
+    if (!product || pending) return;
     setConfiguration({
       product,
       editingItemId: item?.id ?? null,
@@ -268,10 +482,10 @@ export function App() {
     setConfigurationError(null);
   }
 
-  async function saveConfiguration() {
-    if (!configuration || !order) return;
-    const invalid = activeModifierGroups(configuration.product)
-      .map((group) => modifierSelectionError(group, configuration.selectedModifierIds))
+  async function saveConfiguration(input = configuration, quickAdd = false) {
+    if (!input || !order || pending) return;
+    const invalid = activeModifierGroups(input.product)
+      .map((group) => modifierSelectionError(group, input.selectedModifierIds))
       .find(Boolean);
     if (invalid) return setConfigurationError(invalid);
     setPending(true);
@@ -279,25 +493,39 @@ export function App() {
       const request = {
         commandId: crypto.randomUUID(),
         expectedVersion: order.version,
-        selectedModifierIds: configuration.selectedModifierIds,
-        specialInstructions: configuration.specialInstructions,
+        selectedModifierIds: input.selectedModifierIds,
+        specialInstructions: input.specialInstructions,
       };
-      const next = configuration.editingItemId
+      const next = input.editingItemId
         ? await edge.updateDraftOrderItemConfiguration(
             order.id,
-            configuration.editingItemId,
+            input.editingItemId,
             request,
           )
-        : await edge.addOrderItem(order.id, { ...request, productId: configuration.product.id });
+        : await edge.addOrderItem(order.id, { ...request, productId: input.product.id });
+      orderRef.current = next;
       setOrder(next);
       setConfiguration(null);
+      setNotice(
+        input.editingItemId
+          ? 'Cambios guardados en el pedido.'
+          : 'Producto agregado.',
+      );
     } catch (problem) {
-      setConfigurationError(waiterError(problem));
+      if (quickAdd) setError(waiterError(problem));
+      else setConfigurationError(waiterError(problem));
       if (problem instanceof EdgeClientError && problem.code === 'STALE_ORDER_VERSION')
         await refreshOrder();
     } finally {
       setPending(false);
     }
+  }
+
+  function addProduct(product: ProductResponse) {
+    setNotice(null);
+    setError(null);
+    if (activeModifierGroups(product).length > 0) return openConfiguration(product);
+    void saveConfiguration({ product, editingItemId: null, selectedModifierIds: [], specialInstructions: '' }, true);
   }
 
   async function removeItem(itemId: string) {
@@ -324,6 +552,7 @@ export function App() {
           expectedVersion: order.version,
         }),
       );
+      setNotice('Ronda enviada. El pedido quedó registrado; no repitas el envío.');
     } catch (problem) {
       setError(waiterError(problem));
       await refreshOrder();
@@ -368,9 +597,10 @@ export function App() {
         commandId: crypto.randomUUID(),
         expectedVersion: order.version,
       });
-      setCancelTableOpen(false);
-      setOrder(null);
-      await refreshTables();
+      invalidateContext('Mesa cancelada y liberada.');
+      await refreshTables().catch((problem) =>
+        setError('La cancelación se confirmó. ' + waiterError(problem)),
+      );
     } catch (problem) {
       setCancelTableError(waiterError(problem));
       await refreshOrder();
@@ -414,7 +644,7 @@ export function App() {
     () => visibleProducts(products, categoryId, productSearch),
     [products, categoryId, productSearch],
   );
-  const deviceOnboardingState=getDeviceOnboardingState(deviceIdentity,pairing);
+  const deviceOnboardingState = getDeviceOnboardingState(deviceIdentity, pairing);
 
   if (restoring) return <main className="login-shell">Restaurando sesión local…</main>;
   if (!user)
@@ -426,62 +656,143 @@ export function App() {
           <div className="pin-display">{pin ? '•'.repeat(pin.length) : 'Ingresa tu PIN'}</div>
           <div className="pin-pad">
             {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((digit) => (
-              <button type="button" key={digit} onClick={() => setPin(`${pin}${digit}`)}>
+              <button
+                disabled={loginPending || pin.length >= 12}
+                type="button"
+                key={digit}
+                onClick={() => setPin(`${pin}${digit}`)}
+              >
                 {digit}
               </button>
             ))}
-            <button type="button" onClick={() => setPin(pin.slice(0, -1))}>
+            <button
+              aria-label="Borrar último dígito"
+              type="button"
+              onClick={() => setPin(pin.slice(0, -1))}
+            >
               ←
             </button>
-            <button type="button" onClick={() => setPin(`${pin}0`)}>
+            <button
+              disabled={loginPending || pin.length >= 12}
+              type="button"
+              onClick={() => setPin(`${pin}0`)}
+            >
               0
             </button>
-            <button className="confirm" disabled={loginPending || pin.length < 4}>
+            <button
+              aria-label="Iniciar sesión"
+              className="confirm"
+              disabled={loginPending || pin.length < 4}
+            >
               ✓
             </button>
           </div>
           <div className="stable-feedback">{loginError ?? '\u00a0'}</div>
-          <DeviceOnboardingCard productLabel="Waiter" state={deviceOnboardingState} displayName={pairingDisplayName}
-            pairingCode={pairing?.pairingCode} pairingId={pairing?.pairingId} expiresAt={pairing?.expiresAt}
-            pending={pairingPending} onDisplayName={setPairingDisplayName} onPair={()=>void beginPairing()} onRetry={()=>void retryPairing()}/>
+          <DeviceOnboardingCard
+            productLabel="Waiter"
+            state={deviceOnboardingState}
+            displayName={pairingDisplayName}
+            pairingCode={pairing?.pairingCode}
+            pairingId={pairing?.pairingId}
+            expiresAt={pairing?.expiresAt}
+            pending={pairingPending}
+            onDisplayName={setPairingDisplayName}
+            onPair={() => void beginPairing()}
+            onRetry={() => void retryPairing()}
+          />
         </form>
       </main>
     );
 
   return (
-    <div className="waiter-shell">
+    <div className="waiter-shell" aria-busy={pending}>
       <header className="topbar">
         <div>
           <span className="eyebrow">COMANVIEW WAITER</span>
           <strong>{user.displayName}</strong>
         </div>
-        <div className={`connection ${connection.toLowerCase()}`}>
-          {connection === 'CONNECTED' ? '● EDGE LOCAL' : '● SIN EDGE'}
-        </div>
-        <button className="ghost" onClick={() => void logout()}>
+        <span className="operator-context">Servicio de mesas</span>
+        <button className="ghost" disabled={pending} onClick={() => void logout()}>
           Bloquear
         </button>
       </header>
+      <LocalConnectionStatus local={connection} realtime={realtime} />
       {error && (
-        <div className="banner" role="alert">
+        <InlineAlert tone="error" urgent title="Revisa la operación">
           {error}
-          <button onClick={() => setError(null)}>×</button>
-        </div>
+          <button aria-label="Cerrar aviso de error" onClick={() => setError(null)}>
+            Cerrar aviso
+          </button>
+        </InlineAlert>
       )}
-      {!order ? (
+      {notice && (
+        <InlineAlert tone="info">
+          {notice}
+          <button aria-label="Cerrar aviso" onClick={() => setNotice(null)}>
+            Cerrar aviso
+          </button>
+        </InlineAlert>
+      )}
+      <section className="waiter-active-context" aria-label="Contexto de servicio">
+        <div>
+          <strong>{order ? tables.filter((table) => order.tableIds.includes(table.id)).map((table) => `${table.zone ?? 'Sin zona'} · ${table.name}`).join(' + ') : activeZone ?? 'Selecciona una mesa'}</strong>
+          {order && <div className="waiter-context-detail"><small>{order.items.filter((item) => item.status === 'DRAFT').length} pendientes de enviar</small><details><summary>Identificación del pedido</summary>{order.id}</details></div>}
+        </div>
+        <button
+          disabled={pending || navigation.view === 'tables'}
+          onClick={() => navigate({ type: 'back' })}
+        >
+          ← {navigation.view === 'order' ? 'Productos' : 'Mesas'}
+        </button>
+      </section>
+      <nav className="task-navigation" aria-label="Servicio de mesa">
+        <button
+          aria-current={navigation.view === 'tables' ? 'page' : undefined}
+          disabled={pending}
+          onClick={() => navigate({ type: 'tables' })}
+        >
+          Mesas
+        </button>
+        <button
+          aria-current={navigation.view === 'products' ? 'page' : undefined}
+          disabled={pending || !order}
+          onClick={() => navigate({ type: 'products' })}
+        >
+          Productos
+        </button>
+        <button
+          aria-current={navigation.view === 'order' ? 'page' : undefined}
+          disabled={pending || !order}
+          onClick={() => navigate({ type: 'order' })}
+        >
+          Pedido · {order?.items.filter((item) => item.status === 'DRAFT').length ?? 0} sin enviar
+        </button>
+      </nav>
+      {navigation.view === 'tables' || !order ? (
         <main className="tables-view">
           <div className="view-heading">
             <div>
-              <h1>Mesas</h1>
+              <h1 tabIndex={-1} ref={viewRef}>
+                Mesas
+              </h1>
               <p>Toca una mesa libre para abrirla o una ocupada para entrar.</p>
             </div>
-            <button onClick={() => void refreshTables()}>Actualizar</button>
+            <button
+              disabled={pending}
+              onClick={() => {
+                void refreshTables().catch((problem) => setError(waiterError(problem)));
+                void refreshOrder();
+              }}
+            >
+              Actualizar
+            </button>
           </div>
           <nav className="zone-tabs" aria-label="Zonas del restaurante">
             {zones.map((zone) => (
               <button
                 key={zone}
                 className={activeZone === zone ? 'active' : ''}
+                aria-pressed={activeZone === zone}
                 onClick={() => setSelectedZone(zone)}
               >
                 {zone}
@@ -494,6 +805,11 @@ export function App() {
               </button>
             ))}
           </nav>
+          {!activeZone && (
+            <InlineAlert title="No hay mesas disponibles">
+              Pide a un responsable que configure una zona y mesas activas.
+            </InlineAlert>
+          )}
           {activeZone && (
             <section className="zone">
               <div className="zone-heading">
@@ -520,9 +836,7 @@ export function App() {
                       className={`table-card ${table.status.toLowerCase()}`}
                       onClick={() => void selectTable(table)}
                     >
-                      <span className="table-status">
-                        {tableStatusLabel(table.status)}
-                      </span>
+                      <span className="table-status">{tableStatusLabel(table.status)}</span>
                       <strong>{table.name}</strong>
                       {table.status !== 'FREE' && (
                         <span className="table-prep-summary">
@@ -531,7 +845,7 @@ export function App() {
                       )}
                       <small>
                         {table.capacity ? `${table.capacity} personas` : 'Capacidad no indicada'}
-                        {table.activeOrderNumber ? ` · Order #${table.activeOrderNumber}` : ''}
+                        {table.activeOrderNumber ? ` · Pedido ${table.activeOrderNumber}` : ''}
                       </small>
                     </button>
                   ))}
@@ -541,347 +855,411 @@ export function App() {
         </main>
       ) : (
         <main className="order-view">
-          <section className="catalog-panel">
-            <div className="order-mobile-heading">
-              <button
-                className="ghost"
-                onClick={() => {
-                  setOrder(null);
-                  void refreshTables();
-                }}
-              >
-                ← Mesas
-              </button>
-              <strong>
-                Orden #
-                {tables.find((table) => order.tableIds.includes(table.id))?.activeOrderNumber ??
-                  order.id.slice(0, 6)}
-              </strong>
-            </div>
-            <nav className="categories">
-              <button className={!categoryId ? 'active' : ''} onClick={() => setCategoryId(null)}>
-                Todo
-              </button>
-              {categories.map((category) => (
-                <button
-                  key={category.id}
-                  className={categoryId === category.id ? 'active' : ''}
-                  onClick={() => setCategoryId(category.id)}
-                >
-                  {category.name}
-                </button>
-              ))}
-            </nav>
-            <label className="product-search">
-              <span aria-hidden="true">⌕</span>
-              <input
-                type="search"
-                value={productSearch}
-                placeholder="Buscar producto..."
-                onChange={(event) => setProductSearch(event.target.value)}
-              />
-            </label>
-            <div className="products">
-              {shownProducts.map((product) => (
-                <button
-                  key={product.id}
-                  disabled={!product.available || pending}
-                  onClick={() => openConfiguration(product)}
-                >
-                  <strong>{product.name}</strong>
-                  <span>{money(product.basePrice.amount, product.basePrice.currency)}</span>
-                  {!product.available && <small>NO DISPONIBLE</small>}
-                </button>
-              ))}
-            </div>
-          </section>
-          <aside className="order-panel">
-            <div className="order-title">
-              <div>
-                <small>MESAS</small>
-                <h2>
-                  {tables
-                    .filter((table) => order.tableIds.includes(table.id))
-                    .map((table) => table.name)
-                    .join(' + ')}
-                </h2>
-                <span className="order-state">
-                  {order.status} · Order #
-                  {tables.find((table) => table.activeOrderId === order.id)?.activeOrderNumber ??
-                    order.id.slice(0, 6)}
-                </span>
-              </div>
-            </div>
-            <div className="order-status-summary">
-              <span className="draft-count">
-                {order.items.filter((item) => item.status === 'DRAFT').length} DRAFT
-              </span>
-              <span className="sent-count">
-                {order.items.filter((item) => item.status === 'SENT').length} SENT
-              </span>
-              <span>{order.rounds.length} rondas</span>
-              <span>{order.items.filter((item) => item.prepStatus === 'PREPARING').length} preparando</span>
-              <span className="ready-count">
-                {order.items.filter((item) => item.prepStatus === 'READY').length} listo
-              </span>
-            </div>
-            <div className="items">
-              {order.items.map((item) => (
-                <article key={item.id} className={item.status.toLowerCase()}>
-                  <div>
-                    <strong>{item.productSnapshot.productName}</strong>
-                    <span>{item.status === 'SENT' ? item.prepStatus : item.status}</span>
-                  </div>
-                  {item.productSnapshot.selectedModifiers.map((modifier) => (
-                    <small key={modifier.modifierOptionId}>+ {modifier.name}</small>
-                  ))}
-                  {item.specialInstructions && <p>NOTA · {item.specialInstructions}</p>}
-                  <footer>
-                    <b>
-                      {money(
-                        item.lineTotal?.amount ?? (item.productSnapshot.basePrice.amount +
-                          item.productSnapshot.selectedModifiers.reduce(
-                            (sum, mod) => sum + mod.priceDelta.amount,
-                            0,
-                          )),
-                        order.currency,
-                      )}
-                    </b>
-                    {item.status === 'DRAFT' && (
-                      <span>
-                        <button
-                          onClick={() =>
-                            openConfiguration(
-                              products.find(
-                                (product) => product.id === item.productSnapshot.productId,
-                              )!,
-                              item,
-                            )
-                          }
-                        >
-                          Editar
-                        </button>
-                        <button onClick={() => void removeItem(item.id)}>Eliminar</button>
-                      </span>
-                    )}
-                  </footer>
-                </article>
-              ))}
-              {order.items.length === 0 && <div className="empty">Agrega el primer producto</div>}
-            </div>
-            <div className="order-footer">
-              <div>
-                <span>Subtotal</span>
-                <strong>{money(order.subtotal.amount, order.currency)}</strong>
-              </div>
-              {order.taxTotal && <div><span>Impuestos</span><strong>{money(order.taxTotal.amount, order.currency)}</strong></div>}
-              <div><span>Total</span><strong>{money(order.total.amount, order.currency)}</strong></div>
-              <button
-                className="send"
-                disabled={pending || !order.items.some((item) => item.status === 'DRAFT')}
-                onClick={() => void sendRound()}
-              >
-                Enviar ronda
-              </button>
-              <div className="secondary-order-actions">
-                {user.permissions.includes(PermissionCodes.ORDER_REQUEST_PAYMENT) && (
-                  <button
-                    className="payment-request-button"
-                    disabled={pending || Boolean(order.paymentRequestedAt)}
-                    onClick={() => void requestPayment()}
-                  >
-                    {order.paymentRequestedAt ? 'Cuenta solicitada' : 'Solicitar cuenta'}
-                  </button>
-                )}
-                <button
-                  onClick={() => {
-                    setSelectedTableIds([...order.tableIds]);
-                    setTablePickerOpen(true);
-                    setTableError(null);
-                  }}
-                >
-                  Cambiar / unir mesa
-                </button>
-                {user.permissions.includes(PermissionCodes.ORDER_CANCEL_EMPTY) && (
-                  <button
-                    className="danger-link"
-                    onClick={() => {
-                      setCancelTableError(cancelBlocker);
-                      setCancelTableOpen(true);
-                    }}
-                  >
-                    Cancelar mesa
-                  </button>
-                )}
-              </div>
-            </div>
-          </aside>
-        </main>
-      )}
-
-      {cancelTableOpen && order && (
-        <div className="modal-backdrop">
-          <section className="modal cancel-table-modal" role="dialog" aria-modal="true">
-            <header>
-              <div>
-                <small>LIBERAR SIN CONSUMO</small>
-                <h2>Cancelar mesa</h2>
-              </div>
-              <button onClick={() => setCancelTableOpen(false)}>×</button>
-            </header>
-            <p>
-              Se cancelará la Order y quedarán libres{' '}
-              <strong>
+          {navigation.view === 'products' && (
+            <section className="catalog-panel">
+              <h1 tabIndex={-1} ref={viewRef}>
+                Productos
+              </h1>
+              <p className="table-context">
                 {tables
                   .filter((table) => order.tableIds.includes(table.id))
                   .map((table) => table.name)
                   .join(' + ')}
-              </strong>
-              . El historial no se elimina.
-            </p>
-            <div className="stable-feedback error">{cancelTableError ?? '\u00a0'}</div>
-            <footer>
-              <button className="ghost" onClick={() => setCancelTableOpen(false)}>
-                Volver
-              </button>
-              <button
-                className="danger-confirm"
-                disabled={pending || Boolean(cancelBlocker)}
-                onClick={() => void cancelEmptyTable()}
-              >
-                {pending ? 'Cancelando…' : 'Cancelar y liberar'}
-              </button>
-            </footer>
-          </section>
-        </div>
+              </p>
+              <nav className="categories" aria-label="Categorías">
+                <button
+                  aria-pressed={!categoryId}
+                  className={!categoryId ? 'active' : ''}
+                  onClick={() => setCategoryId(null)}
+                >
+                  Todo
+                </button>
+                {categories.map((category) => (
+                  <button
+                    key={category.id}
+                    aria-pressed={categoryId === category.id}
+                    className={categoryId === category.id ? 'active' : ''}
+                    onClick={() => setCategoryId(category.id)}
+                  >
+                    {category.name}
+                  </button>
+                ))}
+              </nav>
+              <label className="product-search">
+                <span aria-hidden="true">⌕</span>
+                <input
+                  type="search"
+                  aria-label="Buscar producto"
+                  value={productSearch}
+                  placeholder="Buscar producto..."
+                  onChange={(event) => setProductSearch(event.target.value)}
+                />
+              </label>
+              <div className="products">
+                {shownProducts.map((product) => (
+                  <button
+                    key={product.id}
+                    disabled={!product.available || pending}
+                      onClick={() => addProduct(product)}
+                  >
+                    <strong>{product.name}</strong>
+                    <span>{money(product.basePrice.amount, product.basePrice.currency)}</span>
+                    {!product.available && <small>NO DISPONIBLE</small>}
+                  </button>
+                ))}
+              </div>
+              {shownProducts.length === 0 && (
+                <p role="status">
+                  No hay productos que coincidan. Revisa la búsqueda o la categoría.
+                </p>
+              )}
+            </section>
+          )}
+          {navigation.view === 'order' && (
+            <section className="order-panel" aria-label="Pedido actual">
+              <h1 tabIndex={-1} ref={viewRef}>
+                Pedido
+              </h1>
+              <div className="order-status-summary">
+                <span className="draft-count">
+                  {order.items.filter((item) => item.status === 'DRAFT').length} sin enviar
+                </span>
+                <span className="sent-count">
+                  {order.items.filter((item) => item.status === 'SENT').length} enviados
+                </span>
+                <span>{order.rounds.length} rondas</span>
+                <span>
+                  {order.items.filter((item) => item.prepStatus === 'PREPARING').length} preparando
+                </span>
+                <span className="ready-count">
+                  {order.items.filter((item) => item.prepStatus === 'READY').length} listo
+                </span>
+              </div>
+              <div className="items">
+                {order.items.map((item) => (
+                  <article key={item.id} className={item.status.toLowerCase()}>
+                    <div>
+                      <strong>{item.productSnapshot.productName}</strong>
+                      <span>
+                        {item.status === 'DRAFT'
+                          ? 'Sin enviar'
+                          : item.prepStatus === 'READY'
+                            ? 'Listo'
+                            : item.prepStatus === 'PREPARING'
+                              ? 'Preparando'
+                              : 'Enviado'}
+                      </span>
+                    </div>
+                    {item.productSnapshot.selectedModifiers.map((modifier) => (
+                      <small key={modifier.modifierOptionId}>+ {modifier.name}</small>
+                    ))}
+                    {item.specialInstructions && <p>NOTA · {item.specialInstructions}</p>}
+                    <footer>
+                      <b>
+                        {money(
+                          item.lineTotal?.amount ??
+                            item.productSnapshot.basePrice.amount +
+                              item.productSnapshot.selectedModifiers.reduce(
+                                (sum, mod) => sum + mod.priceDelta.amount,
+                                0,
+                              ),
+                          order.currency,
+                        )}
+                      </b>
+                      {item.status === 'DRAFT' && (
+                        <span>
+                          <button
+                            disabled={
+                              pending ||
+                              !products.some(
+                                (product) => product.id === item.productSnapshot.productId,
+                              )
+                            }
+                            onClick={() =>
+                              openConfiguration(
+                                products.find(
+                                  (product) => product.id === item.productSnapshot.productId,
+                                )!,
+                                item,
+                              )
+                            }
+                          >
+                            {item.specialInstructions || item.productSnapshot.selectedModifiers.length ? 'Editar' : 'Agregar nota'}
+                          </button>
+                          <button disabled={pending} onClick={() => void removeItem(item.id)}>
+                            Eliminar
+                          </button>
+                        </span>
+                      )}
+                    </footer>
+                  </article>
+                ))}
+                {order.items.length === 0 && <div className="empty">Agrega el primer producto</div>}
+              </div>
+              <div className="order-footer">
+                <div>
+                  <span>Subtotal</span>
+                  <strong>{money(order.subtotal.amount, order.currency)}</strong>
+                </div>
+                {order.taxTotal && (
+                  <div>
+                    <span>Impuestos</span>
+                    <strong>{money(order.taxTotal.amount, order.currency)}</strong>
+                  </div>
+                )}
+                <div>
+                  <span>Total</span>
+                  <strong>{money(order.total.amount, order.currency)}</strong>
+                </div>
+                <button
+                  className="send"
+                  disabled={pending || !order.items.some((item) => item.status === 'DRAFT')}
+                  onClick={() => void sendRound()}
+                >
+                  {pending ? 'Confirmando…' : 'Enviar ronda'}
+                </button>
+                {!order.items.some((item) => item.status === 'DRAFT') && (
+                  <p className="action-reason">
+                    Agrega productos sin enviar para enviar una nueva ronda.
+                  </p>
+                )}
+                <div className="secondary-order-actions">
+                  {user.permissions.includes(PermissionCodes.ORDER_REQUEST_PAYMENT) && (
+                    <button
+                      className="payment-request-button"
+                      disabled={pending || Boolean(order.paymentRequestedAt)}
+                      onClick={() => void requestPayment()}
+                    >
+                      {order.paymentRequestedAt ? 'Cuenta solicitada' : 'Solicitar cuenta'}
+                    </button>
+                  )}
+                  <button
+                    disabled={pending}
+                    onClick={() => {
+                      setSelectedTableIds([...order.tableIds]);
+                      setTablePickerOpen(true);
+                      setTableError(null);
+                    }}
+                  >
+                    Cambiar / unir mesa
+                  </button>
+                  {user.permissions.includes(PermissionCodes.ORDER_CANCEL_EMPTY) && (
+                    <button
+                      className="danger-link"
+                      disabled={pending}
+                      onClick={() => {
+                        setCancelTableError(cancelBlocker);
+                        setCancelTableOpen(true);
+                      }}
+                    >
+                      Cancelar mesa
+                    </button>
+                  )}
+                </div>
+              </div>
+            </section>
+          )}
+        </main>
+      )}
+
+      {cancelTableOpen && order && (
+        <Dialog
+          open
+          title="Cancelar mesa"
+          className="modal cancel-table-modal"
+          cancelable={!pending}
+          onClose={() => setCancelTableOpen(false)}
+        >
+          <header>
+            <div>
+              <small>LIBERAR SIN CONSUMO</small>
+              <h2>Cancelar mesa</h2>
+            </div>
+            <button
+              disabled={pending}
+              aria-label="Cerrar cancelación"
+              onClick={() => setCancelTableOpen(false)}
+            >
+              ×
+            </button>
+          </header>
+          <p>
+            Se cancelará el pedido y quedarán libres{' '}
+            <strong>
+              {tables
+                .filter((table) => order.tableIds.includes(table.id))
+                .map((table) => table.name)
+                .join(' + ')}
+            </strong>
+            . El historial no se elimina.
+          </p>
+          <div className="stable-feedback error" role="alert">
+            {cancelTableError ?? '\u00a0'}
+          </div>
+          <footer>
+            <button className="ghost" disabled={pending} onClick={() => setCancelTableOpen(false)}>
+              Volver
+            </button>
+            <button
+              className="danger-confirm"
+              disabled={pending || Boolean(cancelBlocker)}
+              onClick={() => void cancelEmptyTable()}
+            >
+              {pending ? 'Cancelando…' : 'Cancelar y liberar'}
+            </button>
+          </footer>
+        </Dialog>
       )}
 
       {configuration && (
-        <div className="modal-backdrop">
-          <section className="modal">
-            <header>
-              <div>
-                <small>CONFIGURAR</small>
-                <h2>{configuration.product.name}</h2>
+        <Dialog
+          open
+          title={configuration.product.name}
+          className="modal"
+          cancelable={!pending}
+          onClose={() => setConfiguration(null)}
+        >
+          <header>
+            <div>
+              <small>CONFIGURAR</small>
+              <h2>{configuration.product.name}</h2>
+            </div>
+            <button
+              disabled={pending}
+              aria-label="Cerrar producto"
+              onClick={() => setConfiguration(null)}
+            >
+              ×
+            </button>
+          </header>
+          {activeModifierGroups(configuration.product).map((group) => (
+            <fieldset key={group.modifierGroup.id}>
+              <legend>
+                {group.modifierGroup.name}{' '}
+                <small>
+                  {group.modifierGroup.minSelections}–{group.modifierGroup.maxSelections}
+                </small>
+              </legend>
+              <div className="options">
+                {group.modifierGroup.options
+                  .filter((option) => option.active)
+                  .map((option) => {
+                    const checked = configuration.selectedModifierIds.includes(option.id);
+                    return (
+                      <button
+                        type="button"
+                        key={option.id}
+                        disabled={!option.available || pending}
+                        aria-pressed={checked}
+                        className={checked ? 'selected' : ''}
+                        onClick={() =>
+                          setConfiguration({
+                            ...configuration,
+                            selectedModifierIds: checked
+                              ? configuration.selectedModifierIds.filter((id) => id !== option.id)
+                              : [...configuration.selectedModifierIds, option.id],
+                          })
+                        }
+                      >
+                        {option.name}
+                        {!option.available && ' · AGOTADO'}
+                      </button>
+                    );
+                  })}
               </div>
-              <button onClick={() => setConfiguration(null)}>×</button>
-            </header>
-            {activeModifierGroups(configuration.product).map((group) => (
-              <fieldset key={group.modifierGroup.id}>
-                <legend>
-                  {group.modifierGroup.name}{' '}
-                  <small>
-                    {group.modifierGroup.minSelections}–{group.modifierGroup.maxSelections}
-                  </small>
-                </legend>
-                <div className="options">
-                  {group.modifierGroup.options
-                    .filter((option) => option.active)
-                    .map((option) => {
-                      const checked = configuration.selectedModifierIds.includes(option.id);
-                      return (
-                        <button
-                          type="button"
-                          key={option.id}
-                          disabled={!option.available}
-                          className={checked ? 'selected' : ''}
-                          onClick={() =>
-                            setConfiguration({
-                              ...configuration,
-                              selectedModifierIds: checked
-                                ? configuration.selectedModifierIds.filter((id) => id !== option.id)
-                                : [...configuration.selectedModifierIds, option.id],
-                            })
-                          }
-                        >
-                          {option.name}
-                          {!option.available && ' · AGOTADO'}
-                        </button>
-                      );
-                    })}
-                </div>
-              </fieldset>
-            ))}
-            <label>
-              Instrucciones especiales
-              <textarea
-                maxLength={500}
-                value={configuration.specialInstructions}
-                onChange={(event) =>
-                  setConfiguration({ ...configuration, specialInstructions: event.target.value })
-                }
-                placeholder="Ej. salsa aparte"
-              />
-            </label>
-            <div className="stable-feedback error">{configurationError ?? '\u00a0'}</div>
-            <footer>
-              <button className="ghost" onClick={() => setConfiguration(null)}>
-                Cancelar
-              </button>
-              <button
-                className="primary"
-                disabled={pending}
-                onClick={() => void saveConfiguration()}
-              >
-                {configuration.editingItemId ? 'Guardar cambios' : 'Agregar'}
-              </button>
-            </footer>
-          </section>
-        </div>
+            </fieldset>
+          ))}
+          <label>
+            Instrucciones especiales
+            <textarea
+              maxLength={500}
+              value={configuration.specialInstructions}
+              onChange={(event) =>
+                setConfiguration({ ...configuration, specialInstructions: event.target.value })
+              }
+              placeholder="Ej. salsa aparte"
+            />
+          </label>
+          <div className="stable-feedback error" role="alert">
+            {configurationError ?? '\u00a0'}
+          </div>
+          <footer>
+            <button className="ghost" disabled={pending} onClick={() => setConfiguration(null)}>
+              Cancelar
+            </button>
+            <button className="primary" disabled={pending} onClick={() => void saveConfiguration()}>
+              {configuration.editingItemId ? 'Guardar cambios' : 'Agregar'}
+            </button>
+          </footer>
+        </Dialog>
       )}
 
       {tablePickerOpen && order && (
-        <div className="modal-backdrop">
-          <section className="modal table-picker">
-            <header>
-              <div>
-                <small>ASIGNACIÓN</small>
-                <h2>Mover o unir mesas</h2>
-              </div>
-              <button onClick={() => setTablePickerOpen(false)}>×</button>
-            </header>
-            <p>Selecciona una o varias mesas. La Order y toda su historia se conservan.</p>
-            <div className="picker-grid">
-              {tables
-                .filter(
-                  (table) =>
-                    table.active && (table.status === 'FREE' || table.activeOrderId === order.id),
-                )
-                .map((table) => {
-                  const selected = selectedTableIds.includes(table.id);
-                  return (
-                    <button
-                      key={table.id}
-                      className={selected ? 'selected' : ''}
-                      onClick={() =>
-                        setSelectedTableIds(
-                          selected
-                            ? selectedTableIds.filter((id) => id !== table.id)
-                            : [...selectedTableIds, table.id],
-                        )
-                      }
-                    >
-                      {table.name}
-                      <small>{table.zone}</small>
-                    </button>
-                  );
-                })}
+        <Dialog
+          open
+          title="Mover o unir mesas"
+          className="modal table-picker"
+          cancelable={!pending}
+          onClose={() => setTablePickerOpen(false)}
+        >
+          <header>
+            <div>
+              <small>ASIGNACIÓN</small>
+              <h2>Mover o unir mesas</h2>
             </div>
-            <div className="stable-feedback error">{tableError ?? '\u00a0'}</div>
-            <footer>
-              <button className="ghost" onClick={() => setTablePickerOpen(false)}>
-                Cancelar
-              </button>
-              <button
-                className="primary"
-                disabled={pending || selectedTableIds.length === 0}
-                onClick={() => void updateTables()}
-              >
-                Confirmar
-              </button>
-            </footer>
-          </section>
-        </div>
+            <button
+              disabled={pending}
+              aria-label="Cerrar selección de mesas"
+              onClick={() => setTablePickerOpen(false)}
+            >
+              ×
+            </button>
+          </header>
+          <p>Selecciona una o varias mesas. El pedido y toda su historia se conservan.</p>
+          <div className="picker-grid">
+            {tables
+              .filter(
+                (table) =>
+                  table.active && (table.status === 'FREE' || table.activeOrderId === order.id),
+              )
+              .map((table) => {
+                const selected = selectedTableIds.includes(table.id);
+                return (
+                  <button
+                    key={table.id}
+                    disabled={pending}
+                    aria-pressed={selected}
+                    className={selected ? 'selected' : ''}
+                    onClick={() =>
+                      setSelectedTableIds(
+                        selected
+                          ? selectedTableIds.filter((id) => id !== table.id)
+                          : [...selectedTableIds, table.id],
+                      )
+                    }
+                  >
+                    {table.name}
+                    <small>{table.zone}</small>
+                  </button>
+                );
+              })}
+          </div>
+          <div className="stable-feedback error" role="alert">
+            {tableError ?? '\u00a0'}
+          </div>
+          <footer>
+            <button className="ghost" disabled={pending} onClick={() => setTablePickerOpen(false)}>
+              Cancelar
+            </button>
+            <button
+              className="primary"
+              disabled={pending || selectedTableIds.length === 0}
+              onClick={() => void updateTables()}
+            >
+              Confirmar
+            </button>
+          </footer>
+        </Dialog>
       )}
     </div>
   );

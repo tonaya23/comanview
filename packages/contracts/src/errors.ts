@@ -43,6 +43,8 @@ export const ErrorCode = z.enum([
   'CASH_SESSION_HAS_PENDING_PAYMENTS',
   'INVALID_OPENING_FLOAT',
   'INVALID_BUSINESS_DATE',
+  'BUSINESS_DATE_MISMATCH',
+  'BUSINESS_DAY_POLICY_REQUIRED',
   'TIPS_DISABLED',
   'INVALID_TIP',
   'COMMAND_ID_CONFLICT',
@@ -117,18 +119,109 @@ export const ErrorCode = z.enum([
   'RECOVERY_KEY_ALREADY_EXPORTED',
   'RECOVERY_KEY_INVALID',
   'INTERNAL_ERROR',
+  'NOT_FOUND',
   'DEFAULT_CASH_REGISTER_REQUIRED',
+  'CASH_REGISTER_REQUIRED',
+  'CASH_REGISTER_IN_USE',
+  'CASH_REGISTER_CURRENCY_MISMATCH',
+  'CURRENCY_REQUIRED',
+  'CURRENCY_PRICE_REENTRY_REQUIRED',
   'BUSINESS_DAY_POLICY_IN_USE',
+  'BUSINESS_TIME_ZONE_INVALID',
+  'TIMEZONE_INVALID',
+  'BUSINESS_LOGO_INVALID',
   'CURRENCY_LOCKED',
+  'ADMINISTRATION_AUDIT_REQUIRED',
+  'ADMINISTRATION_BINDING_MISMATCH',
+  'ADMINISTRATION_CONFIGURATION_REQUIRED',
+  'ADMINISTRATION_VERSION_CONFLICT',
+  'STATION_REQUIRED',
   'STATION_HAS_PENDING_WORK',
+  'ZONE_REQUIRED',
+  'ZONE_IN_USE',
+  'TABLE_HAS_ACTIVE_ORDER',
+  'TAX_CONFIGURATION_REQUIRED',
+  'TAX_PROFILE_REQUIRED',
+  'TAX_PROFILE_IN_USE',
+  'TAX_REVISION_INCONSISTENT',
+  'TAX_SNAPSHOT_IMMUTABLE',
+  'TAX_SNAPSHOT_MISSING',
+  'TAX_PROFILE_REQUIRES_ADMIN_COMMAND',
+  'TAX_SCHEMA_REQUIRED',
+  'TAX_SCHEMA_INCOMPLETE',
+  'TAX_POLICY_VERSION_INVALID',
+  'TAX_REVISION_INVALID',
+  'TIP_POLICY_NOT_DELEGATED',
+  'TIP_PREFERENCES_OUTSIDE_POLICY',
+  'TIP_SELECTION_NOT_ALLOWED',
+  'PERSONNEL_SECURITY_NOT_INITIALIZED',
+  'PERSONNEL_SECURITY_UNAVAILABLE',
+  'PERSONNEL_BASELINE_CHANGED',
+  'PERSONNEL_BASELINE_INVALID',
+  'PERSONNEL_BASELINE_NOT_AUTHORIZED',
+  'PERSONNEL_BINDING_MISMATCH',
+  'PERSONNEL_COMMAND_FIELDS_INVALID',
+  'PERSONNEL_DISPLAY_NAME_REQUIRED',
+  'PERSONNEL_EXPLICIT_REVIEW_REQUIRED',
+  'PERSONNEL_LAST_OWNER',
+  'PERSONNEL_NEW_PIN_REQUIRED',
+  'PERSONNEL_PIN_NOT_UNIQUE',
+  'PERSONNEL_PRIVILEGED_PERMISSION_REQUIRED',
+  'PERSONNEL_RECOVERY_PERMISSION_REQUIRED',
+  'PERSONNEL_RESTORE_NOT_AUTHORIZED',
+  'PERSONNEL_RESTORE_SOURCE_AMBIGUOUS',
+  'PERSONNEL_REVIEW_DIMENSIONS_REQUIRED',
+  'PERSONNEL_ROLE_ASSIGNMENT_INVALID',
+  'PERSONNEL_SELF_DISABLE',
+  'PERSONNEL_TRANSACTION_ALREADY_OPEN',
+  'PERSONNEL_VERSION_CONFLICT',
+  'CONTRACTUAL_OWNER_PROTECTED',
+  'CREDENTIAL_RESET_REQUIRED',
+  'USER_REVIEW_REQUIRED',
+  'USER_SECURITY_RECEIPT_MISMATCH',
+  'USER_SECURITY_REPAIR_REQUIRED',
+  'USER_SECURITY_REVISION_CONFLICT',
+  'USER_UNTRUSTED',
+  'OWNER_RECOVERY_ACK_INVALID',
+  'OWNER_RECOVERY_AUTHORIZATION_CONSUMED',
+  'OWNER_RECOVERY_AUTHORIZATION_EXPIRED',
+  'OWNER_RECOVERY_BINDING_INVALID',
+  'OWNER_RECOVERY_NOT_REQUIRED',
+  'OWNER_RECOVERY_UNAVAILABLE',
+  'INSTALLATION_AUTHORIZATION_EXPIRED',
 ]);
 
 export type ErrorCode = z.infer<typeof ErrorCode>;
 
+const PublicIdentifier = z.string().regex(/^[A-Za-z0-9._:-]{1,160}$/);
+const PublicMachineCode = z.string().regex(/^[A-Z][A-Z0-9_]{0,119}$/);
+
+export const PublicValidationIssueSchema = z.object({
+  path: z.string().max(240),
+  message: z.string().min(1).max(240),
+  keyword: z.string().min(1).max(80).optional(),
+}).strict();
+
+/**
+ * Explicit public allowlist for error context. It intentionally excludes arbitrary
+ * objects, submitted values, filesystem paths and credential-shaped fields.
+ */
+export const PublicErrorDetailsSchema = z.object({
+  diagnosticId: PublicIdentifier.optional(),
+  tableId: PublicIdentifier.optional(),
+  activeOrderId: PublicIdentifier.optional(),
+  mode: PublicMachineCode.optional(),
+  capability: PublicMachineCode.optional(),
+  reasonCode: PublicMachineCode.optional(),
+  validationIssues: z.array(PublicValidationIssueSchema).max(32).optional(),
+}).strict();
+
+export type PublicErrorDetails = z.infer<typeof PublicErrorDetailsSchema>;
+
 export const ErrorResponseSchema = z.object({
   error: ErrorCode,
   message: z.string(),
-  details: z.any().optional(),
-});
+  details: PublicErrorDetailsSchema.optional(),
+}).strict();
 
 export type ErrorResponse = z.infer<typeof ErrorResponseSchema>;

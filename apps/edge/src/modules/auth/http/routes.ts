@@ -23,7 +23,7 @@ export function authRoutes(service: AuthService, guard: AuthGuard): FastifyPlugi
         preHandler: guard.authenticated,
         schema: { response: { 200: CurrentSessionResponseSchema } },
       },
-      async (request, reply) => reply.send(service.current(actorFrom(request))),
+      async (request, reply) => reply.send(await service.currentHttp(actorFrom(request))),
     );
     fastify.post(
       '/logout',

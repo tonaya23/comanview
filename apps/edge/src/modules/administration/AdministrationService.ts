@@ -2,7 +2,7 @@ import { EntityId } from '@comanview/domain';
 import type { NewAuditEntry,RestaurantAdministrationRepository } from '@comanview/database';
 import type { RestaurantAdministrationCommand,RestaurantAdministrationState } from '@comanview/contracts';
 import type { AuthenticatedActor } from '../../app/authContext.js';
-import { AppError } from '../../app/errorHandler.js';
+import { AppError,parseContractErrorCode } from '../../app/errorHandler.js';
 import type { EdgeLicenseManager } from '../licensing/EdgeLicenseManager.js';
 
 const permissionByKind:Record<RestaurantAdministrationCommand['kind'],string>={
@@ -23,8 +23,8 @@ export class AdministrationService{
       deviceId:actor.deviceId,sessionId:actor.sessionId,actorUserId:actor.userId,actorRole:actor.roles[0]??null,authorizedByUserId:null,authorizedByRole:null,
       action:'RESTAURANT_ADMINISTRATION_CHANGED',entityType:'OPERATIONAL_CONFIGURATION',entityId:this.binding.locationId,outcome:'SUCCESS',reason:command.reason,
       commandId:command.commandId,before:null,after:null,amountAffected:null,currency:null,eventId:null};
-    try{return this.repository.execute(command,this.binding,audit);}catch(error){const code=error instanceof Error?error.message:'';
-      if(/^(ADMINISTRATION_|BUSINESS_|CURRENCY_|CASH_REGISTER_|STATION_|ZONE_|TABLE_|PRODUCT_|COMMAND_)[A-Z_]*$/.test(code))
+    try{return this.repository.execute(command,this.binding,audit);}catch(error){const rawCode=error instanceof Error?error.message:'',code=parseContractErrorCode(rawCode);
+      if(code&&/^(ADMINISTRATION_|BUSINESS_|CURRENCY_|CASH_REGISTER_|STATION_|ZONE_|TABLE_|PRODUCT_|COMMAND_)[A-Z_]*$/.test(code))
         throw new AppError(code,code.endsWith('_REQUIRED')||code.endsWith('_NOT_FOUND')?404:409,'La configuración no fue modificada.');throw error;}
   }
   operational(){const state=this.state();return state.operational;}

@@ -71,6 +71,8 @@ export interface RecoverySecurityFloor {
 
 export interface RecoverySecurityStore {
   load():Promise<RecoverySecurityFloor>;
+  /** Floor lock -> synchronous validation/SQLite reads. Never await or acquire another Floor lock inside. */
+  readConsistent?<T>(read:(floor:RecoverySecurityFloor)=>T):Promise<T>;
   /** Synchronous transformation of the latest state, under the persistence lock. */
   mutate(change:(current:RecoverySecurityFloor)=>RecoverySecurityFloor):Promise<RecoverySecurityFloor>;
   /** Compare-and-swap: derived snapshots must still match their loaded checksum. */
@@ -149,6 +151,9 @@ export class MemoryRecoverySecurityStore implements RecoverySecurityStore {
     }));
   }
   licensingSnapshot(){return structuredClone(this.value);}
+  readConsistent<T>(read:(floor:RecoverySecurityFloor)=>T):Promise<T>{
+    return serialized(this,async()=>read(structuredClone(this.value)));
+  }
   load(){return serialized(this,async()=>structuredClone(this.value));}
   mutate(change:(current:RecoverySecurityFloor)=>RecoverySecurityFloor){return serialized(this,async()=>{
     const next=change(structuredClone(this.value));assertCurrent(this.value,next);assertMonotonic(this.value,next);
@@ -264,6 +269,9 @@ abstract class FileRecoverySecurityStore implements RecoverySecurityStore {
       structuredClone(this.cached.floor):null;
   }catch{return null;}}
   private async exclusive<T>(work:()=>Promise<T>):Promise<T>{
+    const traceId=randomUUID(),started=Date.now();
+    const trace=(event:string)=>{if(process.env['COMANVIEW_SECURITY_TRACE']==='true')console.info(JSON.stringify({event,traceId,pid:process.pid,elapsedMs:Date.now()-started}));};
+    trace('FLOOR_WAIT');
     await mkdir(dirname(resolve(this.path)),{recursive:true});
     const info=await lstat(this.path).catch((error:NodeJS.ErrnoException)=>{
       if(error.code==='ENOENT')return null;throw error;});
@@ -277,10 +285,14 @@ abstract class FileRecoverySecurityStore implements RecoverySecurityStore {
       const release=await lockfile.lock(key,{realpath:false,stale:30_000,update:10_000,
         retries:{retries:20,factor:1,minTimeout:50,maxTimeout:50}})
         .catch(()=>{throw new Error('RECOVERY_SECURITY_LOCKED');});
-      try{return await work();}finally{await release();}
+      trace('FLOOR_ACQUIRED');
+      try{return await work();}finally{await release();trace('FLOOR_RELEASED');}
     });
   }
   load():Promise<RecoverySecurityFloor>{return this.exclusive(()=>this.readUnlocked());}
+  readConsistent<T>(read:(floor:RecoverySecurityFloor)=>T):Promise<T>{
+    return this.exclusive(async()=>read(await this.readUnlocked()));
+  }
   mutate(change:(current:RecoverySecurityFloor)=>RecoverySecurityFloor):Promise<RecoverySecurityFloor>{
     return this.exclusive(async()=>{const current=await this.readUnlocked(),next=change(structuredClone(current));
       assertCurrent(current,next);assertMonotonic(current,next);await this.writeUnlocked(next);origins.set(next,next.checksum);return next;});
@@ -290,7 +302,10 @@ abstract class FileRecoverySecurityStore implements RecoverySecurityStore {
     await this.writeUnlocked(value);origins.set(value,value.checksum);
   });}
   private async readUnlocked():Promise<RecoverySecurityFloor>{
-    try{const bytes=await readFile(this.path),floor=validate(JSON.parse((await this.decode(bytes)).toString('utf8')));
+    try{const bytes=await readFile(this.path);
+      // Under the same interprocess lock: reuse only authenticated, byte-identical durable state.
+      if(this.cached&&createHash('sha256').update(bytes).digest('hex')===this.cached.hash)return structuredClone(this.cached.floor);
+      const floor=validate(JSON.parse((await this.decode(bytes)).toString('utf8')));
       this.cached={floor:structuredClone(floor),hash:createHash('sha256').update(bytes).digest('hex')};return floor;}
     catch(error){
       if((error as NodeJS.ErrnoException).code==='ENOENT')return emptyRecoverySecurityFloor();
@@ -302,6 +317,9 @@ abstract class FileRecoverySecurityStore implements RecoverySecurityStore {
     }
   }
   private async writeUnlocked(value:RecoverySecurityFloor):Promise<void>{
+    if(process.env['COMANVIEW_SECURITY_TRACE']==='true')console.info(JSON.stringify({event:'FLOOR_WRITE',pid:process.pid,
+      recoveryEpoch:value.recoveryEpoch,licenseRevision:value.maximumSignedRevisions.LICENSE,
+      licensePending:Boolean(value.licensePending),personnelPending:Object.values(value.personnel?.users??{}).filter(user=>user.pending).length}));
     this.cached=null;
     const checked=validate(value);await mkdir(dirname(this.path),{recursive:true});
     const temporary=`${this.path}.${process.pid}.${randomUUID()}.tmp`;

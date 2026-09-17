@@ -5,7 +5,7 @@ import { performPersonnelSecurityOperation,type RecoverySecurityStore } from '..
 import { personnelRestrictions,type StoredPersonnelSecurity } from './PersonnelSecurityModel.js';
 import { trustedOwner } from './PersonnelSecurityOperation.js';
 import type { EdgeLicenseManager } from '../licensing/EdgeLicenseManager.js';
-import { AppError } from '../../app/errorHandler.js';
+import { AppError,parseContractErrorCode } from '../../app/errorHandler.js';
 
 export class PersonnelService{
   constructor(private db:Database.Database,private store:RecoverySecurityStore,private licensing:EdgeLicenseManager,private publicKeyring:Readonly<Record<string,string>>){}
@@ -38,8 +38,8 @@ export class PersonnelService{
     await this.run(()=>performPersonnelSecurityOperation(this.store,{kind:'BOOTSTRAP_OWNER',sqlite:this.db,request,publicKeyring:this.publicKeyring,licensing:this.licensing}));
   }
   private async run(operation:()=>Promise<void>){try{await operation();}catch(error){
-    const code=error instanceof Error?error.message:'';
-    if(/^(PERSONNEL_|OWNER_RECOVERY_|USER_|DEVICE_|AUTH_|PERMISSION_|COMMAND_|CONTRACTUAL_|INVALID_CREDENTIALS|RECOVERY_)[A-Z_]*$/.test(code))
+    const rawCode=error instanceof Error?error.message:'',code=parseContractErrorCode(rawCode);
+    if(code&&/^(PERSONNEL_|OWNER_RECOVERY_|USER_|DEVICE_|AUTH_|PERMISSION_|COMMAND_|CONTRACTUAL_|INVALID_CREDENTIALS|RECOVERY_)[A-Z_]*$/.test(code))
       throw new AppError(code,code==='PERMISSION_DENIED'?403:409,'La operación de personal requiere revisión; no se concedieron permisos implícitos.');
     throw error;
   }}

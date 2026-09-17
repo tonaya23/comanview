@@ -10,6 +10,7 @@ import {
 } from '@comanview/database';
 import { authSessions } from '@comanview/database/edge';
 import { buildApp } from '../index.js';
+import { DevelopmentRecoverySecurityStore, updateRecoverySecurityFloor } from '../modules/backup/RecoverySecurityStore.js';
 
 const POS_DEVICE_ID = '01991a00-0000-7000-8000-000000000721';
 const KDS_DEVICE_ID = '01991a00-0000-7000-8000-000000000722';
@@ -21,6 +22,12 @@ describe('offline local Auth and RBAC', () => {
   let waiterToken = '';
   let ownerToken = '';
   let kitchenToken = '';
+  class PausedSecurityStore extends DevelopmentRecoverySecurityStore {
+    pause: (()=>Promise<void>) | null = null;
+    protected override async encode(value:Buffer){const pause=this.pause;this.pause=null;if(pause)await pause();return value;}
+  }
+  const floorPath=`${dbPath}.floor`;
+  const store=new PausedSecurityStore(floorPath);
 
   const authorized = (token: string) => ({ authorization: `Bearer ${token}` });
 
@@ -31,13 +38,13 @@ describe('offline local Auth and RBAC', () => {
 
   beforeAll(async () => {
     prepareDevelopmentDatabase(dbPath);
-    app = await buildApp(dbPath, { startPrintWorker: false });
+    app = await buildApp(dbPath, { startPrintWorker: false, recoverySecurityStore:store });
     await app.ready();
   });
 
   afterAll(async () => {
     await app.close();
-    for (const path of [dbPath, `${dbPath}-shm`, `${dbPath}-wal`]) {
+    for (const path of [dbPath, `${dbPath}-shm`, `${dbPath}-wal`,floorPath]) {
       if (existsSync(path)) unlinkSync(path);
     }
   });
@@ -113,7 +120,7 @@ describe('offline local Auth and RBAC', () => {
     expect(current.json().user.displayName).toBe('Cajero desarrollo');
 
     await app.close();
-    app = await buildApp(dbPath, { startPrintWorker: false });
+    app = await buildApp(dbPath, { startPrintWorker: false, recoverySecurityStore:store });
     await app.ready();
     const restored = await app.inject({
       method: 'GET',
@@ -209,6 +216,22 @@ describe('offline local Auth and RBAC', () => {
     });
     expect(opened.statusCode).toBe(201);
     expect(opened.json().openedBy).toBe('01991a00-0000-7000-8000-000000000712');
+
+    let release!:()=>void,entered!:()=>void;
+    const writing=new Promise<void>(resolve=>{entered=resolve;}),gate=new Promise<void>(resolve=>{release=resolve;});
+    store.pause=async()=>{entered();await gate;};
+    const write=store.mutate(floor=>updateRecoverySecurityFloor(floor,{maximumSignedRevisions:{...floor.maximumSignedRevisions,CONFIGURATION:1}}));
+    await writing;
+    const concurrentSocket=await app.injectWS('/realtime');
+    const handshake=new Promise<unknown>(resolve=>concurrentSocket.once('message',(payload:Buffer)=>resolve(JSON.parse(payload.toString()))));
+    concurrentSocket.send(JSON.stringify({type:'AUTHENTICATE',token:cashierToken}));
+    const following=app.inject({method:'GET',url:'/orders/open-counter',headers:authorized(cashierToken)});
+    release();await write;
+    await expect(handshake).resolves.toEqual({type:'AUTHENTICATED'});concurrentSocket.close();
+    expect((await following).statusCode).toBe(200);
+    const inspectionOwner=await login('1111');expect(inspectionOwner.statusCode).toBe(200);
+    for(const url of ['/devices','/installation/readiness','/backups/status'])
+      expect((await app.inject({method:'GET',url,headers:authorized(inspectionOwner.json().token)})).statusCode).toBe(200);
 
     const products = await app.inject({
       method: 'GET',

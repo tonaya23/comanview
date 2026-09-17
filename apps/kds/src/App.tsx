@@ -1,9 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { createEdgeClient, EdgeClientError, clearDevicePairing, createClientDevicePairing, createDeviceIdentity,
-  getDeviceOnboardingState, loadDeviceIdentity, loadDevicePairing, markDeviceAuthorizationStatus,
-  requestPairingWithIdentityRotation, saveDeviceIdentity, saveDevicePairing,
-  type ClientDeviceIdentity, type ClientDevicePairing } from '@comanview/client-sdk';
-import { DeviceOnboardingCard } from '@comanview/ui';
+import {
+  createEdgeClient,
+  EdgeClientError,
+  invalidatesLocalSession,
+  clearDevicePairing,
+  createClientDevicePairing,
+  createDeviceIdentity,
+  getDeviceOnboardingState,
+  loadDeviceIdentity,
+  loadDevicePairing,
+  markDeviceAuthorizationStatus,
+  requestPairingWithIdentityRotation,
+  saveDeviceIdentity,
+  saveDevicePairing,
+  type ClientDeviceIdentity,
+  type ClientDevicePairing,
+} from '@comanview/client-sdk';
+import { InlineAlert, LocalConnectionStatus, DeviceOnboardingCard } from '@comanview/ui';
 import {
   KdsRealtimeMessageSchema,
   PermissionCodes,
@@ -12,13 +25,10 @@ import {
   type KdsStationResponse,
   type KdsTicketResponse,
 } from '@comanview/contracts';
-import {
-  formatElapsed,
-  getKdsErrorMessage,
-  reconnectDelayMs,
-  shouldRefreshForMessage,
-  timerTone,
-} from './kdsLogic.js';
+import { getKdsErrorMessage, reconnectDelayMs, shouldRefreshForMessage } from './kdsLogic.js';
+
+import { KitchenTicket, kitchenActionReason, nextKitchenAction } from './KitchenTicket.js';
+import { KitchenViewportNotice } from './KitchenViewportNotice.js';
 
 const sessionTokenStorageKey = 'comanview.kds.sessionToken';
 const edge = createEdgeClient({
@@ -37,38 +47,88 @@ export function App() {
   const [pin, setPin] = useState('');
   const [loginPending, setLoginPending] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
-  const [deviceIdentity,setDeviceIdentity]=useState<ClientDeviceIdentity|null>(null);
-  const [pairing,setPairing]=useState<ClientDevicePairing|null>(null);
-  const [pairingDisplayName,setPairingDisplayName]=useState('KDS');
-  const [pairingPending,setPairingPending]=useState(false);
+  const [deviceIdentity, setDeviceIdentity] = useState<ClientDeviceIdentity | null>(null);
+  const [pairing, setPairing] = useState<ClientDevicePairing | null>(null);
+  const [pairingDisplayName, setPairingDisplayName] = useState('KDS');
+  const [pairingPending, setPairingPending] = useState(false);
   const [stations, setStations] = useState<KdsStationResponse[]>([]);
   const [stationId, setStationId] = useState('');
   const [tickets, setTickets] = useState<KdsTicketResponse[]>([]);
   const [connection, setConnection] = useState<'CONNECTING' | 'CONNECTED' | 'DISCONNECTED'>(
     'CONNECTING',
   );
+  const [realtime, setRealtime] = useState(false);
+  const [readError, setReadError] = useState<string | null>(null);
+  const [stationsLoaded, setStationsLoaded] = useState(false);
+  const ticketRequest = useRef(0);
+  const transitionFocus = useRef<string | null>(null);
   const [pendingTicket, setPendingTicket] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
   const stationRef = useRef(stationId);
   stationRef.current = stationId;
+  useEffect(() => {
+    if (pendingTicket || !transitionFocus.current) return;
+    const ticket = [...document.querySelectorAll<HTMLElement>('[data-ticket-id]')].find(
+      (element) => element.dataset['ticketId'] === transitionFocus.current,
+    );
+    if (ticket) (ticket.querySelector<HTMLElement>('button:not(:disabled)') ?? ticket).focus();
+    transitionFocus.current = null;
+  }, [tickets, pendingTicket]);
 
   const clearLocalSession = useCallback(() => {
     window.localStorage.removeItem(sessionTokenStorageKey);
     setAuthUser(null);
     setStations([]);
     setTickets([]);
+    stationRef.current = '';
     setStationId('');
+    setReadError(null);
+    setError(null);
+    setStationsLoaded(false);
   }, []);
-  useEffect(()=>{void loadDeviceIdentity().then(async(v)=>{const identity=v??createDeviceIdentity('KDS','KDS');if(!v)await saveDeviceIdentity(identity);setDeviceIdentity(identity);setPairingDisplayName(identity.displayName);});},[]);
-  useEffect(()=>{void loadDevicePairing().then(value=>{if(value)setPairing(value);});},[]);
-  useEffect(()=>{if(!authUser||!deviceIdentity||deviceIdentity.authorizationStatus==='ACTIVE')return;
-    void markDeviceAuthorizationStatus(deviceIdentity.deviceId,'ACTIVE').then(active=>{if(active)setDeviceIdentity(active);});
-  },[authUser,deviceIdentity]);
-  useEffect(()=>{if(!pairing?.requestToken||!deviceIdentity)return;const poll=()=>void edge.getPairingStatus(pairing.pairingId,pairing.requestToken)
-    .then(async status=>{if(status.status==='ACTIVE'){const active=await markDeviceAuthorizationStatus(deviceIdentity.deviceId,'ACTIVE');if(active)setDeviceIdentity(active);await clearDevicePairing(pairing.pairingId);setPairing(null);setLoginError(null);return;}
-      const next={...pairing,currentStatus:status.status};await saveDevicePairing(next,pairing.pairingId);setPairing(next);}).catch(()=>undefined);
-    poll();const timer=window.setInterval(poll,2_000);return()=>window.clearInterval(timer);},[pairing?.pairingId,pairing?.requestToken]);
+  useEffect(() => {
+    void loadDeviceIdentity().then(async (v) => {
+      const identity = v ?? createDeviceIdentity('KDS', 'KDS');
+      if (!v) await saveDeviceIdentity(identity);
+      setDeviceIdentity(identity);
+      setPairingDisplayName(identity.displayName);
+    });
+  }, []);
+  useEffect(() => {
+    void loadDevicePairing().then((value) => {
+      if (value) setPairing(value);
+    });
+  }, []);
+  useEffect(() => {
+    if (!authUser || !deviceIdentity || deviceIdentity.authorizationStatus === 'ACTIVE') return;
+    void markDeviceAuthorizationStatus(deviceIdentity.deviceId, 'ACTIVE').then((active) => {
+      if (active) setDeviceIdentity(active);
+    });
+  }, [authUser, deviceIdentity]);
+  useEffect(() => {
+    if (!pairing?.requestToken || !deviceIdentity) return;
+    const poll = () =>
+      void edge
+        .getPairingStatus(pairing.pairingId, pairing.requestToken)
+        .then(async (status) => {
+          if (status.status === 'ACTIVE') {
+            const active = await markDeviceAuthorizationStatus(deviceIdentity.deviceId, 'ACTIVE');
+            if (active) setDeviceIdentity(active);
+            await clearDevicePairing(pairing.pairingId);
+            setPairing(null);
+            setLoginError(null);
+            return;
+          }
+          const next = { ...pairing, currentStatus: status.status };
+          await saveDevicePairing(next, pairing.pairingId);
+          setPairing(next);
+        })
+        .catch(() => undefined);
+    poll();
+    const timer = window.setInterval(poll, 2_000);
+    return () => window.clearInterval(timer);
+  }, [pairing?.pairingId, pairing?.requestToken]);
 
   useEffect(() => {
     const restore = async () => {
@@ -84,8 +144,9 @@ export function App() {
           return;
         }
         setAuthUser(current.user);
-      } catch {
-        clearLocalSession();
+      } catch (problem) {
+        if(invalidatesLocalSession(problem))clearLocalSession();
+        else setLoginError(getKdsErrorMessage(problem));
       } finally {
         setAuthChecking(false);
       }
@@ -96,42 +157,59 @@ export function App() {
   const refreshStations = useCallback(async () => {
     const next = await edge.getKdsStations();
     setStations(next);
+    setStationsLoaded(true);
+    if (!stationRef.current || !next.some((station) => station.stationId === stationRef.current))
+      setConnection('CONNECTED');
     setStationId((current) => {
-      if (current && next.some((station) => station.stationId === current)) return current;
+      if (current) return current; // Never silently redirect a cook to another station.
       const fromUrl = new URLSearchParams(window.location.search).get('stationId');
       const stored = window.localStorage.getItem('comanview-kds-station');
-      return (
-        next.find((station) => station.stationId === fromUrl)?.stationId ??
-        next.find((station) => station.stationId === stored)?.stationId ??
-        next[0]?.stationId ??
-        ''
-      );
+      return fromUrl ?? stored ?? next[0]?.stationId ?? '';
     });
   }, []);
 
-  const refreshTickets = useCallback(async (selectedStation = stationRef.current) => {
-    if (!selectedStation) return;
-    try {
-      const next = await edge.getKdsTickets(selectedStation);
-      setTickets(next);
-      setConnection('CONNECTED');
-      setError(null);
-    } catch (problem) {
-      setConnection('DISCONNECTED');
-      setError(getKdsErrorMessage(problem));
-    }
-  }, []);
+  const refreshTickets = useCallback(
+    async (selectedStation = stationRef.current) => {
+      if (!selectedStation) return;
+      const sequence = ++ticketRequest.current;
+      try {
+        const next = await edge.getKdsTickets(selectedStation);
+        if (stationRef.current !== selectedStation || sequence !== ticketRequest.current) return;
+        setTickets(next);
+        setConnection('CONNECTED');
+        setReadError(null);
+      } catch (problem) {
+        if (stationRef.current !== selectedStation || sequence !== ticketRequest.current) return;
+        setConnection(
+          problem instanceof EdgeClientError && problem.code !== 'EDGE_UNREACHABLE'
+            ? 'CONNECTED'
+            : 'DISCONNECTED',
+        );
+        setReadError(getKdsErrorMessage(problem));
+        // Do not show inaccessible tickets as an authoritative board.
+        if (problem instanceof EdgeClientError && problem.status === 403) setTickets([]);
+        if (invalidatesLocalSession(problem)) clearLocalSession();
+      }
+    },
+    [clearLocalSession],
+  );
 
   useEffect(() => {
     if (!authUser) return;
     void refreshStations().catch((problem) => {
-      setConnection('DISCONNECTED');
-      setError(getKdsErrorMessage(problem));
+      setConnection(
+        problem instanceof EdgeClientError && problem.code !== 'EDGE_UNREACHABLE'
+          ? 'CONNECTED'
+          : 'DISCONNECTED',
+      );
+      setReadError(getKdsErrorMessage(problem));
     });
   }, [authUser, refreshStations]);
 
   useEffect(() => {
     if (!stationId) return;
+    setTickets([]);
+    setConnection('CONNECTING');
     window.localStorage.setItem('comanview-kds-station', stationId);
     void refreshTickets(stationId);
   }, [stationId, refreshTickets]);
@@ -140,14 +218,16 @@ export function App() {
     if (!authUser) return;
     const clock = window.setInterval(() => setNow(Date.now()), 1_000);
     const fallback = window.setInterval(() => {
-      if (stationRef.current) {
-        void refreshTickets();
-      } else {
-        void refreshStations().catch((problem) => {
-          setConnection('DISCONNECTED');
-          setError(getKdsErrorMessage(problem));
+      void refreshStations()
+        .then(() => refreshTickets())
+        .catch((problem) => {
+          setReadError(getKdsErrorMessage(problem));
+          setConnection(
+            problem instanceof EdgeClientError && problem.code !== 'EDGE_UNREACHABLE'
+              ? 'CONNECTED'
+              : 'DISCONNECTED',
+          );
         });
-      }
     }, 5_000);
     return () => {
       window.clearInterval(clock);
@@ -174,17 +254,18 @@ export function App() {
         }
         socket?.send(JSON.stringify({ type: 'AUTHENTICATE', token: sessionToken }));
         attempt = 0;
-        setConnection('CONNECTED');
-        void refreshStations()
-          .then(() => refreshTickets())
-          .catch((problem) => {
-            setConnection('DISCONNECTED');
-            setError(getKdsErrorMessage(problem));
-          });
       };
       socket.onmessage = (event) => {
         try {
-          const parsed = KdsRealtimeMessageSchema.safeParse(JSON.parse(String(event.data)));
+          const raw = JSON.parse(String(event.data));
+          if (raw?.type === 'AUTHENTICATED') {
+            setRealtime(true);
+            void refreshStations()
+              .then(() => refreshTickets())
+              .catch((problem) => setReadError(getKdsErrorMessage(problem)));
+            return;
+          }
+          const parsed = KdsRealtimeMessageSchema.safeParse(raw);
           if (parsed.success && shouldRefreshForMessage(parsed.data, stationRef.current)) {
             void refreshTickets();
           }
@@ -193,9 +274,10 @@ export function App() {
         }
       };
       socket.onerror = () => socket?.close();
-      socket.onclose = () => {
+      socket.onclose = (event) => {
         if (stopped) return;
-        setConnection('DISCONNECTED');
+        setRealtime(false);
+        if(event?.code===1008){clearLocalSession();return;}
         reconnectTimer = window.setTimeout(connect, reconnectDelayMs(attempt++));
       };
     };
@@ -208,6 +290,19 @@ export function App() {
   }, [authUser, clearLocalSession, refreshStations, refreshTickets]);
 
   async function transition(ticket: KdsTicketResponse, target: 'PREPARING' | 'READY') {
+    if (
+      nextKitchenAction(ticket.status) !== target ||
+      kitchenActionReason({
+        busy: pendingTicket !== null,
+        connected: connection === 'CONNECTED' && !readError,
+        authorized: Boolean(authUser?.permissions.includes(PermissionCodes.KDS_UPDATE_PREPARATION)),
+        stationAvailable:
+          stations.some((station) => station.stationId === ticket.stationId) &&
+          ticket.stationId === stationRef.current,
+      })
+    )
+      return;
+    transitionFocus.current = ticket.ticketId;
     setPendingTicket(ticket.ticketId);
     setError(null);
     try {
@@ -219,7 +314,7 @@ export function App() {
       }
       await refreshTickets(ticket.stationId);
     } catch (problem) {
-      if (problem instanceof EdgeClientError && problem.status === 401) clearLocalSession();
+      if (invalidatesLocalSession(problem)) clearLocalSession();
       setError(getKdsErrorMessage(problem));
       await refreshTickets(ticket.stationId);
     } finally {
@@ -230,12 +325,20 @@ export function App() {
   const byStatus = useMemo(
     () =>
       Object.fromEntries(
-        columns.map(({ status }) => [status, tickets.filter((ticket) => ticket.status === status)]),
+        columns.map(({ status }) => [
+          status,
+          tickets.filter(
+            (ticket) =>
+              ticket.status === status &&
+              ticket.stationId === stationId &&
+              stations.some((station) => station.stationId === stationId),
+          ),
+        ]),
       ) as Record<KdsPreparationStatus, KdsTicketResponse[]>,
-    [tickets],
+    [tickets, stationId, stations],
   );
   const selectedStation = stations.find((station) => station.stationId === stationId);
-  const deviceOnboardingState=getDeviceOnboardingState(deviceIdentity,pairing);
+  const deviceOnboardingState = getDeviceOnboardingState(deviceIdentity, pairing);
 
   async function login(event: FormEvent) {
     event.preventDefault();
@@ -247,7 +350,11 @@ export function App() {
         setLoginError('Este KDS no tiene un dispositivo configurado.');
         return;
       }
-      const authenticated = await edge.login({ pin, deviceId: deviceIdentity.deviceId,deviceCredential:deviceIdentity.credential });
+      const authenticated = await edge.login({
+        pin,
+        deviceId: deviceIdentity.deviceId,
+        deviceCredential: deviceIdentity.credential,
+      });
       if (!authenticated.user.permissions.includes(PermissionCodes.KDS_VIEW)) {
         window.localStorage.setItem(sessionTokenStorageKey, authenticated.token);
         await edge.logout();
@@ -256,28 +363,86 @@ export function App() {
         return;
       }
       window.localStorage.setItem(sessionTokenStorageKey, authenticated.token);
-      const active=await markDeviceAuthorizationStatus(deviceIdentity.deviceId,'ACTIVE');
-      if(active)setDeviceIdentity(active);
+      const active = await markDeviceAuthorizationStatus(deviceIdentity.deviceId, 'ACTIVE');
+      if (active) setDeviceIdentity(active);
       setAuthUser(authenticated.user);
       setPin('');
     } catch (problem) {
       setPin('');
-      if(deviceIdentity&&problem instanceof EdgeClientError&&problem.code==='DEVICE_REVOKED'){const revoked=await markDeviceAuthorizationStatus(deviceIdentity.deviceId,'REVOKED');if(revoked)setDeviceIdentity(revoked);}
-      else if(deviceIdentity&&problem instanceof EdgeClientError&&['DEVICE_NOT_PAIRED','DEVICE_NOT_AUTHORIZED','DEVICE_CREDENTIAL_INVALID'].includes(problem.code)){const unknown=await markDeviceAuthorizationStatus(deviceIdentity.deviceId,'UNKNOWN');if(unknown)setDeviceIdentity(unknown);}
-      setLoginError(problem instanceof EdgeClientError&&problem.code==='DEVICE_REVOKED'?'Este dispositivo fue revocado. Empáralo nuevamente para crear una identidad nueva.':problem instanceof EdgeClientError&&['DEVICE_NOT_PAIRED','DEVICE_NOT_AUTHORIZED','DEVICE_CREDENTIAL_INVALID'].includes(problem.code)?'Este dispositivo no está autorizado. Empáralo primero.':'PIN incorrecto o acceso temporalmente bloqueado.');
+      if (
+        deviceIdentity &&
+        problem instanceof EdgeClientError &&
+        problem.code === 'DEVICE_REVOKED'
+      ) {
+        const revoked = await markDeviceAuthorizationStatus(deviceIdentity.deviceId, 'REVOKED');
+        if (revoked) setDeviceIdentity(revoked);
+      } else if (
+        deviceIdentity &&
+        problem instanceof EdgeClientError &&
+        ['DEVICE_NOT_PAIRED', 'DEVICE_NOT_AUTHORIZED', 'DEVICE_CREDENTIAL_INVALID'].includes(
+          problem.code,
+        )
+      ) {
+        const unknown = await markDeviceAuthorizationStatus(deviceIdentity.deviceId, 'UNKNOWN');
+        if (unknown) setDeviceIdentity(unknown);
+      }
+      setLoginError(
+        problem instanceof EdgeClientError && problem.code === 'DEVICE_REVOKED'
+          ? 'Este dispositivo fue revocado. Empáralo nuevamente para crear una identidad nueva.'
+          : problem instanceof EdgeClientError &&
+              ['DEVICE_NOT_PAIRED', 'DEVICE_NOT_AUTHORIZED', 'DEVICE_CREDENTIAL_INVALID'].includes(
+                problem.code,
+              )
+            ? 'Este dispositivo no está autorizado. Empáralo primero.'
+            : 'PIN incorrecto o acceso temporalmente bloqueado.',
+      );
     } finally {
       setLoginPending(false);
     }
   }
-  async function beginPairing(){if(!deviceIdentity||pairingPending)return;setPairingPending(true);setLoginError(null);try{
-    const displayName=pairingDisplayName.trim();if(!displayName){setLoginError('Asigna un nombre a este dispositivo.');return;}
-    const named=deviceIdentity.displayName===displayName?deviceIdentity:{...deviceIdentity,displayName};if(named!==deviceIdentity){await saveDeviceIdentity(named);setDeviceIdentity(named);}
-    const requested=await requestPairingWithIdentityRotation({identity:named,
-      requestPairing:(identity)=>edge.createPairing({deviceId:identity.deviceId,deviceType:'KDS',displayName:identity.displayName,credential:identity.credential}),
-      onIdentityRotated:(identity)=>setDeviceIdentity(identity)});
-    const next=createClientDevicePairing(requested.pairing);await saveDevicePairing(next);setPairing(next);
-  }catch(problem){setLoginError(getKdsErrorMessage(problem));}finally{setPairingPending(false);}}
-  async function retryPairing(){if(pairing)await clearDevicePairing(pairing.pairingId);setPairing(null);await beginPairing();}
+  async function beginPairing() {
+    if (!deviceIdentity || pairingPending) return;
+    setPairingPending(true);
+    setLoginError(null);
+    try {
+      const displayName = pairingDisplayName.trim();
+      if (!displayName) {
+        setLoginError('Asigna un nombre a este dispositivo.');
+        return;
+      }
+      const named =
+        deviceIdentity.displayName === displayName
+          ? deviceIdentity
+          : { ...deviceIdentity, displayName };
+      if (named !== deviceIdentity) {
+        await saveDeviceIdentity(named);
+        setDeviceIdentity(named);
+      }
+      const requested = await requestPairingWithIdentityRotation({
+        identity: named,
+        requestPairing: (identity) =>
+          edge.createPairing({
+            deviceId: identity.deviceId,
+            deviceType: 'KDS',
+            displayName: identity.displayName,
+            credential: identity.credential,
+          }),
+        onIdentityRotated: (identity) => setDeviceIdentity(identity),
+      });
+      const next = createClientDevicePairing(requested.pairing);
+      await saveDevicePairing(next);
+      setPairing(next);
+    } catch (problem) {
+      setLoginError(getKdsErrorMessage(problem));
+    } finally {
+      setPairingPending(false);
+    }
+  }
+  async function retryPairing() {
+    if (pairing) await clearDevicePairing(pairing.pairingId);
+    setPairing(null);
+    await beginPairing();
+  }
 
   async function logout() {
     try {
@@ -313,22 +478,44 @@ export function App() {
                 {digit}
               </button>
             ))}
-            <button type="button" onClick={() => setPin((current) => current.slice(0, -1))}>
+            <button
+              aria-label="Borrar último dígito"
+              type="button"
+              onClick={() => setPin((current) => current.slice(0, -1))}
+            >
               ←
             </button>
-            <button type="button" onClick={() => setPin((current) => `${current}0`)}>
+            <button
+              disabled={loginPending || pin.length >= 12}
+              type="button"
+              onClick={() => setPin((current) => `${current}0`)}
+            >
               0
             </button>
-            <button className="confirm" type="submit" disabled={loginPending || pin.length < 4}>
+            <button
+              aria-label="Iniciar sesión"
+              className="confirm"
+              type="submit"
+              disabled={loginPending || pin.length < 4}
+            >
               {loginPending ? '…' : '✓'}
             </button>
           </div>
           <div className="kds-login-feedback" role="status">
             {loginError ?? '\u00a0'}
           </div>
-          <DeviceOnboardingCard productLabel="KDS" state={deviceOnboardingState} displayName={pairingDisplayName}
-            pairingCode={pairing?.pairingCode} pairingId={pairing?.pairingId} expiresAt={pairing?.expiresAt}
-            pending={pairingPending} onDisplayName={setPairingDisplayName} onPair={()=>void beginPairing()} onRetry={()=>void retryPairing()}/>
+          <DeviceOnboardingCard
+            productLabel="KDS"
+            state={deviceOnboardingState}
+            displayName={pairingDisplayName}
+            pairingCode={pairing?.pairingCode}
+            pairingId={pairing?.pairingId}
+            expiresAt={pairing?.expiresAt}
+            pending={pairingPending}
+            onDisplayName={setPairingDisplayName}
+            onPair={() => void beginPairing()}
+            onRetry={() => void retryPairing()}
+          />
         </form>
       </main>
     );
@@ -336,6 +523,7 @@ export function App() {
 
   return (
     <div className="kds-shell">
+      <KitchenViewportNotice />
       <header className="topbar">
         <div>
           <span className="eyebrow">COMANVIEW KDS</span>
@@ -346,25 +534,57 @@ export function App() {
             <button
               key={station.stationId}
               className={station.stationId === stationId ? 'active' : ''}
-              onClick={() => setStationId(station.stationId)}
+              aria-pressed={station.stationId === stationId}
+              disabled={Boolean(pendingTicket)}
+              onClick={() => {
+                stationRef.current = station.stationId;
+                setStationId(station.stationId);
+                setError(null);
+              }}
             >
               {station.name}
             </button>
           ))}
         </nav>
-        <div className={`connection ${connection.toLowerCase()}`}>
-          <span /> {connection === 'CONNECTED' ? 'EDGE LOCAL' : 'CONEXIÓN LOCAL PERDIDA'}
-        </div>
         <div className="kds-operator">
           <strong>{authUser.displayName}</strong>
-          <span>{authUser.roles.join(' · ')}</span>
-          <button type="button" onClick={() => void logout()}>
+          <span>Cocina</span>
+          <button disabled={Boolean(pendingTicket)} type="button" onClick={() => void logout()}>
             Bloquear
           </button>
         </div>
       </header>
 
-      {error && <div className="error-banner">{error}</div>}
+      <LocalConnectionStatus local={connection} realtime={realtime} />
+      {stationsLoaded && !selectedStation && (
+        <InlineAlert tone="warning" title="Estación no disponible">
+          Selecciona una estación de la lista. Si no hay opciones, pide al responsable que configure
+          una estación activa.
+        </InlineAlert>
+      )}
+      {readError && (
+        <InlineAlert urgent tone="error" title="No pudimos actualizar las comandas">
+          {readError}
+        </InlineAlert>
+      )}
+      {error && (
+        <InlineAlert urgent tone="warning" title="Revisa la preparación">
+          {error}
+          <button onClick={() => setError(null)}>Entendido</button>
+        </InlineAlert>
+      )}
+      <button
+        className="refresh-board"
+        disabled={Boolean(pendingTicket)}
+        onClick={() => {
+          setConnection('CONNECTING');
+          void refreshStations()
+            .then(() => refreshTickets())
+            .catch((problem) => setReadError(getKdsErrorMessage(problem)));
+        }}
+      >
+        Actualizar estación
+      </button>
       <main className="board">
         {columns.map((column) => (
           <section key={column.status} className={`column ${column.status.toLowerCase()}`}>
@@ -372,76 +592,32 @@ export function App() {
               <h2>{column.title}</h2>
               <strong>{byStatus[column.status].length}</strong>
             </header>
-            <div className="ticket-list">
+            <div className="ticket-list" tabIndex={0} role="region" aria-label={`Comandas: ${column.title}`}>
               {byStatus[column.status].map((ticket) => (
-                <article
+                <KitchenTicket
                   key={ticket.ticketId}
-                  className={`ticket timer-${timerTone(
-                    ticket.sentAt,
-                    ticket.status,
-                    ticket.readyAt,
-                    now,
-                  ).toLowerCase()}`}
-                >
-                  <div className="ticket-heading">
-                    <div>
-                      <strong>Orden {ticket.orderNumber}</strong>
-                      <span>Ronda {ticket.roundNumber}</span>
-                    </div>
-                    <time>
-                      {ticket.status === 'READY' ? 'Listo en ' : ''}
-                      {formatElapsed(ticket.sentAt, ticket.status, ticket.readyAt, now)}
-                    </time>
-                  </div>
-                  <div className="items">
-                    {ticket.items.map((item) => (
-                      <div key={item.orderItemId} className="item">
-                        <h3>
-                          <b>{item.quantity}×</b> {item.productName}
-                        </h3>
-                        {item.modifiers.map((modifier) => (
-                          <div key={modifier.modifierOptionId} className="modifier">
-                            + {modifier.name}
-                          </div>
-                        ))}
-                        {item.specialInstructions && (
-                          <div className="instructions">
-                            <span>NOTA</span>
-                            {item.specialInstructions}
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                  {ticket.status === 'PENDING' && (
-                    <button
-                      className="action start"
-                      disabled={
-                        pendingTicket === ticket.ticketId ||
-                        connection !== 'CONNECTED' ||
-                        !authUser.permissions.includes(PermissionCodes.KDS_UPDATE_PREPARATION)
-                      }
-                      onClick={() => void transition(ticket, 'PREPARING')}
-                    >
-                      {pendingTicket === ticket.ticketId ? 'CONFIRMANDO…' : 'COMENZAR'}
-                    </button>
-                  )}
-                  {ticket.status === 'PREPARING' && (
-                    <button
-                      className="action ready"
-                      disabled={
-                        pendingTicket === ticket.ticketId ||
-                        connection !== 'CONNECTED' ||
-                        !authUser.permissions.includes(PermissionCodes.KDS_UPDATE_PREPARATION)
-                      }
-                      onClick={() => void transition(ticket, 'READY')}
-                    >
-                      {pendingTicket === ticket.ticketId ? 'CONFIRMANDO…' : 'LISTO'}
-                    </button>
-                  )}
-                </article>
+                  ticket={ticket}
+                  now={now}
+                  reason={kitchenActionReason({
+                    busy: pendingTicket !== null,
+                    connected: connection === 'CONNECTED' && !readError,
+                    authorized: authUser.permissions.includes(
+                      PermissionCodes.KDS_UPDATE_PREPARATION,
+                    ),
+                    stationAvailable: Boolean(selectedStation),
+                  })}
+                  onTransition={(target) => void transition(ticket, target)}
+                />
               ))}
-              {byStatus[column.status].length === 0 && <div className="empty">Sin tickets</div>}
+              {byStatus[column.status].length === 0 && (
+                <div className="empty">
+                  {!selectedStation
+                    ? 'Selecciona una estación disponible'
+                    : readError || connection !== 'CONNECTED'
+                      ? 'Esperando datos vigentes'
+                      : 'Sin comandas en este estado'}
+                </div>
+              )}
             </div>
           </section>
         ))}

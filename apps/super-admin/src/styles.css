@@ -1,4 +1,16 @@
 @import '@comanview/ui/tokens.css';
+.sensitive-action { width: min(680px, calc(100vw - 32px)); }
+.sensitive-action form, .sensitive-action fieldset { display: grid; gap: 16px; }
+.sensitive-action fieldset { border: 0; padding: 0; margin: 16px 0; min-width: 0; }
+.sensitive-action label { display: grid; gap: 8px; font-weight: 700; }
+.sensitive-action input:not([type=checkbox]), .sensitive-action textarea { width: 100%; min-height: 44px; border: 1px solid #8ca79f; border-radius: 8px; padding: 10px; }
+.sensitive-action textarea { min-height: 90px; resize: vertical; }
+.sensitive-action label:has(input[type=checkbox]) { display: flex; align-items: center; min-height: 44px; }
+.sensitive-action input[type=checkbox] { width: 22px; height: 22px; flex-shrink: 0; }
+.sensitive-action button { min-height: 44px; min-width: 44px; padding: 10px 16px; border-radius: 8px; }
+.sensitive-action code { overflow-wrap: anywhere; }
+.sensitive-action .form-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 16px; }
+.sensitive-action .cv-alert { margin: 12px 0; }
 :root { font-family: var(--cv-font-sans); color: var(--cv-text); background: var(--cv-app-bg); font-synthesis: none; }
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; min-height: 100vh; }
@@ -52,6 +64,17 @@ code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }.status 
 .location-summary details, .binding-preview details { color: #5f716d; font-size: .75rem; }.location-summary summary, .binding-preview summary { color: #17675e; cursor: pointer; font-weight: 700; }.location-summary details code { display: block; margin-top: 5px; overflow-wrap: anywhere; }
 .edge-history,.license-summary,.authorization-summary { display: flex !important; align-items: center; flex-wrap: wrap; gap: 6px; }
 .location-state { display: grid; gap: 8px; color: #687a77; font-size: .78rem; }.location-license-controls { min-width: 0; display: grid; gap: 9px; }.location-license-controls > .secondary { margin: 0; }
+.control-grid[hidden], .table-card[hidden] { display:none; }
+.control-navigation, .location-tabs, .location-selector { display:flex; flex-wrap:wrap; gap:8px; margin:12px 0; }
+.control-navigation button, .location-tabs button, .location-selector button { min-height:44px; padding:8px 12px; border:1px solid #bdccc7; border-radius:8px; background:white; color:#224b40; cursor:pointer; }
+.control-navigation button[aria-current], .location-tabs button[aria-current], .location-selector button[aria-current] { background:#174f42; color:white; }
+.location-control { display:block; padding:16px; }
+.location-control > .location-summary { gap:4px; }
+.location-control .location-summary > strong { font-size:1.3rem; }
+.location-control code { overflow-wrap:anywhere; }
+.location-control .recovery-actions { display:flex; flex-wrap:wrap; align-items:start; gap:10px; }
+.location-control .recovery-actions > p, .location-control .authorization-summary { flex-basis:100%; }
+.location-license-controls .license-actions { display:flex; flex-wrap:wrap; gap:8px; }
 .authorization-summary { padding: 9px 10px; border-radius: 9px; background: #f0f5f3; }.authorization-summary small { flex-basis: 100%; color: #71817e; }
 .status-active,.status-ready,.status-valid,.status-issued,.status-consumed { background: var(--cv-success-bg); color: var(--cv-success-text); }
 .status-pending,.status-pending_phase,.status-past_due,.status-grace_period { background: var(--cv-warning-bg); color: var(--cv-warning-text); }

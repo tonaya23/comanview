@@ -12,7 +12,7 @@ import { errorHandler } from '../../app/errorHandler.js';
 it('serves authorized Personnel independently and keeps unrelated routes forbidden',async()=>{
   const app=Fastify({logger:false});
   app.setValidatorCompiler(validatorCompiler);app.setSerializerCompiler(serializerCompiler);app.setErrorHandler(errorHandler);
-  const guard=new AuthGuard({authenticate:()=>({permissions:['PERSONNEL_VIEW']})} as unknown as AuthService,'enforced');
+  const guard=new AuthGuard({authenticateHttp:async()=>({permissions:['PERSONNEL_VIEW']})} as unknown as AuthService,'enforced');
   const list=vi.fn(()=>({ownerRecoveryRequired:false,users:[]}));
   const state=vi.fn();
   await app.register(personnelRoutes({list} as unknown as PersonnelService,guard));

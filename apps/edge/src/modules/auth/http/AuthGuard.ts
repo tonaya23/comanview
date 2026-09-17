@@ -38,7 +38,14 @@ export class AuthGuard {
     if (!authorization?.startsWith('Bearer ')) {
       throw new AppError('AUTHENTICATION_REQUIRED', 401, 'A valid local session is required.');
     }
-    request.authContext = this.service.authenticate(authorization.slice('Bearer '.length));
+    try {
+      request.authContext = await this.service.authenticateHttp(authorization.slice('Bearer '.length));
+      if(process.env['COMANVIEW_SECURITY_TRACE']==='true')request.log.info({event:'AUTH_VALIDATED',
+        sessionId:request.authContext.sessionId,userId:request.authContext.userId,deviceId:request.authContext.deviceId},'Security trace');
+    }catch(error){
+      if(process.env['COMANVIEW_SECURITY_TRACE']==='true')request.log.info({event:'AUTH_REJECTED',code:error instanceof AppError?error.code:'UNCLASSIFIED'},'Security trace');
+      throw error;
+    }
   };
 
   requirePermission(permission: Permission) {
@@ -52,6 +59,11 @@ export class AuthGuard {
 
   get bypassesAuthentication(): boolean {
     return this.mode === 'test-bypass';
+  }
+
+  withRealtimeAuthorization(token:string,permissions:readonly Permission[],deliver:(actor:AuthenticatedActor)=>void) {
+    if(this.mode==='test-bypass'){deliver(TEST_ACTOR);return Promise.resolve('AUTHORIZED' as const);}
+    return this.service.withRealtimeAuthorization(token,permissions,deliver);
   }
 
   authenticateRealtime(token: string, permission: Permission): boolean {

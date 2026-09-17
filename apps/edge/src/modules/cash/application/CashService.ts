@@ -23,7 +23,7 @@ import type {
 } from '@comanview/contracts';
 import type { CashReportPrintPayload } from '@comanview/printing';
 import type { EdgeOperationalContext } from '../../../app/operationalContext.js';
-import { AppError } from '../../../app/errorHandler.js';
+import { AppError,parseContractErrorCode } from '../../../app/errorHandler.js';
 import type { AuthorizedOperation } from '../../../app/authContext.js';
 import type { EdgeLicenseManager } from '../../licensing/EdgeLicenseManager.js';
 import type { AdministrationService } from '../../administration/AdministrationService.js';
@@ -73,7 +73,7 @@ export class CashService {
     if(!config.timeZone||!config.rollover||config.businessDayVersion<1)throw new AppError('BUSINESS_DAY_POLICY_REQUIRED',409,'Configura la zona horaria y corte del día de negocio.');
     const policy={operationalTimezone:config.timeZone,rollover:config.rollover,version:config.businessDayVersion};
     try{return{register,currency:config.currency,businessDate:assertBusinessDate(policy,now,submittedDate),policyJson:JSON.stringify(policy)};}
-    catch(error){const code=error instanceof Error?error.message:'BUSINESS_DAY_POLICY_REQUIRED';throw new AppError(code,409,'La fecha de negocio debe ser calculada por Edge.');}
+    catch(error){const code=parseContractErrorCode(error instanceof Error?error.message:null)??'BUSINESS_DAY_POLICY_REQUIRED';throw new AppError(code,409,'La fecha de negocio debe ser calculada por Edge.');}
   }
 
   getCurrentSession(): CurrentCashSessionResponse {

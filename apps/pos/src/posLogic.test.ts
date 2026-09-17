@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { CategoryResponse, ProductResponse } from '@comanview/contracts';
 import { ErrorResponseSchema } from '@comanview/contracts';
 import { EdgeClientError } from '@comanview/client-sdk';
+import { getUserGuidance } from '@comanview/ui';
 import {
   ALL_CATEGORIES,
   canCreateAnotherCounterOrder,
@@ -26,7 +27,8 @@ import {
 
 it('recognizes a missing default register and explains the setup step',()=>{
   const body=ErrorResponseSchema.parse({error:'DEFAULT_CASH_REGISTER_REQUIRED',message:'Configura una caja predeterminada.'});
-  expect(getErrorMessage(new EdgeClientError(body.message,body.error,409))).toContain('Restaurante → Cajas');
+  expect(getErrorMessage(new EdgeClientError(body.message,body.error,409))).toBe(getUserGuidance(body.error).explanation);
+  expect(getUserGuidance(body.error).action?.target).toEqual({surface:'administration',section:'registers'});
 });
 
 it('prevents orphaning an empty open counter sale and explains administration blockers', () => {
@@ -170,7 +172,7 @@ describe('POS presentation behavior', () => {
 
   it('explains an optimistic concurrency conflict in operational language', () => {
     expect(getErrorMessage(new EdgeClientError('technical', 'STALE_ORDER_VERSION', 409))).toContain(
-      'cambió en otro dispositivo',
+      'estado más reciente',
     );
   });
 
@@ -296,7 +298,7 @@ describe('POS presentation behavior', () => {
   it('explains stale unavailable modifier selections operationally', () => {
     expect(
       getErrorMessage(new EdgeClientError('technical', 'MODIFIER_UNAVAILABLE', 409)),
-    ).toContain('Actualizamos el catálogo');
+    ).toContain('catálogo vigente');
   });
 
   it('allows configuration editing only for DRAFT items', () => {

@@ -1,4 +1,7 @@
 import {
+  IssueOwnerRecoveryAuthorizationRequestSchema,
+  OwnerRecoveryAuthorizationResultSchema,
+  type IssueOwnerRecoveryAuthorizationRequest,
   CloudAdminLogoutResponseSchema,
   CloudAdminSessionResponseSchema,
   CloudCashMovementListResponseSchema,
@@ -50,11 +53,12 @@ import {
   type IssuedInstallationAuthorization,
   type InstallationAuthorizationStatus,
   IssueRecoveryAuthorizationRequestSchema,IssuedRecoveryAuthorizationSchema,
-  type IssuedRecoveryAuthorization,
+  type IssuedRecoveryAuthorization,type ErrorCode,type PublicErrorDetails,
 } from '@comanview/contracts';
+import { diagnosticDetails } from './errorTransport.js';
 
 interface Schema<T> { parse(value: unknown): T }
-interface CloudAdminResponse { ok: boolean; status: number; json(): Promise<unknown> }
+interface CloudAdminResponse { ok: boolean; status: number; headers?: { get(name:string):string|null }; json(): Promise<unknown> }
 interface CloudAdminRequestInit {
   method?: string;
   body?: string;
@@ -72,9 +76,9 @@ export interface CloudAdminClientOptions { baseUrl?: string; fetch?: CloudAdminF
 export class CloudAdminClientError extends Error {
   constructor(
     message: string,
-    readonly code: string,
+    readonly code: ErrorCode|'CLOUD_UNREACHABLE'|'INVALID_CLOUD_RESPONSE'|'UNKNOWN_CLOUD_ERROR',
     readonly status: number | null,
-    readonly details?: unknown,
+    readonly details?: PublicErrorDetails,
   ) {
     super(message);
     this.name = 'CloudAdminClientError';
@@ -101,6 +105,7 @@ export interface CloudAdminClient {
   issueInstallationAuthorization(locationId:string,input:IssueInstallationAuthorizationRequest):Promise<IssuedInstallationAuthorization>;
   getLatestInstallationAuthorization(locationId:string):Promise<{authorization:InstallationAuthorizationStatus|null}>;
   issueRecoveryAuthorization(locationId:string,input:{commandId:string;sourceEdgeId:string;targetEdgeId:string;backupId:string;reason:string}):Promise<IssuedRecoveryAuthorization>;
+  issueOwnerRecoveryAuthorization(locationId:string,input:IssueOwnerRecoveryAuthorizationRequest):Promise<ReturnType<typeof OwnerRecoveryAuthorizationResultSchema.parse>>;
   getLocationLicense(locationId: string): Promise<LocationLicenseAssignment>;
   assignLocationLicense(locationId: string, input: { commandId: string; expectedRevision: number; planId: string; declaredState: LicenseDeclaredState; configuration: EdgeConfiguration; reason: string }): Promise<LocationLicenseAssignment>;
   updateLocationLicenseState(locationId: string, input: { commandId: string; expectedRevision: number; declaredState: LicenseDeclaredState; reason: string }): Promise<LocationLicenseAssignment>;
@@ -127,19 +132,19 @@ export function createCloudAdminClient(options: CloudAdminClientOptions = {}): C
       const requestInit: CloudAdminRequestInit = { ...init, credentials: 'include' };
       if (init?.body) requestInit.headers = { ...init.headers, 'content-type': 'application/json' };
       response = await cloudFetch(`${baseUrl}${path}`, requestInit);
-    } catch (error) {
-      throw new CloudAdminClientError('No fue posible conectar con ComanView Cloud.', 'CLOUD_UNREACHABLE', null, error);
+    } catch {
+      throw new CloudAdminClientError('No fue posible conectar con ComanView Cloud.', 'CLOUD_UNREACHABLE', null);
     }
     let body: unknown;
     try { body = await response.json(); }
-    catch { throw new CloudAdminClientError('Cloud devolvió una respuesta inválida.', 'INVALID_CLOUD_RESPONSE', response.status); }
+    catch { throw new CloudAdminClientError('Cloud devolvió una respuesta inválida.', 'INVALID_CLOUD_RESPONSE', response.status,diagnosticDetails(response.headers)); }
     if (!response.ok) {
       const parsed = ErrorResponseSchema.safeParse(body);
       if (parsed.success) throw new CloudAdminClientError(parsed.data.message, parsed.data.error, response.status, parsed.data.details);
-      throw new CloudAdminClientError('Cloud rechazó la operación.', 'UNKNOWN_CLOUD_ERROR', response.status, body);
+      throw new CloudAdminClientError('Cloud rechazó la operación.', 'UNKNOWN_CLOUD_ERROR', response.status,diagnosticDetails(response.headers,body));
     }
     try { return schema.parse(body); }
-    catch (error) { throw new CloudAdminClientError('Cloud devolvió datos inesperados.', 'INVALID_CLOUD_RESPONSE', response.status, error); }
+    catch { throw new CloudAdminClientError('Cloud devolvió datos inesperados.', 'INVALID_CLOUD_RESPONSE', response.status,diagnosticDetails(response.headers,body)); }
   }
 
   return {
@@ -162,6 +167,7 @@ export function createCloudAdminClient(options: CloudAdminClientOptions = {}): C
     issueInstallationAuthorization:(locationId,input)=>request(`/admin/v1/locations/${locationId}/installation-authorizations`,IssuedInstallationAuthorizationSchema,{method:'POST',body:JSON.stringify(input)}),
     getLatestInstallationAuthorization:(locationId)=>request(`/admin/v1/locations/${locationId}/installation-authorizations/latest`,LatestInstallationAuthorizationResponseSchema),
     issueRecoveryAuthorization:(locationId,input)=>request(`/admin/v1/locations/${locationId}/recovery-authorizations`,IssuedRecoveryAuthorizationSchema,{method:'POST',body:JSON.stringify(IssueRecoveryAuthorizationRequestSchema.parse(input))}),
+    issueOwnerRecoveryAuthorization:(locationId,input)=>request(`/admin/v1/locations/${locationId}/owner-recovery-authorizations`,OwnerRecoveryAuthorizationResultSchema,{method:'POST',body:JSON.stringify(IssueOwnerRecoveryAuthorizationRequestSchema.parse(input))}),
     getLocationLicense: (locationId) => request(`/admin/v1/locations/${locationId}/license`, LocationLicenseAssignmentSchema),
     assignLocationLicense: (locationId, input) => request(`/admin/v1/locations/${locationId}/license`, LocationLicenseAssignmentSchema, { method: 'PUT', body: JSON.stringify(input) }),
     updateLocationLicenseState: (locationId, input) => request(`/admin/v1/locations/${locationId}/license/state`, LocationLicenseAssignmentSchema, { method: 'PATCH', body: JSON.stringify(input) }),

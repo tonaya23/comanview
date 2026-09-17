@@ -5,6 +5,7 @@ import type {
   RestaurantTableResponse,
 } from '@comanview/contracts';
 import { EdgeClientError } from '@comanview/client-sdk';
+import { getUserGuidance } from '@comanview/ui';
 
 export const ALL_CATEGORIES = 'ALL';
 
@@ -185,75 +186,7 @@ export function getCashDifferencePresentation(amount: number, currency: string) 
   return { label: 'Caja cuadrada', value: formatMoney(0, currency), tone: 'balanced' as const };
 }
 
-const errorMessages: Record<string, string> = {
-  DEFAULT_CASH_REGISTER_REQUIRED: 'Configura primero la moneda y una caja predeterminada en Restaurante → Cajas para comenzar a operar.',
-  BUSINESS_DAY_POLICY_IN_USE: 'No se puede cambiar el día de negocio mientras haya cajas o ventas abiertas. Cierra o cancela el trabajo pendiente.',
-  CURRENCY_LOCKED: 'La moneda queda bloqueada permanentemente después de la primera actividad financiera.',
-  STATION_HAS_PENDING_WORK: 'La estación tiene productos enviados pendientes. Complétalos en KDS antes de desactivarla.',
-  TAX_CONFIGURATION_REQUIRED: 'OWNER debe configurar explícitamente los impuestos antes de agregar o reconfigurar productos.',
-  TAX_PROFILE_REQUIRED: 'El producto necesita un perfil fiscal válido.',
-  TAX_REVISION_INCONSISTENT: 'La revisión fiscal no coincide con su evidencia. Solicita revisión administrativa.',
-  TAX_SNAPSHOT_IMMUTABLE: 'El snapshot fiscal está protegido; no se modificó la venta.',
-  PRECHECK_REQUIRES_OPEN_ORDER:
-    'La precuenta solo está disponible mientras la venta sigue abierta.',
-  RECEIPT_REQUIRES_CLOSED_ORDER: 'Cierra la venta antes de generar el recibo.',
-  EDGE_UNREACHABLE: 'Se perdió la conexión local con Edge. La operación no está confirmada.',
-  PRODUCT_UNAVAILABLE:
-    'Este producto ya no está disponible. Actualiza el catálogo e intenta de nuevo.',
-  PRODUCT_INACTIVE: 'Este producto fue retirado del catálogo.',
-  INVALID_MODIFIER_SELECTION: 'Revisa las opciones obligatorias y los límites de selección.',
-  MODIFIER_UNAVAILABLE:
-    'Una opción seleccionada ya no está disponible. Actualizamos el catálogo; revisa tu selección.',
-  MODIFIER_INACTIVE:
-    'Una opción seleccionada fue retirada del catálogo. Actualizamos el catálogo; revisa tu selección.',
-  ORDER_ITEM_SENT: 'El producto ya fue enviado y no puede eliminarse como borrador.',
-  ORDER_PAID_AMOUNT_EXCEEDS_TOTAL:
-    'La edición dejaría el total por debajo de lo ya pagado. Conserva o aumenta el importe.',
-  ORDER_ITEM_SPECIAL_INSTRUCTIONS_FROZEN:
-    'La nota quedó protegida porque el producto ya fue enviado.',
-  SPECIAL_INSTRUCTIONS_TOO_LONG: 'La nota especial no puede superar 500 caracteres.',
-  NO_DRAFT_ITEMS: 'No hay productos nuevos por enviar.',
-  STALE_ORDER_VERSION:
-    'La venta cambió en otro dispositivo. Se actualizó su estado; revisa e intenta de nuevo.',
-  ORDER_NOT_FOUND: 'La venta actual ya no está disponible en Edge.',
-  CASH_SESSION_NOT_OPEN: 'Abre la caja antes de registrar un pago.',
-  CASH_SESSION_ALREADY_OPEN: 'Esta caja ya tiene una sesión abierta.',
-  PAYMENT_OVERPAYMENT: 'El pago supera el saldo pendiente de la venta.',
-  INVALID_CASH_TENDERED: 'El efectivo recibido no cubre consumo y propina.',
-  INVALID_PAYMENT_AMOUNT: 'Ingresa un monto de pago válido.',
-  INVALID_TIP: 'La propina indicada no es válida.',
-  TIPS_DISABLED: 'Las propinas están desactivadas en esta ubicación.',
-  ORDER_BALANCE_NOT_ZERO: 'La venta todavía tiene saldo pendiente y no puede cerrarse.',
-  ORDER_HAS_DRAFT_ITEMS: 'Envía o elimina los productos pendientes antes de cerrar la venta.',
-  PAYMENT_CURRENCY_MISMATCH: 'La moneda del pago no coincide con la venta.',
-  COMMAND_ID_CONFLICT: 'La operación ya fue utilizada con datos diferentes. Intenta nuevamente.',
-  INVALID_EDGE_RESPONSE: 'Edge respondió con datos inesperados. Intenta recargar la pantalla.',
-  AUTHENTICATION_REQUIRED: 'La sesión local ya no está disponible. Inicia sesión nuevamente.',
-  AUTH_SESSION_INVALID: 'La sesión local expiró o fue revocada. Inicia sesión nuevamente.',
-  DEVICE_NOT_AUTHORIZED: 'Este dispositivo aún no está autorizado. Empareja el dispositivo antes de iniciar sesión.',
-  DEVICE_NOT_PAIRED: 'Este dispositivo aún no está emparejado con el Edge local.',
-  DEVICE_CREDENTIAL_INVALID: 'La identidad guardada de este dispositivo no es válida. Empareja el dispositivo nuevamente.',
-  DEVICE_REVOKED: 'Este dispositivo fue revocado. Debe emparejarse nuevamente como un dispositivo nuevo.',
-  DEVICE_LIMIT_REACHED: 'Se alcanzó el límite de dispositivos activos para este tipo.',
-  DEVICE_LIMITS_UNAVAILABLE: 'Los límites de dispositivos todavía no están disponibles en la licencia local.',
-  PAIRING_CODE_INVALID: 'El código de emparejamiento no es válido.',
-  PAIRING_EXPIRED: 'La solicitud de emparejamiento expiró. Genera una nueva desde este dispositivo.',
-  PAIRING_RATE_LIMITED: 'Hubo demasiados intentos. Espera un momento antes de volver a intentarlo.',
-  PAIRING_ALREADY_CONSUMED: 'La solicitud ya fue aprobada, cancelada o dejó de estar disponible.',
-  INSTALLATION_AUTHORIZATION_INVALID: 'La autorización de instalación no es válida para este dispositivo.',
-  INSTALLATION_BOOTSTRAP_CLOSED: 'La instalación inicial ya fue completada y no puede repetirse.',
-  PERMISSION_DENIED: 'Tu usuario no tiene permiso para realizar esta operación.',
-  OVERRIDE_REQUIRED: 'Esta operación requiere autorización de Manager u Owner.',
-  OVERRIDE_PIN_INVALID: 'El PIN de autorización no es válido.',
-  OVERRIDE_USER_INACTIVE: 'El usuario autorizador no está activo.',
-  OVERRIDE_PERMISSION_DENIED: 'El usuario indicado no puede autorizar esta operación.',
-  REASON_REQUIRED: 'Indica un motivo para realizar esta operación.',
-  AUDIT_PERSISTENCE_FAILED: 'No se pudo guardar la auditoría; la operación no fue aplicada.',
-  INVALID_CASH_MOVEMENT: 'El movimiento requiere importe positivo y motivo.',
-  INVALID_CASH_COUNT: 'El efectivo contado debe ser un importe válido no negativo.',
-  CASH_SESSION_ALREADY_CLOSED: 'La CashSession ya fue cerrada.',
-  CASH_SESSION_HAS_PENDING_PAYMENTS: 'Existen Payments pendientes; resuélvelos antes del Corte Z.',
-};
+
 
 export function canEditDraftItem(status: 'DRAFT' | 'SENT'): boolean {
   return status === 'DRAFT';
@@ -267,10 +200,10 @@ export function canCreateAnotherCounterOrder(
 
 export function getErrorMessage(error: unknown): string {
   if (error instanceof EdgeClientError) {
-    return errorMessages[error.code] ?? error.message;
+    return getUserGuidance(error).explanation;
   }
 
-  return 'Ocurrió un error inesperado. Intenta de nuevo.';
+  return getUserGuidance('UNKNOWN_EDGE_ERROR').explanation;
 }
 
 export function parseMoneyInputToMinorUnits(value: string): number | null {

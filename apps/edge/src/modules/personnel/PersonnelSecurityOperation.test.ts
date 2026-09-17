@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import Database from 'better-sqlite3';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, unlink } from 'node:fs/promises';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -9,12 +9,12 @@ import { EntityId } from '@comanview/domain';
 import { hashOperationalPin, verifyOperationalPin, hashDeviceCredential } from '@comanview/auth';
 import { AuthRepository,EdgeControlRepository, applyAdministrationSchemaMigration, administrationMigrationDigest } from '@comanview/database';
 import { generateKeyPairSync } from 'node:crypto';
-import { signOwnerRecoveryAuthorization } from '@comanview/licensing';
+import { signOwnerRecoveryAuthorization, signControlDocument } from '@comanview/licensing';
 import { EdgeLicenseManager } from '../licensing/EdgeLicenseManager.js';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import * as schema from '@comanview/database/edge';
 import { AuthService } from '../auth/application/AuthService.js';
-import { MemoryRecoverySecurityStore, ensureRecoveryKey, performPersonnelSecurityOperation, updateRecoverySecurityFloor } from '../backup/RecoverySecurityStore.js';
+import { MemoryRecoverySecurityStore, DevelopmentRecoverySecurityStore, applySignedLicenseTransition, addRevokedDevice, ensureRecoveryKey, performPersonnelSecurityOperation, updateRecoverySecurityFloor, type RecoverySecurityStore } from '../backup/RecoverySecurityStore.js';
 import { createEncryptedBackupArtifact } from '../backup/BackupArtifact.js';
 import { personnelRestrictions, type StoredPersonnelSecurity } from './PersonnelSecurityModel.js';
 import type { PersonnelMutation } from './PersonnelSecurityOperation.js';
@@ -25,7 +25,7 @@ const directory=fileURLToPath(new URL('../../../../../migrations/edge/',import.m
 const resources:Array<{root:string;db:Database.Database}>=[];
 afterEach(async()=>{vi.restoreAllMocks();const owned=resources.splice(0);for(const r of owned)if(r.db.open)r.db.close();for(const root of new Set(owned.map(r=>r.root)))await rm(root,{recursive:true,force:true});});
 const id=()=>EntityId.generate().toString();
-async function fixture(){
+async function fixture(createStore:(root:string)=>RecoverySecurityStore=()=>new MemoryRecoverySecurityStore()){
   const root=await mkdtemp(join(tmpdir(),'comanview-personnel-')),db=new Database(join(root,'edge.db'));
   resources.push({root,db});
   for(const file of readdirSync(directory).filter(f=>/^\d{4}_.*\.sql$/.test(f)&&Number(f.slice(0,4))<=14).sort())db.exec(readFileSync(join(directory,file),'utf8'));
@@ -40,7 +40,7 @@ async function fixture(){
   db.prepare("INSERT INTO devices(id,tenant_id,location_id,name,device_type,status,session_timeout_minutes,created_at) VALUES(?,?,?,'Device','POS','ACTIVE',60,1)").run(deviceId,binding.tenantId,binding.locationId);
   const deviceCredential='test-device-credential-not-for-production';
   db.prepare('INSERT INTO device_credentials(credential_id,device_id,credential_hash,created_at) VALUES(?,?,?,1)').run(id(),deviceId,hashDeviceCredential(deviceCredential));
-  const store=new MemoryRecoverySecurityStore();
+  const store=createStore(root);
   await store.mutate(value=>updateRecoverySecurityFloor(ensureRecoveryKey(value).floor,{binding,installationEstablished:true,minimumSchemaVersion:14}));
   const snapshotId=id(),floor=await store.load();
   const artifact=await createEncryptedBackupArtifact({source:db,destinationDirectory:join(root,'safety'),backupId:snapshotId,
@@ -64,6 +64,115 @@ async function fixture(){
 }
 
 describe('durable personnel security protocol',()=>{
+  it('reuses only byte-identical validated durable state and re-decodes an independent writer',async()=>{
+    class CountingStore extends DevelopmentRecoverySecurityStore {
+      decodes=0;
+      protected override decode(value:Buffer){this.decodes++;return super.decode(value);}
+    }
+    const f=await fixture(root=>new CountingStore(join(root,'floor'))),store=f.store as CountingStore;
+    const session=await f.login('2222'),before=store.decodes;
+    await Promise.all(Array.from({length:20},()=>f.auth.withRealtimeAuthorization(session.token,['OWN_PIN_CHANGE'],()=>{})));
+    expect(store.decodes).toBe(before);
+    await new DevelopmentRecoverySecurityStore(join(f.root,'floor')).mutate(floor=>updateRecoverySecurityFloor(floor,{recoveryEpoch:1}));
+    expect(await f.auth.withRealtimeAuthorization(session.token,['OWN_PIN_CHANGE'],()=>{})).toBe('INVALID');
+    expect(store.decodes).toBe(before+1);
+  });
+  it('realtime never extends session lifetime and rejects changed epoch or revisions',async()=>{
+    const f=await fixture(),session=await f.login('2222'),deliver=vi.fn();
+    const before=f.db.prepare('SELECT expires_at,last_activity FROM auth_sessions WHERE user_id=?').all(f.workerId);
+    for(let n=0;n<8;n++)expect(await f.auth.withRealtimeAuthorization(session.token,['OWN_PIN_CHANGE'],deliver)).toBe('AUTHORIZED');
+    expect(f.db.prepare('SELECT expires_at,last_activity FROM auth_sessions WHERE user_id=?').all(f.workerId)).toEqual(before);
+    await f.run({kind:'ROTATE_CREDENTIAL',newPin:'3333'});
+    expect(await f.auth.withRealtimeAuthorization(session.token,['OWN_PIN_CHANGE'],deliver)).toBe('INVALID');
+    const next=await f.login('3333');await f.store.mutate(floor=>updateRecoverySecurityFloor(floor,{recoveryEpoch:floor.recoveryEpoch+1}));
+    expect(await f.auth.withRealtimeAuthorization(next.token,['OWN_PIN_CHANGE'],deliver)).toBe('INVALID');
+    expect(deliver).toHaveBeenCalledTimes(8);
+  });
+  it('rejects an override actor whose session expired while awaiting the security read barrier',async()=>{
+    let enter!:()=>void,release!:()=>void;
+    const entered=new Promise<void>(resolve=>{enter=resolve;}),gate=new Promise<void>(resolve=>{release=resolve;});
+    class PausedStore extends DevelopmentRecoverySecurityStore {
+      pause=false;
+      protected override async encode(value:Buffer){if(this.pause){this.pause=false;enter();await gate;}return value;}
+    }
+    const f=await fixture(root=>new PausedStore(join(root,'floor'))),session=await f.login('1111'),actor=await f.auth.authenticateHttp(session.token);
+    const clock=new Date();
+    f.db.prepare('UPDATE auth_sessions SET expires_at=? WHERE id=?').run(clock.getTime()+1000,actor.sessionId);
+    vi.useFakeTimers({toFake:['Date']});vi.setSystemTime(clock);
+    try {
+      (f.store as PausedStore).pause=true;
+      const barrier=f.store.mutate(floor=>updateRecoverySecurityFloor(floor,{offDeviceDirectory:join(f.root,'external')}));
+      await entered;
+      const authorization=f.auth.authorizeSingleOperation(actor,'PERSONNEL_MANAGE',undefined);
+      vi.setSystemTime(new Date(clock.getTime()+2000));release();await barrier;
+      await expect(authorization).rejects.toMatchObject({code:'AUTH_SESSION_INVALID'});
+    } finally { vi.useRealTimers(); }
+  });
+  it.each(['periodic','signed'] as const)('HTTP Auth waits for a real %s licensing file write and concurrent readers consume the committed Floor without stale cache',async kind=>{
+    let release!:()=>void, entered!:()=>void;
+    const writing=new Promise<void>(resolve=>{entered=resolve;}),barrier=new Promise<void>(resolve=>{release=resolve;});
+    class PausedStore extends DevelopmentRecoverySecurityStore {
+      pause=false;
+      protected override async encode(value:Buffer){if(this.pause){this.pause=false;entered();await barrier;}return value;}
+    }
+    const f=await fixture(root=>new PausedStore(join(root,'floor'))),store=f.store as PausedStore;
+    const session=await f.login('2222');
+    store.pause=true;
+    const keys=generateKeyPairSync('ed25519'),now=Date.now();
+    const envelope=signControlDocument({documentType:'LICENSE',formatVersion:1,documentId:id(),revision:1,...f.binding,
+      issuedAt:new Date(now-1000).toISOString(),expiresAt:new Date(now+3600000).toISOString(),graceUntil:new Date(now+7200000).toISOString(),
+      declaredState:'ACTIVE',planCode:'TEST',capabilities:['CORE_POS']},'test',keys.privateKey.export({type:'pkcs8',format:'pem'}).toString());
+    const activate=vi.fn();
+    const mutation=kind==='periodic'?store.mutate(floor=>updateRecoverySecurityFloor(floor,{maximumSignedRevisions:{...floor.maximumSignedRevisions,CONFIGURATION:1}})):
+      applySignedLicenseTransition(store,{envelope,publicKeyring:{test:keys.publicKey.export({type:'spki',format:'pem'}).toString()},binding:f.binding,now:new Date(),prepare:()=>{},activate});
+    await writing;
+    expect(store.licensingSnapshot()).toBeNull();
+    expect(()=>f.auth.authenticate(session.token)).toThrow('Personnel security must be refreshed.');
+    const expiry=f.db.prepare('SELECT expires_at FROM auth_sessions WHERE token_hash IS NOT NULL AND user_id=?').all(f.workerId);
+    const deliver=vi.fn();
+    const realtimeReads=Array.from({length:12},()=>f.auth.withRealtimeAuthorization(session.token,['OWN_PIN_CHANGE'],deliver));
+    await Promise.resolve();expect(deliver).not.toHaveBeenCalled();
+    let completed=0;
+    const reads=Array.from({length:4},()=>f.auth.authenticateHttp(session.token).then(actor=>{completed++;return actor;}));
+    await Promise.resolve();expect(completed).toBe(0);
+    release();await mutation;
+    expect(await Promise.all(realtimeReads)).toEqual(Array(12).fill('AUTHORIZED'));
+    expect(deliver).toHaveBeenCalledTimes(12);
+    if(kind==='signed')expect(activate).toHaveBeenCalledTimes(1);
+    expect((await Promise.all(reads)).every(actor=>actor.userId===f.workerId)).toBe(true);
+    const actor=await f.auth.authenticateHttp(session.token);
+    expect((await f.auth.currentHttp(actor)).user.id).toBe(f.workerId);
+    // Another registered instance writes this same file; cached policy must not win.
+    const other=new DevelopmentRecoverySecurityStore(join(f.root,'floor'));
+    await other.mutate(floor=>addRevokedDevice(floor,f.deviceId));
+    await expect(f.auth.authenticateHttp(session.token)).rejects.toMatchObject({code:'AUTH_SESSION_INVALID'});
+    expect(await f.auth.withRealtimeAuthorization(session.token,['OWN_PIN_CHANGE'],deliver)).toBe('INVALID');
+    expect(expiry.length).toBeGreaterThan(0);
+  });
+  it.each(['corrupt','missing'] as const)('HTTP Auth rejects a %s Floor instead of using a cached authenticated snapshot',async mode=>{
+    const f=await fixture(root=>new DevelopmentRecoverySecurityStore(join(root,'floor'))),session=await f.login('2222');
+    if(mode==='corrupt')await writeFile(join(f.root,'floor'),'invalid');else await unlink(join(f.root,'floor'));
+    await expect(f.auth.authenticateHttp(session.token)).rejects.toMatchObject({code:'RECOVERY_REQUIRED'});
+    const deliver=vi.fn();expect(await f.auth.withRealtimeAuthorization(session.token,['OWN_PIN_CHANGE'],deliver)).toBe('INVALID');expect(deliver).not.toHaveBeenCalled();
+  });
+  it('HTTP Auth preserves reserved-transition restrictions and rejects changed session revisions after mutation ACK',async()=>{
+    const f=await fixture(),session=await f.login('2222'),original=f.db.prepare.bind(f.db);
+    const spy=vi.spyOn(f.db,'prepare').mockImplementation(sql=>{
+      if(sql.includes('INSERT INTO personnel_security_intents'))throw new Error('reserved crash');return original(sql);
+    });
+    await expect(f.run({kind:'ROTATE_CREDENTIAL',newPin:'3333'})).rejects.toThrow('reserved crash');spy.mockRestore();
+    await expect(f.auth.authenticateHttp(session.token)).rejects.toMatchObject({code:'USER_SECURITY_REPAIR_REQUIRED'});
+    expect(await f.auth.withRealtimeAuthorization(session.token,['OWN_PIN_CHANGE'],()=>{throw new Error('must not deliver');})).toBe('INVALID');
+    const owner=await f.login('1111');
+    expect((await f.auth.authenticateHttp(owner.token)).userId).toBe(f.ownerId);
+  });
+  it('ENROLL succeeds once with its valid fields, rejects forbidden status, and leaves the owner session usable',async()=>{
+    const f=await fixture(),owner=await f.login('1111'),userId=id();
+    await expect(f.run({kind:'ENROLL',userId,expectedVersion:0,displayName:'New user',newPin:'3333',roles:['CASHIER'],status:'ACTIVE'})).rejects.toThrow('PERSONNEL_COMMAND_FIELDS_INVALID');
+    await f.run({kind:'ENROLL',userId,expectedVersion:0,displayName:'New user',newPin:'3333',roles:['CASHIER']});
+    expect((await f.login('3333')).user.id).toBe(userId);
+    expect((await f.auth.authenticateHttp(owner.token)).userId).toBe(f.ownerId);
+  });
   it('recovers only the Cloud-signed contractual owner with a new PIN, exact binding and one-use generation',async()=>{
     const f=await fixture(),floor=await f.store.load(),dbPath=f.db.name;
     const path=join(f.root,'safety',readdirSync(join(f.root,'safety')).find(name=>name.endsWith('.cvbackup'))!);

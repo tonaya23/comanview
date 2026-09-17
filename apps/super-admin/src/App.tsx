@@ -27,15 +27,19 @@ import type {
 } from '@comanview/contracts';
 import { InstallationAuthorizationPanel } from './InstallationAuthorizationPanel.js';
 import { LocationCommercialSummary } from './LocationCommercialSummary.js';
+import { OwnerRecoveryPanel } from './OwnerRecoveryPanel.js';
+
+import { SensitiveActionDialog, AuthorizationDelivery, SafeCopyControl, cloudGuidance, type SensitiveAction } from './SensitiveActionDialog.js';
 
 type View = 'control-plane' | 'locations' | 'overview' | 'orders' | 'sales' | 'cash';
 const client = createCloudAdminClient();
+type NamedLocation = CloudLocationSummary & { displayName?: string | null; tenantName?: string | null };
 
 export function App() {
   const [session, setSession] = useState<CloudAdminSessionResponse | null>(null);
   const [restoring, setRestoring] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [location, setLocation] = useState<CloudLocationSummary | null>(null);
+  const [location, setLocation] = useState<NamedLocation | null>(null);
   const [view, setView] = useState<View>('locations');
 
   useEffect(() => {
@@ -47,7 +51,7 @@ export function App() {
   if (restoring) return <CenteredState text="Restaurando sesión Cloud…" />;
   if (!session) return <Login onAuthenticated={setSession} />;
 
-  const selectLocation = (selected: CloudLocationSummary) => {
+  const selectLocation = (selected: NamedLocation) => {
     setLocation(selected);
     setView('overview');
     setError(null);
@@ -69,7 +73,7 @@ export function App() {
           {canManageControlPlane && <button className={view === 'control-plane' ? 'active' : ''} onClick={() => setView('control-plane')}>Control Plane</button>}
           <button className={view === 'locations' ? 'active' : ''} onClick={() => setView('locations')}>Locations</button>
           {location && <>
-            <div className="scope-label"><span>Location activa</span><code>{shortId(location.locationId)}</code></div>
+            <div className="scope-label"><span>{location.tenantName ?? 'Location activa'}</span><strong>{location.displayName ?? `Ubicación ${shortId(location.locationId)}`}</strong></div>
             <button className={view === 'overview' ? 'active' : ''} onClick={() => setView('overview')}>Overview</button>
             <button className={view === 'orders' ? 'active' : ''} onClick={() => setView('orders')}>Orders</button>
             {canViewFinancial && <button className={view === 'sales' ? 'active' : ''} onClick={() => setView('sales')}>Sales</button>}
@@ -78,7 +82,9 @@ export function App() {
         </aside>
         <main className="content">
           {error && <div className="global-error">{error}</div>}
-          {view === 'control-plane' && canManageControlPlane && <ControlPlane onError={setError} />}
+          {view === 'control-plane' && canManageControlPlane && <ControlPlane onError={setError} permissions={session.user.permissions} onOpenOperation={(selected) => {
+            void client.getOverview(selected.locationId).then((overview) => selectLocation({ ...overview.location, displayName: selected.displayName })).catch((cause) => setError(message(cause)));
+          }} />}
           {view === 'locations' && <Locations onSelect={selectLocation} onError={setError} />}
           {location && view === 'overview' && <Overview location={location} canViewFinancial={canViewFinancial} canManageControlPlane={canManageControlPlane} onOpenControlPlane={() => setView('control-plane')} onOpenOrder={() => setView('orders')} onError={setError} />}
           {location && view === 'orders' && <Orders location={location} canViewFinancial={canViewFinancial} onError={setError} />}
@@ -110,21 +116,33 @@ function Login({ onAuthenticated }: { onAuthenticated(value: CloudAdminSessionRe
   </form></div>;
 }
 
-function Locations({ onSelect, onError }: { onSelect(value: CloudLocationSummary): void; onError(value: string | null): void }) {
+function Locations({ onSelect, onError }: { onSelect(value: NamedLocation): void; onError(value: string | null): void }) {
   const [page, setPage] = useState<CloudAdminPage<CloudLocationSummary> | null>(null);
+  const [names, setNames] = useState<Record<string, { displayName: string | null; tenantName: string | null }>>({});
+  useEffect(() => {
+    let active = true;
+    void client.getTenants().then(async ({ data }) => {
+      const entries = await Promise.all(data.map(async (tenant) => {
+        const result = await client.getCanonicalLocations(tenant.tenantId);
+        return result.data.map((location) => [location.locationId, { displayName: location.displayName, tenantName: tenant.displayName }] as const);
+      }));
+      if (active) setNames(Object.fromEntries(entries.flat()));
+    }).catch(() => { /* Names are supplementary; operational reads remain usable. */ });
+    return () => { active = false; };
+  }, []);
   const [status, setStatus] = useState('');
   const load = (cursor?: string) => client.getLocations({ status: status || undefined, cursor }).then(setPage).catch((error) => onError(message(error)));
   useEffect(() => { void load(); }, [status]);
   return <section><PageTitle title="Locations" subtitle="Estado operacional recibido desde cada Edge" />
     <div className="toolbar"><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">Todos los estados</option><option>ONLINE</option><option>DEGRADED</option><option>OFFLINE</option></select></div>
     <div className="table-card"><table><thead><tr><th>Location</th><th>Edge</th><th>Estado</th><th>Heartbeat</th><th>Version</th><th>Pendientes</th></tr></thead><tbody>
-      {page?.data.map((item) => <tr key={item.locationId} className="clickable" role="button" tabIndex={0} onKeyDown={(event)=>activateRow(event,()=>onSelect(item))} onClick={() => onSelect(item)}><td><code>{item.locationId}</code><small>Tenant {shortId(item.tenantId)}</small></td><td><code>{shortId(item.edgeId)}</code></td><td><Status value={item.edgeStatus} /></td><td>{date(item.lastSeenAt)}</td><td>{item.edgeVersion ?? '—'} / schema {item.schemaVersion ?? '—'}</td><td>{item.pendingEventCount ?? '—'}</td></tr>)}
+      {page?.data.map((item) => <tr key={item.locationId} className="clickable" role="button" tabIndex={0} onKeyDown={(event)=>activateRow(event,()=>onSelect({...item, ...names[item.locationId]}))} onClick={() => onSelect({...item, ...names[item.locationId]})}><td><strong>{names[item.locationId]?.displayName ?? 'Nombre no disponible'}</strong><small>{names[item.locationId]?.tenantName ?? 'Tenant sin nombre disponible'}</small><small>Referencia: {shortId(item.locationId)}</small></td><td><code>{shortId(item.edgeId)}</code></td><td><Status value={item.edgeStatus} /></td><td>{date(item.lastSeenAt)}</td><td>{item.edgeVersion ?? '—'} / schema {item.schemaVersion ?? '—'}</td><td>{item.pendingEventCount ?? '—'}</td></tr>)}
     </tbody></table>{page && page.data.length === 0 && <Empty text="No hay Locations visibles para este usuario." />}</div>
     {page?.page.nextCursor && <button className="secondary" onClick={() => load(page.page.nextCursor!)}>Siguiente página</button>}
   </section>;
 }
 
-function Overview({ location, canViewFinancial, canManageControlPlane, onOpenControlPlane, onOpenOrder, onError }: { location: CloudLocationSummary; canViewFinancial: boolean; canManageControlPlane: boolean; onOpenControlPlane(): void; onOpenOrder(): void; onError(value: string | null): void }) {
+function Overview({ location, canViewFinancial, canManageControlPlane, onOpenControlPlane, onOpenOrder, onError }: { location: NamedLocation; canViewFinancial: boolean; canManageControlPlane: boolean; onOpenControlPlane(): void; onOpenOrder(): void; onError(value: string | null): void }) {
   const [data, setData] = useState<CloudLocationOverview | null>(null);
   const [state, setState] = useState<'loading' | 'ready' | 'unprovisioned' | 'error'>('loading');
   useEffect(() => {
@@ -139,12 +157,15 @@ function Overview({ location, canViewFinancial, canManageControlPlane, onOpenCon
   if (state === 'loading') return <CenteredState text="Cargando resumen…" />;
   if (state === 'unprovisioned') return <section><PageTitle title="Resumen de Location" subtitle={location.locationId} /><article className="panel empty-state"><h2>Esta Location aún no tiene un Edge activo</h2><p>Provisiona un Edge desde Control Plane para habilitar el estado operacional.</p>{canManageControlPlane && <button className="secondary" onClick={onOpenControlPlane}>Ir a Control Plane</button>}</article></section>;
   if (state === 'error' || !data) return <section><PageTitle title="Resumen de Location" subtitle={location.locationId} /><Empty text="No fue posible cargar el resumen." /></section>;
-  return <section><PageTitle title="Resumen de Location" subtitle={location.locationId} />
-    <div className="cards"><Metric label="Edge" value={statusLabel(data.location.edgeStatus)} tone={data.location.edgeStatus.toLowerCase()} /><Metric label="Pedidos abiertos" value={data.orderCounts.open} /><Metric label="Pedidos cerrados" value={data.orderCounts.closed} /><Metric label="Pedidos cancelados" value={data.orderCounts.cancelled} /></div>
+  const hasProjection = Boolean(data.location.projectionHealth.lastProjectionProcessedAt);
+  return <section><PageTitle title={location.displayName ?? 'Resumen de Location'} subtitle={location.tenantName ?? 'Estado operacional'} />
+    <details><summary>Identificadores técnicos</summary><p>Location: {location.locationId}</p><p>Tenant: {location.tenantId}</p></details>
+    {!hasProjection && <p role="status">Sin datos operacionales procesados todavía. No equivale a actividad cero.</p>}
+    <div className="cards"><Metric label="Edge" value={statusLabel(data.location.edgeStatus)} tone={data.location.edgeStatus.toLowerCase()} /><Metric label="Pedidos abiertos" value={hasProjection ? data.orderCounts.open : '—'} /><Metric label="Pedidos cerrados" value={hasProjection ? data.orderCounts.closed : '—'} /><Metric label="Pedidos cancelados" value={hasProjection ? data.orderCounts.cancelled : '—'} /></div>
     <div className="info-grid"><article className="panel"><h2>Operación</h2><Info label="Último heartbeat" value={date(data.location.lastSeenAt)} /><Info label="Último evento recibido" value={date(data.location.projectionHealth.lastEventReceivedAt)} /><Info label="Última projection procesada" value={date(data.location.projectionHealth.lastProjectionProcessedAt)} /><Info label="Eventos reportados pendientes" value={String(data.location.pendingEventCount ?? '—')} /></article>
-      {canViewFinancial && data.financial && <article className="panel"><h2>Ventas cerradas completas</h2>{data.financial.completeSalesTotals.map((total) => <div className="financial-total" key={total.currency}><strong>{money(total.chargedTotal, total.currency)}</strong><span>Venta {money(total.saleAmount, total.currency)} · Propina {money(total.tipAmount, total.currency)}</span></div>)}{data.financial.completeSalesTotals.length === 0 && <Empty text="Sin ventas completas en las últimas 24 horas." />}{data.financial.incompleteSaleCount > 0 && <div className="warning">{data.financial.incompleteSaleCount} venta(s) incompleta(s) excluida(s) de los totales.</div>}</article>}
+      {canViewFinancial && data.financial && <article className="panel"><h2>Ventas cerradas completas</h2>{data.financial.completeSalesTotals.map((total) => <div className="financial-total" key={total.currency}><strong>{money(total.chargedTotal, total.currency)}</strong><span>Venta {money(total.saleAmount, total.currency)} · Propina {money(total.tipAmount, total.currency)}</span></div>)}{data.financial.completeSalesTotals.length === 0 && <Empty text={hasProjection ? 'Sin ventas completas en las últimas 24 horas.' : 'Esperando datos procesados de ventas.'} />}{data.financial.incompleteSaleCount > 0 && <div className="warning">{data.financial.incompleteSaleCount} venta(s) incompleta(s) excluida(s) de los totales.</div>}</article>}
     </div>
-    <div className="section-heading"><h2>Pedidos recientes</h2><button className="text-button" onClick={onOpenOrder}>Ver todos</button></div><OrdersTable rows={data.recentOrders} />
+    <div className="section-heading"><h2>Pedidos recientes</h2><button className="text-button" onClick={onOpenOrder}>Ver todos</button></div>{hasProjection || data.recentOrders.length > 0 ? <OrdersTable rows={data.recentOrders} /> : <Empty text="Esperando datos procesados de pedidos."/>}
   </section>;
 }
 
@@ -174,7 +195,13 @@ function CashSessions({ location, onError }: { location: CloudLocationSummary; o
   return <section><PageTitle title="Sesiones de caja" subtitle="El efectivo esperado y la diferencia aparecen después del cierre en Edge" /><div className="toolbar"><select aria-label="Filtrar sesiones de caja por estado" value={status} onChange={(event) => setStatus(event.target.value)}><option value="">Todas</option><option value="OPEN">Abiertas</option><option value="CLOSED">Cerradas</option></select></div><div className="table-card"><table><thead><tr><th>Sesión</th><th>Día operativo</th><th>Estado</th><th>Fondo inicial</th><th>Efectivo esperado</th><th>Diferencia</th></tr></thead><tbody>{page?.data.map((session) => <tr className="clickable" role="button" tabIndex={0} key={session.cashSessionId} onKeyDown={(event)=>activateRow(event,()=>selectSession(session.cashSessionId))} onClick={()=>selectSession(session.cashSessionId)}><td><code>{shortId(session.cashSessionId)}</code><small>{date(session.openedAt)}</small></td><td>{session.businessDate}</td><td><Status value={session.status} /></td><td>{money(session.openingFloatAmount, session.currency)}</td><td>{session.expectedCashAmount === null ? 'Disponible al cerrar' : money(session.expectedCashAmount, session.currency)}</td><td>{session.differenceAmount === null ? '—' : money(session.differenceAmount, session.currency)}</td></tr>)}</tbody></table></div>{movements && <article className="panel"><h2>Movimientos</h2>{movements.map((movement) => <p key={movement.cashMovementId}><strong>{movement.movementType}</strong> {money(movement.amount, movement.currency)} · {movement.reason} · {date(movement.occurredAt)}</p>)}{movements.length === 0 && <Empty text="Sin movimientos para esta sesión." />}</article>}</section>;
 }
 
-function ControlPlane({ onError }: { onError(value: string | null): void }) {
+export function ControlPlane({ onError, permissions, onOpenOperation }: { onError(value: string | null): void; permissions: readonly string[]; onOpenOperation?(location: CanonicalCloudLocation): void }) {
+  const [creation, setCreation] = useState<'tenant' | 'location' | 'plans' | null>(null);
+  const [locationId, setLocationId] = useState<string | null>(null);
+  const [locationSection, setLocationSection] = useState<'operation' | 'license' | 'equipment' | 'recovery' | 'history'>('operation');
+  const [sensitiveAction,setSensitiveAction]=useState<SensitiveAction|null>(null);
+  const [ownerRecoveryTarget,setOwnerRecoveryTarget]=useState<{location:CanonicalCloudLocation;edgeId:string}|null>(null);
+  const [authorizationExpiry,setAuthorizationExpiry]=useState<string|undefined>();
   const [tenants, setTenants] = useState<CloudTenant[]>([]);
   const [tenant, setTenant] = useState<CloudTenant | null>(null);
   const [locations, setLocations] = useState<CanonicalCloudLocation[]>([]);
@@ -191,6 +218,7 @@ function ControlPlane({ onError }: { onError(value: string | null): void }) {
   const [planDeviceLimits,setPlanDeviceLimits]=useState({POS:'',WAITER:'',KDS:''});
   const [installationAuthorization,setInstallationAuthorization]=useState<string|null>(null);
   const [recoveryAuthorization,setRecoveryAuthorization]=useState<string|null>(null);
+  const [recoveryAuthorizationTitle,setRecoveryAuthorizationTitle]=useState('Autorización de recuperación de hardware');
   const [installationAuthorizationStatuses,setInstallationAuthorizationStatuses]=useState<Record<string,InstallationAuthorizationStatus|null>>({});
   const [installationAuthorizationTarget,setInstallationAuthorizationTarget]=useState<CanonicalCloudLocation|null>(null);
   const [installationAuthorizationError,setInstallationAuthorizationError]=useState<string|null>(null);
@@ -264,7 +292,14 @@ function ControlPlane({ onError }: { onError(value: string | null): void }) {
         title="Control de Tenants, Locations y Edge"
         subtitle="Provisioning, licencias e instalación inicial con historial y autorización explícita"
       />
-      <div className="control-grid">
+      <nav className="control-navigation" aria-label="Administración Cloud">
+        <button onClick={() => { setCreation(null); setTenant(null); setLocationId(null); }} aria-current={!creation ? 'page' : undefined}>Tenants e instalaciones</button>
+        <button onClick={() => setCreation('tenant')}>+ Nuevo Tenant</button>
+        <button onClick={() => setCreation('location')}>+ Nueva Location</button>
+        <button onClick={() => setCreation('plans')}>Planes</button>
+      </nav>
+      <div className="control-grid" hidden={creation !== 'tenant' && creation !== 'location'}>
+        {creation === 'tenant' &&
         <article className="panel">
           <h2>Nuevo Tenant</h2>
           <label>
@@ -278,6 +313,7 @@ function ControlPlane({ onError }: { onError(value: string | null): void }) {
                 .createTenant({ commandId: crypto.randomUUID(), displayName: tenantName })
                 .then((created) => {
                   setTenantName('');
+                  setCreation(null);
                   void loadTenants();
                   void loadLocations(created);
                 })
@@ -286,8 +322,8 @@ function ControlPlane({ onError }: { onError(value: string | null): void }) {
           >
             Crear Tenant
           </button>
-        </article>
-        <article className="panel">
+        </article>}
+        {creation === 'location' && <article className="panel">
           <h2>Nueva Location</h2>
           <label>
             Tenant
@@ -324,6 +360,7 @@ function ControlPlane({ onError }: { onError(value: string | null): void }) {
                 })
                 .then(() => {
                   setLocationName('');
+                  setCreation(null);
                   void loadLocations(tenant);
                 })
                 .catch((error) => onError(message(error)))
@@ -331,9 +368,9 @@ function ControlPlane({ onError }: { onError(value: string | null): void }) {
           >
             Crear Location
           </button>
-        </article>
+        </article>}
       </div>
-      <article className="panel">
+      {creation === 'plans' && <article className="panel">
         <h2>Planes técnicos/comerciales</h2>
         <div className="control-grid compact">
           <label>
@@ -412,12 +449,13 @@ function ControlPlane({ onError }: { onError(value: string | null): void }) {
           Crear plan
         </button>
         {plans.map((plan) => (
-          <small className="plan-row" key={plan.planId}>
-            {plan.code} · {plan.capabilities.join(', ') || 'Sin capabilities'} · limits {JSON.stringify(plan.deviceLimits)}
-          </small>
+          <details className="plan-row" key={plan.planId}>
+            <summary>{plan.displayName} · {plan.code}</summary>
+            {plan.capabilities.join(', ') || 'Sin capabilities'} · limits {JSON.stringify(plan.deviceLimits)}
+          </details>
         ))}
-      </article>
-      <div className="table-card">
+      </article>}
+      <div className="table-card" hidden={creation !== null || tenant !== null}>
         <table>
           <thead>
             <tr>
@@ -430,11 +468,13 @@ function ControlPlane({ onError }: { onError(value: string | null): void }) {
               <tr
                 className="clickable"
                 key={item.tenantId}
-                onClick={() => void loadLocations(item)}
+                role="button" tabIndex={0}
+                onKeyDown={(event) => activateRow(event, () => { setLocationId(null); void loadLocations(item); })}
+                onClick={() => { setLocationId(null); void loadLocations(item); }}
               >
                 <td>
                   {item.displayName ?? 'Legacy sin configurar'}
-                  <small>{item.tenantId}</small>
+                  <small>Ver Locations</small>
                 </td>
                 <td>
                   <Status value={item.status} />
@@ -444,10 +484,16 @@ function ControlPlane({ onError }: { onError(value: string | null): void }) {
           </tbody>
         </table>
       </div>
-      {tenant && (
+      {tenant && creation === null && (
         <article className="panel">
           <h2>Locations de {tenant.displayName}</h2>
-          {locations.map((location) => {
+          <nav className="location-selector" aria-label="Locations del Tenant">
+            {locations.map((item) => <button key={item.locationId} aria-current={locationId === item.locationId ? 'page' : undefined} onClick={() => { setLocationId(item.locationId); setLocationSection('operation'); }}>
+              <strong>{item.displayName ?? 'Location sin nombre'}</strong> <Status value={item.configurationStatus}/>
+            </button>)}
+          </nav>
+          {!locations.length && <Empty text="Este Tenant aún no tiene Locations. Usa + Nueva Location para crear una."/>}
+          {locations.filter((location) => location.locationId === locationId).map((location) => {
             const active = edges[location.locationId]?.find((edge) => edge.status === 'ACTIVE');
             const replaced = edges[location.locationId]?.find((edge) => edge.status === 'REPLACED');
             const pending = pendingReplacements[location.locationId];
@@ -458,9 +504,6 @@ function ControlPlane({ onError }: { onError(value: string | null): void }) {
                 <div className="location-summary">
                   <strong>{location.displayName ?? 'Pendiente de configuración'}</strong>
                   <span>{location.timezone ?? 'Timezone pendiente'}</span>
-                  {(edges[location.locationId] ?? []).map((edge) => (
-                    <span className="edge-history" key={edge.edgeId}><Status value={edge.status}/> Edge …{edge.edgeId.slice(-8)}</span>
-                  ))}
                   {!license ? (
                     <span className="pending-replacement">Licencia no asignada</span>
                   ) : null}
@@ -472,28 +515,39 @@ function ControlPlane({ onError }: { onError(value: string | null): void }) {
                   )}
                   <details><summary>Detalles técnicos</summary><code>{location.locationId}</code></details>
                 </div>
+                <nav className="location-tabs" aria-label="Secciones de Location">
+                  {([['operation','Operación'],['license','Licencia'],['equipment','Equipo / Edge'],['recovery','Instalación / Recuperación'],['history','Historial técnico']] as const).map(([key,label]) => <button key={key} aria-current={locationSection === key ? 'page' : undefined} onClick={() => setLocationSection(key)}>{label}</button>)}
+                </nav>
+                {locationSection === 'operation' && <>
                 <div className="location-state"><span>Configuración</span><Status value={location.configurationStatus}/><span>{active ? 'Edge operativo' : 'Sin Edge activo'}</span></div>
+                <p>La operación del restaurante se consulta en el resumen de Locations. Las secciones de esta instalación permiten administrar su licencia y equipo.</p>
+                {onOpenOperation && <button className="secondary" onClick={() => onOpenOperation(location)}>Ver operación de esta Location</button>}
+                </>}
+                {locationSection === 'history' && <section aria-label="Historial técnico"><h3>Equipos registrados</h3>{(edges[location.locationId] ?? []).map((edge) => <p key={edge.edgeId}><Status value={edge.status}/> <code>{edge.edgeId}</code></p>)}<p>Tenant: <code>{location.tenantId}</code></p><p>Location: <code>{location.locationId}</code></p></section>}
+                {locationSection === 'license' &&
                 <div className="location-license-controls">
                   {license ? <LocationCommercialSummary license={license} plan={assignedPlan}/> : null}
                   {license ? (
                     <div className="license-actions">
                       <select
                         value={license.declaredState}
-                        onChange={(event) =>
-                          client
-                            .updateLocationLicenseState(location.locationId, {
-                              commandId: crypto.randomUUID(),
-                              expectedRevision: license.revision,
-                              declaredState: event.target.value as LicenseDeclaredState,
-                              reason: 'License state changed from Super Admin',
-                            })
-                            .then(() => loadLocations(tenant))
-                            .catch((error) => onError(message(error)))
-                        }
+                        aria-label="Estado de licencia"
+                        disabled={!permissions.includes('CLOUD_LICENSE_MANAGE')}
+                        onChange={(event) => {
+                          const declaredState=event.target.value as LicenseDeclaredState;
+                          setSensitiveAction({kind:'confirm',title:'Cambiar estado de licencia',entity:location.displayName??'Ubicación',
+                            details:{Ubicación:location.locationId,Revisión:String(license.revision)},
+                            impact:`Estado actual: ${statusLabel(license.declaredState)}. Nuevo estado: ${statusLabel(declaredState)}. Puede limitar o bloquear la operación del restaurante según las reglas de licencia. No borra operaciones ni evita las protecciones de seguridad.`,
+                            confirmLabel:'Confirmar cambio de estado',onConfirm:async()=>{
+                              await client.updateLocationLicenseState(location.locationId,{commandId:crypto.randomUUID(),expectedRevision:license.revision,declaredState,reason:'License state changed from Super Admin'});
+                              await loadLocations(tenant);
+                            }});
+                        }}
+
                       >
                         {['ACTIVE', 'PAST_DUE', 'GRACE_PERIOD', 'SUSPENDED', 'TERMINATED'].map(
                           (state) => (
-                            <option key={state}>{state}</option>
+                            <option key={state} value={state}>{statusLabel(state)}</option>
                           ),
                         )}
                       </select>
@@ -532,41 +586,23 @@ function ControlPlane({ onError }: { onError(value: string | null): void }) {
                       </button>
                       <button
                         className="secondary"
-                        onClick={() => {
-                          const values = window.prompt(
-                            'Porcentajes de propina separados por coma (ej. 10,15,20). Vacío desactiva propinas.',
-                            license.configuration.payment.tipPercentageOptionsBasisPoints
-                              .map((value) => value / 100)
-                              .join(','),
-                          );
-                          if (values === null) return;
-                          const percentages = values.trim() === ''
-                            ? []
-                            : values.split(',').map((value) => Number(value.trim()));
-                          if (percentages.some((value) => !Number.isFinite(value) || value < 0 || value > 100)) {
-                            onError('Los porcentajes de propina deben estar entre 0 y 100.');
-                            return;
+                        disabled={!permissions.includes('CLOUD_CONFIGURATION_MANAGE')}
+                        onClick={() => setSensitiveAction({
+                          kind:'tips',title:'Configurar política de propinas',entity:location.displayName ?? 'Ubicación',
+                          details:{Ubicación:location.locationId,Revisión:String(license.configurationRevision)},
+                          impact:'La política central limita las preferencias del restaurante. No modifica cobros anteriores ni concede capacidades fuera de la licencia.',
+                          confirmLabel:'Guardar política',initialPercentages:license.configuration.payment.tipPercentageOptionsBasisPoints,
+                          initialDelegation:license.configuration.tipPolicy?.ownerConfigurable??false,initialFixed:license.configuration.tipPolicy?.allowFixedAmount??false,
+                          onConfirm:async values => {
+                            await client.updateLocationConfiguration(location.locationId,{
+                              commandId:crypto.randomUUID(),expectedRevision:license.configurationRevision,
+                              configuration:{payment:{tipsEnabled:values.percentages.length>0,tipPercentageOptionsBasisPoints:values.percentages.map(value=>Math.round(value*100))},
+                                tipPolicy:{ownerConfigurable:values.ownerConfigurable,allowPercentages:values.percentages.length>0,allowedPercentagesBasisPoints:values.percentages.map(value=>Math.round(value*100)),allowFixedAmount:values.allowFixedAmount}},
+                              reason:'Payment tip configuration changed from Super Admin'});
+                            await loadLocations(tenant);
                           }
-                          void client
-                            .updateLocationConfiguration(location.locationId, {
-                              commandId: crypto.randomUUID(),
-                              expectedRevision: license.configurationRevision,
-                              configuration: {
-                                payment: {
-                                  tipsEnabled: percentages.length > 0,
-                                  tipPercentageOptionsBasisPoints: percentages.map((value) =>
-                                    Math.round(value * 100),
-                                  ),
-                                },
-                                tipPolicy:{ownerConfigurable:window.confirm('¿Permitir que el Owner elija preferencias dentro de esta lista?'),
-                                  allowPercentages:percentages.length>0,allowedPercentagesBasisPoints:percentages.map(value=>Math.round(value*100)),
-                                  allowFixedAmount:window.confirm('¿Permitir propina de monto fijo?')},
-                              },
-                              reason: 'Payment tip configuration changed from Super Admin',
-                            })
-                            .then(() => loadLocations(tenant))
-                            .catch((error) => onError(message(error)));
-                        }}
+                        })}
+
                       >
                         Configurar propinas
                       </button>
@@ -616,34 +652,33 @@ function ControlPlane({ onError }: { onError(value: string | null): void }) {
                       </button>
                     </>
                   )}
-                </div>
-                {active && license && <button className="secondary" onClick={() => {setInstallationAuthorizationTarget(location);setInstallationAuthorizationError(null);}}>Autorizar instalación inicial</button>}
-                {active&&replaced&&<button className="secondary" onClick={()=>{
-                  const backupId=window.prompt('Backup ID verificado que se restaurará en el Edge nuevo');if(!backupId)return;
-                  const reason=window.prompt('Motivo de recuperación de hardware');if(!reason)return;
-                  void client.issueRecoveryAuthorization(location.locationId,{commandId:crypto.randomUUID(),
-                    sourceEdgeId:replaced.edgeId,targetEdgeId:active.edgeId,backupId,reason})
-                    .then(result=>setRecoveryAuthorization(JSON.stringify(result.authorization)))
-                    .catch(error=>onError(message(error)));
-                }}>Autorizar recuperación</button>}
+                </div>}
+                {locationSection === 'recovery' && <section className="recovery-actions" aria-label="Instalación y recuperación">
+                {active && license && <><button className="secondary" disabled={!permissions.includes('CLOUD_DEVICE_BOOTSTRAP') || !(location.locationId in installationAuthorizationStatuses) || installationAuthorizationStatuses[location.locationId]?.status === 'CONSUMED'} aria-describedby={installationAuthorizationStatuses[location.locationId]?.status === 'CONSUMED' ? `consumed-${location.locationId}` : undefined} onClick={() => {setInstallationAuthorizationTarget(location);setInstallationAuthorizationError(null);}}>Autorizar instalación inicial</button>{installationAuthorizationStatuses[location.locationId]?.status === 'CONSUMED' && <p id={`consumed-${location.locationId}`}>La autorización inicial ya fue consumida. Para recuperar acceso utiliza el flujo de recuperación correspondiente.</p>}</>}
+                {active&&replaced&&<button className="secondary" disabled={!permissions.includes('CLOUD_RECOVERY_AUTHORIZE')} onClick={()=>setSensitiveAction({
+                  kind:'recovery',title:'Autorizar recuperación de hardware',entity:location.displayName??'Ubicación',
+                  details:{Ubicación:location.locationId,'Equipo de origen (reemplazado)':replaced.edgeId,'Equipo de destino (activo)':active.edgeId},
+                  impact:'Permite restaurar únicamente el respaldo verificado en el equipo de destino de esta ubicación. Uso único, vigencia de 30 minutos fijada por el servidor. No reactiva dispositivos revocados ni sustituye la clave de recuperación.',
+                  confirmLabel:'Emitir autorización',onConfirm:async ({backupId,reason})=>{
+                    const result=await client.issueRecoveryAuthorization(location.locationId,{commandId:crypto.randomUUID(),sourceEdgeId:replaced.edgeId,targetEdgeId:active.edgeId,backupId,reason});
+                    setAuthorizationExpiry(result.expiresAt);setRecoveryAuthorizationTitle('Autorización de recuperación de hardware');setRecoveryAuthorization(JSON.stringify(result.authorization));
+                  }
+                })}>Autorizar recuperación</button>}
+                {active&&<button className="secondary" disabled={!permissions.includes('CLOUD_RECOVERY_AUTHORIZE')} onClick={()=>setOwnerRecoveryTarget({location,edgeId:active.edgeId})}>Recuperar propietario contractual</button>}
                 {installationAuthorizationStatuses[location.locationId]&&<span className="authorization-summary">
                   <span>Autorización inicial</span><Status value={installationAuthorizationStatuses[location.locationId]!.status}/>
                   <small>Expira {date(installationAuthorizationStatuses[location.locationId]!.expiresAt)}</small>
                 </span>}
+                </section>}
+                {locationSection === 'equipment' && <section aria-label="Administrar equipo">
                 {pending ? (
                   <button
                     className="secondary danger"
-                    onClick={() => {
-                      const reason = window.prompt('Motivo de cancelación del Replacement');
-                      if (reason)
-                        void client
-                          .cancelReplacement(pending.replacementId, {
-                            commandId: crypto.randomUUID(),
-                            reason,
-                          })
-                          .then(() => loadLocations(tenant))
-                          .catch((error) => onError(message(error)));
-                    }}
+                    disabled={!permissions.includes('CLOUD_EDGE_REPLACE')}
+                    onClick={()=>setSensitiveAction({kind:'reason',title:'Cancelar reemplazo',entity:location.displayName??'Ubicación',
+                      details:{Ubicación:location.locationId,Reemplazo:pending.replacementId,'Equipo anterior':pending.oldEdgeId,'Equipo nuevo':pending.newEdgeId??'Pendiente de alta','Estado de reemplazo':statusLabel(pending.status)},impact:'Cancela el reemplazo pendiente y su alta asociada. No deshace un cambio de equipo ya completado. Para reemplazarlo después necesitarás iniciar una nueva operación.',
+                      confirmLabel:'Confirmar cancelación',onConfirm:async ({reason})=>{await client.cancelReplacement(pending.replacementId,{commandId:crypto.randomUUID(),reason});await loadLocations(tenant);}})}
+
                   >
                     Cancelar reemplazo
                   </button>
@@ -651,34 +686,23 @@ function ControlPlane({ onError }: { onError(value: string | null): void }) {
                   <div className="edge-actions">
                     <button
                       className="secondary danger"
-                      onClick={() => {
-                        const reason = window.prompt('Motivo de revocación');
-                        if (reason)
-                          void client
-                            .revokeEdge(active.edgeId, { commandId: crypto.randomUUID(), reason })
-                            .then(() => loadLocations(tenant))
-                            .catch((error) => onError(message(error)));
-                      }}
+                      disabled={!permissions.includes('CLOUD_EDGE_REVOKE')}
+                      onClick={()=>setSensitiveAction({kind:'reason',title:'Revocar equipo local',entity:location.displayName??'Ubicación',
+                        details:{Ubicación:location.locationId,Equipo:active.edgeId,'Estado actual':active.status},
+                        impact:'Revoca la autorización del equipo activo. No es una pausa reversible desde esta pantalla; no revierte operaciones históricas ni borra su base local.',
+                        confirmLabel:'Revocar equipo',onConfirm:async ({reason})=>{await client.revokeEdge(active.edgeId,{commandId:crypto.randomUUID(),reason});await loadLocations(tenant);}})}
+
                     >
                       Revocar Edge
                     </button>
                     <button
                       className="secondary"
-                      onClick={() => {
-                        const reason = window.prompt('Motivo del replacement');
-                        if (reason)
-                          void client
-                            .initiateReplacement(location.locationId, {
-                              commandId: crypto.randomUUID(),
-                              oldEdgeId: active.edgeId,
-                              reason,
-                            })
-                            .then((result) => {
-                              setIssued(result.provisioningCode);
-                              void loadLocations(tenant);
-                            })
-                            .catch((error) => onError(message(error)));
-                      }}
+                      disabled={!permissions.includes('CLOUD_EDGE_REPLACE')}
+                      onClick={()=>setSensitiveAction({kind:'reason',title:'Preparar reemplazo de equipo',entity:location.displayName??'Ubicación',
+                        details:{Ubicación:location.locationId,'Equipo actual':active.edgeId,'Estado actual':active.status},
+                        impact:'Genera un alta para el equipo nuevo. El anterior continúa activo hasta que se complete el cambio transaccional; entonces queda reemplazado. El destino se identifica durante el alta, no se elige arbitrariamente aquí.',
+                        confirmLabel:'Preparar reemplazo',onConfirm:async ({reason})=>{const result=await client.initiateReplacement(location.locationId,{commandId:crypto.randomUUID(),oldEdgeId:active.edgeId,reason});setIssued(result.provisioningCode);await loadLocations(tenant);}})}
+
                     >
                       Reemplazar Edge
                     </button>
@@ -698,6 +722,7 @@ function ControlPlane({ onError }: { onError(value: string | null): void }) {
                     Generar código
                   </button>
                 )}
+                </section>}
               </div>
             );
           })}
@@ -706,16 +731,17 @@ function ControlPlane({ onError }: { onError(value: string | null): void }) {
       {issued && (
         <div className="secret-once" role="alert">
           <strong>Código de provisioning (cópialo ahora)</strong>
-          <code>{issued.code}</code>
+          <SafeCopyControl value={issued.code} label="Copiar código de alta"/>
+          <p>Entrega este código solo al instalador autorizado; reemplaza el contenido del portapapeles después de usarlo.</p>
           <span>Expira {date(issued.expiresAt)}</span>
           <div className="edge-actions">
             <button
-              onClick={() =>
-                client
-                  .revokeProvisioningCode(issued.provisioningCodeId, crypto.randomUUID())
-                  .then(() => setIssued(null))
-                  .catch((error) => onError(message(error)))
-              }
+              disabled={!permissions.includes('CLOUD_EDGE_PROVISION')}
+              onClick={()=>setSensitiveAction({kind:'confirm',title:'Revocar código de alta',entity:'Código de alta pendiente',
+                details:{'Identificador público':issued.provisioningCodeId,Vencimiento:date(issued.expiresAt)},
+                impact:'Este código dejará de servir para dar de alta el equipo. No puede reactivarse; genera otro si necesitas continuar.',
+                confirmLabel:'Revocar código',onConfirm:async()=>{await client.revokeProvisioningCode(issued.provisioningCodeId,crypto.randomUUID());setIssued(null);}})}
+
             >
               Revocar código
             </button>
@@ -723,22 +749,16 @@ function ControlPlane({ onError }: { onError(value: string | null): void }) {
           </div>
         </div>
       )}
-      {installationAuthorization && (
-        <div className="secret-once" role="alert">
-          <strong>Autorización inicial firmada (cópiala ahora)</strong>
-          <textarea readOnly value={installationAuthorization} aria-label="Autorización inicial firmada" />
-          <span>No contiene el PIN ni la credencial del dispositivo.</span>
-          <button onClick={() => setInstallationAuthorization(null)}>Ya la guardé</button>
-        </div>
-      )}
-      {recoveryAuthorization&&<div className="secret-once" role="alert">
-        <strong>Autorización de recuperación firmada (cópiala ahora)</strong>
-        <textarea readOnly value={recoveryAuthorization} aria-label="Autorización de recuperación firmada" />
-        <span>Es temporal, de un solo uso y está ligada al Edge y backup indicados.</span>
-        <button onClick={()=>setRecoveryAuthorization(null)}>Ya la guardé</button>
-      </div>}
+      {!sensitiveAction && installationAuthorization && <AuthorizationDelivery title="Autorización inicial" document={installationAuthorization} expiresAt={authorizationExpiry} onClose={()=>setInstallationAuthorization(null)}/>}
+      {!sensitiveAction && !ownerRecoveryTarget && recoveryAuthorization && <AuthorizationDelivery title={recoveryAuthorizationTitle} document={recoveryAuthorization} expiresAt={authorizationExpiry} onClose={()=>setRecoveryAuthorization(null)}/>}
+      {sensitiveAction&&<SensitiveActionDialog action={sensitiveAction} onClose={()=>setSensitiveAction(null)}/>}
+      {ownerRecoveryTarget&&<OwnerRecoveryPanel locationName={ownerRecoveryTarget.location.displayName??'Ubicación'} tenantId={ownerRecoveryTarget.location.tenantId} locationId={ownerRecoveryTarget.location.locationId} targetEdgeId={ownerRecoveryTarget.edgeId} onClose={()=>setOwnerRecoveryTarget(null)} onSubmit={async(context,reason)=>{
+        const result=await client.issueOwnerRecoveryAuthorization(ownerRecoveryTarget.location.locationId,{commandId:crypto.randomUUID(),context,reason});
+        setAuthorizationExpiry(result.expiresAt);setRecoveryAuthorizationTitle('Autorización del propietario contractual');setRecoveryAuthorization(JSON.stringify(result.authorization));
+      }}/>}
       {installationAuthorizationTarget && <InstallationAuthorizationPanel
         locationName={installationAuthorizationTarget.displayName??'Location sin nombre'}
+        binding={{tenantId:installationAuthorizationTarget.tenantId,locationId:installationAuthorizationTarget.locationId,edgeId:edges[installationAuthorizationTarget.locationId]?.find(edge=>edge.status==='ACTIVE')?.edgeId??null}}
         status={installationAuthorizationStatuses[installationAuthorizationTarget.locationId]??null}
         busy={installationAuthorizationBusy} error={installationAuthorizationError}
         onClose={()=>{if(!installationAuthorizationBusy){setInstallationAuthorizationTarget(null);setInstallationAuthorizationError(null);}}}
@@ -748,7 +768,7 @@ function ControlPlane({ onError }: { onError(value: string | null): void }) {
             pairingId:pairing.pairingId,pairingCode:pairing.pairingCode,deviceId:pairing.deviceId,
             deviceType:pairing.deviceType,displayName:pairing.displayName,initialOwnerDisplayName:ownerDisplayName,
             reason:'Initial installation authorization from Super Admin'})
-            .then(result=>{setInstallationAuthorization(JSON.stringify(result.authorization));setInstallationAuthorizationTarget(null);void loadLocations(tenant!);})
+            .then(result=>{setAuthorizationExpiry(result.expiresAt);setInstallationAuthorization(JSON.stringify(result.authorization));setInstallationAuthorizationTarget(null);void loadLocations(tenant!);})
             .catch(error=>setInstallationAuthorizationError(message(error)))
             .finally(()=>setInstallationAuthorizationBusy(false));
         }}/>
@@ -767,6 +787,6 @@ function CenteredState({ text }: { text: string }) { return <div className="cent
 function shortId(value: string | null) { return value ? value.slice(0, 8) : 'Sin Edge'; }
 function date(value: string | null) { return value ? new Intl.DateTimeFormat('es-MX', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'UTC' }).format(new Date(value)) + ' UTC' : 'Nunca'; }
 function money(amount: number, currency: string | null) { return currency ? new Intl.NumberFormat('es-MX', { style: 'currency', currency }).format(amount / 100) : `${amount} minor units`; }
-function message(error: unknown) { return error instanceof CloudAdminClientError ? error.message : error instanceof Error ? error.message : 'Ocurrió un error inesperado.'; }
+function message(error: unknown) { return cloudGuidance(error); }
 export function activateRow(event:KeyboardEvent,action:()=>void) { if(event.key==='Enter'||event.key===' '){event.preventDefault();action();} }
 export function statusLabel(value:string) { return ({ACTIVE:'Activo',INACTIVE:'Inactivo',ONLINE:'En línea',OFFLINE:'Sin conexión',DEGRADED:'Degradado',OPEN:'Abierto',CLOSED:'Cerrado',CANCELLED:'Cancelado',PENDING:'Pendiente',READY:'Listo',NOT_READY:'No listo',REVOKED:'Revocado',REPLACED:'Reemplazado',EXPIRED:'Expirado',COMPLETE:'Completo',INCOMPLETE:'Incompleto',ISSUED:'Emitida',CONSUMED:'Consumida',PAST_DUE:'Pago vencido',GRACE_PERIOD:'Periodo de gracia',SUSPENDED:'Suspendida',TERMINATED:'Terminada'} as Record<string,string>)[value]??value; }

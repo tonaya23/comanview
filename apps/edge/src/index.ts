@@ -322,6 +322,7 @@ export async function buildApp(dbPath: string = ':memory:', options: BuildAppOpt
     closeDatabase();
   });
 
+  app.log.info({runtimeMarker:'1X-WS-AUTH-BARRIER-1',pid:process.pid,startedAt:new Date().toISOString()},'AUTH_RUNTIME_READY');
   return app;
 }
 
