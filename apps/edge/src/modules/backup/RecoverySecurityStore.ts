@@ -46,7 +46,10 @@ export interface RecoverySecurityFloor {
   installationEstablished:boolean;
   binding:{tenantId:string;locationId:string;edgeId:string}|null;
   recoveryEpoch:number;
-  minimumSchemaVersion?:14|15;
+  minimumSchemaVersion?:14|15|16;
+  catalogUpgradeJournal?:{formatVersion:1;kind:'CATALOG_SCHEMA_15_TO_16';fromSchema:15;toSchema:16;
+    phase:'PREPARING'|'SNAPSHOT_READY'|'VALIDATED';databasePath:string;snapshotId:string;snapshotPath:string;
+    migrationHash:string;binding:{tenantId:string;locationId:string;edgeId:string};recoveryEpoch:number}|null;
   personnel?:PersonnelSecurityFloor;
   administrationUpgradeJournal?:{formatVersion:1;fromSchema:14;toSchema:15;phase:'PREPARING'|'SNAPSHOT_READY';
     databasePath:string;snapshotId:string;snapshotPath:string;migrationHash:string}|null;
@@ -421,7 +424,18 @@ function validate(input:unknown):RecoverySecurityFloor {
     typeof value.checksum!=='string'||checksum(withoutChecksum(value))!==value.checksum)
     throw new Error('RECOVERY_SECURITY_STATE_INVALID');
   decodeBloom(value.revokedDeviceBloom);
-  if(value.minimumSchemaVersion!==undefined&&value.minimumSchemaVersion!==14&&value.minimumSchemaVersion!==15)throw new Error('RECOVERY_SECURITY_STATE_INVALID');
+  if(value.minimumSchemaVersion!==undefined&&![14,15,16].includes(value.minimumSchemaVersion))throw new Error('RECOVERY_SECURITY_STATE_INVALID');
+  if(value.catalogUpgradeJournal){const j=value.catalogUpgradeJournal;
+    if(j.formatVersion!==1||j.kind!=='CATALOG_SCHEMA_15_TO_16'||j.fromSchema!==15||j.toSchema!==16||
+      !['PREPARING','SNAPSHOT_READY','VALIDATED'].includes(j.phase)||
+      ![j.databasePath,j.snapshotId,j.snapshotPath,j.migrationHash].every(x=>typeof x==='string'&&x.length>0)||
+      !/^[a-f0-9]{64}$/.test(j.migrationHash)||!value.binding||!j.binding||
+      j.binding.edgeId!==value.binding.edgeId||j.binding.tenantId!==value.binding.tenantId||j.binding.locationId!==value.binding.locationId||
+      j.recoveryEpoch!==value.recoveryEpoch||!value.installationEstablished||value.recoveryState!=='RECOVERY_IN_PROGRESS'||
+      (j.phase==='VALIDATED'?value.minimumSchemaVersion!==16:value.minimumSchemaVersion!==15)||
+      value.journal||value.upgradeJournal||value.administrationUpgradeJournal)
+      throw new Error('RECOVERY_SECURITY_STATE_INVALID');
+  }
   if(value.personnel)PersonnelSecurityFloorSchema.parse(value.personnel);
   if(value.administrationUpgradeJournal){const j=value.administrationUpgradeJournal;
     if(j.formatVersion!==1||j.fromSchema!==14||j.toSchema!==15||!['PREPARING','SNAPSHOT_READY'].includes(j.phase)||

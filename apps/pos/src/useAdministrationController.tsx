@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { EdgeClientError, type EdgeClient } from '@comanview/client-sdk';
+import { TaxAdministrationResultSchema } from '@comanview/contracts';
 import type {
   RestaurantAdministrationState,
   TaxAdministrationState,
@@ -60,13 +61,19 @@ export function useAdministrationController({
       'business-profile',
   );
   const section = sectionIndex[activeSection];
-  const [choices, setChoices] = useState<Record<string, { value: string; version: number }>>({});
-  function choose(key: string, initial: string, version: number, value: string) {
+  const [choices, setChoices] = useState<Record<string, { value: string; version: number; referenceVersion?:number }>>({});
+  const assignmentCommands=useRef<Record<string,{intent:string;commandId:string}>>({});
+  function assignmentCommandId(draft:string,payload:unknown):string {
+    const intent=JSON.stringify(payload),previous=assignmentCommands.current[draft];
+    if(previous?.intent===intent)return previous.commandId;
+    const next={intent,commandId:commandId()};assignmentCommands.current[draft]=next;return next.commandId;
+  }
+  function choose(key: string, initial: string, version: number, value: string, referenceVersion?:number) {
     drafts.observe(key, activeSection, { value: initial }, version);
     drafts.mark(key);
     const baseline = choices[key]?.version ?? version;
     drafts.observe(key, activeSection, { value }, baseline);
-    setChoices((current) => ({ ...current, [key]: { value, version: baseline } }));
+    setChoices((current) => ({ ...current, [key]: { value, version: baseline, ...(referenceVersion===undefined?{}:{referenceVersion}) } }));
     setDraftTick((tick) => tick + 1);
   }
   function discardChoice(key: string) {
@@ -199,7 +206,7 @@ export function useAdministrationController({
       pin: '',
       role: 'CASHIER' as 'OWNER' | 'MANAGER' | 'CASHIER' | 'WAITER' | 'KITCHEN',
     }),
-    [assignment, setAssignment] = useState({ productId: '', stationId: '', version: 0 }),
+    [assignment, setAssignment] = useState<{productId:string;stationId:string;version:number;stationVersion?:number|undefined}>({ productId: '', stationId: '', version: 0 }),
     [productForm, setProductForm] = useState({ name: '', amount: '', taxProfileId: '' });
   useEffect(() => {
     const previousPending = drafts.pendingKeys.join('|');
@@ -340,8 +347,20 @@ export function useAdministrationController({
     setNotice('');
     if (savedDraft) drafts.saving(savedDraft, true);
     try {
-      await work();
+      const result = await work();
       acknowledged = true;
+      if(savedDraft)delete assignmentCommands.current[savedDraft];
+      // Keep the authoritative Product ACK even when the subsequent read fails.
+      // Other dirty drafts retain their captured OCC version and must reconcile explicitly.
+      const assignmentAck = TaxAdministrationResultSchema.safeParse(result);
+      if (assignmentAck.success && assignmentAck.data.reference) {
+        const ack = assignmentAck.data, reference = ack.reference!;
+        setTax(current => current ? {...current, products:current.products.map(product =>
+          product.id !== ack.entityId ? product : {...product, version:ack.version,
+            ...(reference.kind==='TAX_PROFILE' ? {taxProfileId:reference.id!,taxProfileRevision:reference.version!} : {})})} : current);
+        if(savedDraft==='assignment')setAssignment(current => current.productId===ack.entityId
+          ? {...current,version:ack.version,stationId:reference.id??'',stationVersion:reference.version??undefined} : current);
+      }
       setReconciliationPending(true);
       if (submittedEdit) clearEdit();
       setReadiness(null);
@@ -362,6 +381,8 @@ export function useAdministrationController({
         !acknowledged && e instanceof EdgeClientError &&
         [
           'ADMINISTRATION_VERSION_CONFLICT',
+          'CATALOG_VERSION_CONFLICT',
+          'CATALOG_REFERENCE_CHANGED',
           'PERSONNEL_VERSION_CONFLICT',
           'USER_SECURITY_REVISION_CONFLICT',
           'CONFIGURATION_REVISION_CONFLICT',
@@ -431,6 +452,7 @@ export function useAdministrationController({
   return {
     reconciliationPending,
     choices,
+    assignmentCommandId,
     choose,
     discardChoice,
     readiness,

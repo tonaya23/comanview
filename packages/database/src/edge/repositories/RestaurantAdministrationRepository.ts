@@ -7,6 +7,7 @@ import { RestaurantAdministrationCommandSchema,RestaurantAdministrationResultSch
   type RestaurantAdministrationCommand,type RestaurantAdministrationResult,type RestaurantAdministrationState } from '@comanview/contracts';
 import * as schema from '../schema.js';
 import { insertAuditEntry,type NewAuditEntry } from './AuditRepository.js';
+import { assignProductReference } from './ProductAssignmentTransaction.js';
 
 type DB=BetterSQLite3Database<typeof schema>;
 type Binding={tenantId:string;locationId:string;edgeId:string};
@@ -62,17 +63,20 @@ export class RestaurantAdministrationRepository{
       tables:this.db.all<Row>(sql`SELECT id,zone_id zoneId,name,capacity,active,display_order displayOrder,version FROM restaurant_tables
         WHERE tenant_id=${binding.tenantId} AND location_id=${binding.locationId} ORDER BY display_order,id`).map(r=>({...r,active:Boolean(r['active'])}))});
   }
-  execute(input:RestaurantAdministrationCommand,binding:Binding,audit:NewAuditEntry):RestaurantAdministrationResult{
-    const command=RestaurantAdministrationCommandSchema.parse(input),digest=createHash('sha256').update(JSON.stringify({binding,command})).digest('hex');
-    return this.db.transaction(tx=>{const db=tx as unknown as DB;
+  execute(input:RestaurantAdministrationCommand,binding:Binding,audit:NewAuditEntry,authorize:(epoch:number)=>void=()=>{},onCommitted?:(result:RestaurantAdministrationResult)=>void):RestaurantAdministrationResult{
+    const command=RestaurantAdministrationCommandSchema.parse(input),digest=createHash('sha256').update(JSON.stringify({binding,command,...(command.kind==='ASSIGN_PRODUCT_STATION'?{actor:audit.actorUserId,device:audit.deviceId,session:audit.sessionId}:{})})).digest('hex');
+    let assignment=false;
+    const result=this.db.transaction(tx=>{const db=tx as unknown as DB;
       const installation=db.get<{epoch:number}>(sql`SELECT recovery_epoch epoch FROM edge_installations WHERE singleton_key='PRIMARY' AND edge_id=${binding.edgeId}
         AND tenant_id=${binding.tenantId} AND location_id=${binding.locationId}`);if(!installation)throw new Error('ADMINISTRATION_BINDING_MISMATCH');
+      authorize(installation.epoch);
       if(audit.action!=='RESTAURANT_ADMINISTRATION_CHANGED'||audit.commandId!==command.commandId||!audit.actorUserId||!audit.sessionId||!audit.deviceId)
         throw new Error('ADMINISTRATION_AUDIT_REQUIRED');
       const receipt=db.get<{digest:string;result:string;epoch:number}>(sql`SELECT request_digest digest,response_json result,recovery_epoch epoch
         FROM administration_command_receipts WHERE command_id=${command.commandId}`);
       if(receipt){if(receipt.digest!==digest||receipt.epoch!==installation.epoch)throw new Error('COMMAND_ID_CONFLICT');return RestaurantAdministrationResultSchema.parse(JSON.parse(receipt.result));}
       if(db.get(sql`SELECT command_id FROM processed_commands WHERE command_id=${command.commandId}`))throw new Error('COMMAND_ID_CONFLICT');
+      if(command.kind==='ASSIGN_PRODUCT_STATION'){assignment=true;return assignProductReference(db,command,binding,installation.epoch,audit,digest,(this.db as DB & {$client:Database.Database}).$client);}
       const now=audit.occurredAt.getTime(),config=db.get<Row>(sql`SELECT * FROM operational_configuration WHERE location_id=${binding.locationId}`);
       if(!config)throw new Error('ADMINISTRATION_CONFIGURATION_REQUIRED');
       let result:RestaurantAdministrationResult,before:Row|null=null,after:Row,entityType:NewAuditEntry['entityType']='OPERATIONAL_CONFIGURATION';
@@ -117,12 +121,6 @@ export class RestaurantAdministrationRepository{
         if(row['version']!==command.expectedVersion)throw new Error('ADMINISTRATION_VERSION_CONFLICT');if(!command.active&&stationHasPendingWork(db,command.stationId))throw new Error('STATION_HAS_PENDING_WORK');
         result=next(command.stationId,Number(row['version']));before=row;after={...command};entityType='STATION';
         db.run(sql`UPDATE stations SET name=${command.name},purpose=${command.purpose},kds_visible=${command.kdsVisible?1:0},active=${command.active?1:0},display_order=${command.displayOrder},version=${result.version} WHERE id=${command.stationId}`);
-      }else if(command.kind==='ASSIGN_PRODUCT_STATION'){
-        const row=db.get<Row>(sql`SELECT id,station_id stationId,version FROM products WHERE id=${command.productId}`);if(!row)throw new Error('PRODUCT_NOT_FOUND');
-        if(row['version']!==command.expectedVersion)throw new Error('ADMINISTRATION_VERSION_CONFLICT');if(stationHasPendingWork(db,String(row['stationId']??''),command.productId))throw new Error('STATION_HAS_PENDING_WORK');
-        if(command.stationId&&!db.get(sql`SELECT id FROM stations WHERE id=${command.stationId} AND location_id=${binding.locationId} AND active=1`))throw new Error('STATION_REQUIRED');
-        result=next(command.productId,Number(row['version']));before=row;after={stationId:command.stationId};entityType='PRODUCT';
-        db.run(sql`UPDATE products SET station_id=${command.stationId},version=${result.version} WHERE id=${command.productId}`);
       }else if(command.kind==='CREATE_ZONE'){
         if(command.expectedVersion!==0)throw new Error('ADMINISTRATION_VERSION_CONFLICT');const id=EntityId.generate().toString();
         db.run(sql`INSERT INTO zones(id,tenant_id,location_id,name,display_order,active,version) VALUES(${id},${binding.tenantId},${binding.locationId},${command.name},${command.displayOrder},1,1)`);
@@ -154,6 +152,7 @@ export class RestaurantAdministrationRepository{
         VALUES(${command.commandId},${binding.locationId},${command.kind},${digest},${JSON.stringify(result)},${installation.epoch},${now})`);
       db.insert(schema.processedCommands).values({commandId:command.commandId,processedAt:audit.occurredAt}).run();return result;
     },{behavior:'immediate'});
+    if(assignment&&result.changed){try{onCommitted?.(result);}catch{/* Generation reads recover lost invalidation. */}}return result;
   }
 }
 

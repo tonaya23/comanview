@@ -8,7 +8,7 @@ export { PersonnelMutationSchema,type PersonnelMutation } from '@comanview/contr
 import { verifyOwnerRecoveryAuthorization,verifyInstallationAuthorization,hashPairingCode } from '@comanview/licensing';
 import type { EdgeLicenseManager } from '../licensing/EdgeLicenseManager.js';
 import { EntityId } from '@comanview/domain';
-import { AuthRepository, administrationMigrationDigest, inspectAdministrationSchema, insertAuditEntry } from '@comanview/database';
+import { AuthRepository, inspectCatalogSchema, administrationMigrationDigest, inspectAdministrationSchema, insertAuditEntry } from '@comanview/database';
 import { resolve } from 'node:path';
 import * as edgeSchema from '@comanview/database/edge';
 import { verifyEncryptedBackupArtifact } from '../backup/BackupArtifact.js';
@@ -197,7 +197,8 @@ export async function executePersonnelSecurityOperation(input:PersonnelSecurityO
 
 async function restoredPersonnel(db:Database.Database,current:RecoverySecurityFloor,persist:Persist){
   const journal=current.journal;
-  if(!journal||journal.phase!=='VALIDATING'||current.recoveryEpoch!==journal.nextRecoveryEpoch||inspectAdministrationSchema(db)!==15)
+  if(!journal||journal.phase!=='VALIDATING'||current.recoveryEpoch!==journal.nextRecoveryEpoch||
+    (db.pragma('user_version',{simple:true})===16?inspectCatalogSchema(db)!==16:inspectAdministrationSchema(db)!==15))
     throw new Error('PERSONNEL_RESTORE_NOT_AUTHORIZED');
   const receipt=db.prepare("SELECT after_json FROM audit_log WHERE audit_id=? AND action='RECOVERY_VALIDATED' AND outcome='SUCCESS' AND command_id=? AND entity_id=? AND source='RECOVERY_STARTUP'")
     .get(journal.recoveryId,journal.commandId,journal.backupId) as {after_json:string}|undefined;
@@ -214,7 +215,7 @@ async function restoredPersonnel(db:Database.Database,current:RecoverySecurityFl
     users:old?.users??{},ownerRecoveryAccess:{generation:(old?.ownerRecoveryAccess.generation??0)+1,challenge:null,pendingConsumption:null},
     recoveryContext:{recoveryId:journal.recoveryId,backupId:journal.backupId,sourceEdgeId:journal.sourceEdgeId??journal.targetBinding.edgeId,
       targetEdgeId:journal.targetBinding.edgeId,recoveryEpoch:journal.nextRecoveryEpoch,restoreAuthorizationId:journal.authorizationId}};
-  await persist(updateRecoverySecurityFloor(current,{personnel,minimumSchemaVersion:15}));
+  await persist(updateRecoverySecurityFloor(current,{personnel,minimumSchemaVersion:current.minimumSchemaVersion===16||db.pragma('user_version',{simple:true})===16?16:15}));
 }
 
 function readIntent(db:Database.Database,id:string):Intent|undefined{return db.prepare(`SELECT transition_id AS transitionId,descriptor_json AS descriptor,

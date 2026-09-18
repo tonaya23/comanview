@@ -14,6 +14,21 @@ import * as schema from '@comanview/database/edge';
 import { CatalogService } from './CatalogService.js';
 
 const paths: string[] = [];
+it('preserves schema14 read compatibility without inventing an OCC version', async () => {
+  const sqlite = new Database(':memory:');
+  try {
+    const migrations = fileURLToPath(new URL('../../../../../../migrations/edge/', import.meta.url));
+    for (const file of readdirSync(migrations).filter(name => /^\d{4}_.*\.sql$/.test(name) && Number(name.slice(0,4)) <= 14).sort())
+      sqlite.exec(readFileSync(join(migrations, file), 'utf8'));
+    const profileId = randomUUID(), productId = randomUUID();
+    sqlite.prepare("INSERT INTO tax_profiles(id,name,rate_basis_points,calculation_mode) VALUES(?,'Legacy',0,'TAX_ADDED')").run(profileId);
+    sqlite.prepare("INSERT INTO products(id,name,tax_profile_id,base_price_amount,base_price_currency) VALUES(?,'Legacy',?,100,'MXN')").run(productId, profileId);
+    const service = new CatalogService(new CatalogRepository(drizzle(sqlite,{schema})));
+    expect(await service.getProduct(productId)).toMatchObject({id:productId,name:'Legacy'});
+    expect((await service.getAllProducts())[0]?.version).toBeUndefined();
+    await expect(service.setProductAvailability(productId,{available:false})).rejects.toMatchObject({code:'CLIENT_CAPABILITY_REQUIRED'});
+  } finally { sqlite.close(); }
+});
 afterEach(async () => { for (const path of paths.splice(0)) await rm(path, { force: true }); });
 
 function fixture() {
@@ -41,7 +56,10 @@ describe('current product fiscal identity', () => {
   it('uses the authoritative persisted profile and immutable revision in new snapshots', async () => {
     const f = fixture();
     try {
-      const created = await f.service.createProduct(request(f.profileId));
+      const productId=randomUUID(),categoryId=randomUUID();
+      f.sqlite.prepare("INSERT INTO categories(id,name) VALUES(?,'Fixture')").run(categoryId);
+      f.sqlite.prepare("INSERT INTO products(id,name,category_id,tax_profile_id,tax_profile_revision,base_price_amount,base_price_currency) VALUES(?,'Product',?,?,3,10000,'MXN')").run(productId,categoryId,f.profileId);
+      const created = (await f.service.getProduct(productId))!;
       expect(created.taxProfile).toMatchObject({ id: f.profileId, rateBasisPoints: 800, revision: 3 });
       const stored = f.sqlite.prepare('SELECT tax_profile_id id,tax_profile_revision revision FROM products WHERE id=?').get(created.id);
       expect(stored).toEqual({ id: f.profileId, revision: 3 });
@@ -50,18 +68,18 @@ describe('current product fiscal identity', () => {
       f.sqlite.prepare("UPDATE tax_profiles SET rate_basis_points=500,version=4 WHERE id=?").run(f.profileId);
       f.sqlite.prepare("INSERT INTO tax_profile_revisions VALUES(?,4,500,'TAX_ADDED',2)").run(f.profileId);
       expect(product.createSnapshot(new Map(), 1)).toMatchObject({ taxRateBasisPoints: 800, taxProfileRevision: 3 });
-      await f.service.setProductAvailability(created.id,{available:false});
+      await expect(f.service.setProductAvailability(created.id,{available:false})).rejects.toMatchObject({code:'CLIENT_CAPABILITY_REQUIRED'});
       expect(f.sqlite.prepare('SELECT tax_profile_revision revision FROM products WHERE id=?').get(created.id)).toEqual({revision:3});
     } finally { f.sqlite.close(); }
   });
 
-  it('rejects a missing profile, a stale revision and an inactive profile without a 16% fallback', async () => {
+  it('rejects obsolete write capabilities regardless of submitted tax fields', async () => {
     const f = fixture();
     try {
-      await expect(f.service.createProduct(request(randomUUID()))).rejects.toThrow('TAX_PROFILE_REQUIRED');
-      await expect(f.service.createProduct(request(f.profileId, 2))).rejects.toThrow('TAX_REVISION_INCONSISTENT');
+      await expect(f.service.createProduct(request(randomUUID()))).rejects.toMatchObject({code:'CLIENT_CAPABILITY_REQUIRED'});
+      await expect(f.service.createProduct(request(f.profileId, 2))).rejects.toMatchObject({code:'CLIENT_CAPABILITY_REQUIRED'});
       f.sqlite.prepare('UPDATE tax_profiles SET active=0 WHERE id=?').run(f.profileId);
-      await expect(f.service.createProduct(request(f.profileId))).rejects.toThrow('TAX_PROFILE_INACTIVE');
+      await expect(f.service.createProduct(request(f.profileId))).rejects.toMatchObject({code:'CLIENT_CAPABILITY_REQUIRED'});
       expect(f.sqlite.prepare('SELECT COUNT(*) n FROM products').get()).toEqual({ n: 0 });
       expect(CreateProductRequestSchema.safeParse({ name:'Sin impuesto',description:'',productType:'STANDARD',
         basePrice:{amount:100,currency:'MXN'} }).success).toBe(false);

@@ -8,6 +8,9 @@ export const MoneySchema = z.object({
 
 // Category
 export const CategorySchema = z.object({
+  version:z.number().int().positive().optional(),
+  displayOrder:z.number().int().optional(),
+  systemKey:z.literal('UNCATEGORIZED').nullable().optional(),
   id: z.string().uuid(),
   name: z.string(),
   active: z.boolean(),
@@ -57,6 +60,7 @@ export type ProductModifierGroupResponse = z.infer<typeof ProductModifierGroupSc
 
 // Product
 export const ProductSchema = z.object({
+  version:z.number().int().positive().optional(),
   id: z.string().uuid(),
   name: z.string(),
   description: z.string(),

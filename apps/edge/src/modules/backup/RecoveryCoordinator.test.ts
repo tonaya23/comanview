@@ -26,7 +26,7 @@ function database(path: string, status = 'ACTIVE') {
   const db = new Database(path),
     directory = fileURLToPath(new URL('../../../../../migrations/edge/', import.meta.url));
   for (const name of readdirSync(directory)
-    .filter((n) => /^\d{4}_.*\.sql$/.test(n))
+    .filter((n) => /^\d{4}_.*\.sql$/.test(n)&&Number(n.slice(0,4))<=15)
     .sort())
     db.exec(readFileSync(join(directory, name), 'utf8'));
   db.exec(`INSERT INTO edge_installations(singleton_key,tenant_id,location_id,edge_id,recovery_epoch,created_at,credential_id) VALUES('PRIMARY','old-tenant','old-location','old-edge',0,1,'credential');

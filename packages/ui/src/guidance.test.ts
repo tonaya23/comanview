@@ -5,6 +5,9 @@ import { UI_STATE_TAXONOMY } from './stateTaxonomy.js';
 import { prerequisite, type PrerequisiteStatus } from './prerequisites.js';
 
 describe('shared user guidance',()=>{
+  it.each(['CATALOG_VERSION_CONFLICT','CATALOG_REFERENCE_CHANGED','CATEGORY_NOT_FOUND','CATEGORY_INACTIVE','CATEGORY_HAS_ACTIVE_PRODUCTS','CATEGORY_SYSTEM_PROTECTED','SKU_CONFLICT','SKU_AMBIGUOUS','SKU_INVALID','CLIENT_CAPABILITY_REQUIRED'])('explains catalog rejection %s',code=>{
+    expect(getUserGuidance(code).title).not.toBe('No pudimos completar la operación');
+  });
   it.each(['PERSONNEL_SECURITY_UNAVAILABLE','PERSONNEL_SECURITY_NOT_INITIALIZED','PERSONNEL_COMMAND_FIELDS_INVALID'])(
     'explains %s without a blind retry or generic fallback',code=>{
       const guidance=getUserGuidance({code,details:{diagnosticId:'req-safe'}});

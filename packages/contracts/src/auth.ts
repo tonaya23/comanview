@@ -3,6 +3,7 @@ import { z } from 'zod';
 export const PermissionSchema = z.enum([
   'CATALOG_VIEW',
   'CATALOG_MANAGE',
+  'CATALOG_IMPORT',
   'ORDER_VIEW',
   'ORDER_CREATE',
   'ORDER_EDIT_DRAFT',

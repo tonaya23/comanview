@@ -62,6 +62,9 @@ export function prepareDevelopmentDatabase(
   const sqlite = new Database(targetPath);
 
   try {
+    // Legacy seed writes are not commercial commands. Never reseed an upgraded catalog.
+    if(sqlite.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='catalog_state'").get())
+      throw new Error('CLIENT_CAPABILITY_REQUIRED');
     sqlite.pragma('foreign_keys = ON');
     for (const migrationPath of migrationPaths) {
       sqlite.exec(readFileSync(migrationPath, 'utf8'));

@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act,renderHook,cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { EdgeClientError, type EdgeClient } from '@comanview/client-sdk';
 import { RestaurantAdministrationStateSchema } from '@comanview/contracts';
+import type { TaxAdministrationState } from '@comanview/contracts';
 import { AdministrationPanel } from './AdministrationPanel.js';
 import {
   AdministrationDraftStore,
@@ -13,6 +14,7 @@ import {
   canOpenAdminSection,
 } from './administrationModel.js';
 import { StationFunctionField, AdministrationEditDialog } from './AdministrationDialogs.js';
+import { useAdministrationController } from './useAdministrationController.js';
 
 afterEach(cleanup);
 const permissions = [
@@ -63,7 +65,7 @@ function client() {
   return {
     getRestaurantAdministration: vi.fn(async () => fixture()),
     getTaxAdministration: vi.fn(async () => ({
-      profiles: [],
+      profiles: [] as TaxAdministrationState['profiles'],
       products: [],
       defaultTaxProfileId: null,
       configurationVersion: 1,
@@ -74,6 +76,7 @@ function client() {
     executeRestaurantAdministration: vi.fn(async () => ({ entityId: 'id', version: 2 })),
     executeTaxAdministration: vi.fn(),
     executePersonnel: vi.fn(),
+    catalogCommand: vi.fn(),
   };
 }
 async function open(
@@ -99,6 +102,55 @@ const navigation = () =>
   within(screen.getByRole('navigation', { name: 'Administración del restaurante' }));
 
 describe('Admin Local section lifecycle', () => {
+  it('retains authoritative Station ACK/version when the follow-up read fails, without losing another draft',async()=>{
+    const productId=crypto.randomUUID(),profileId=crypto.randomUUID(),stationId=crypto.randomUUID();
+    const tax:TaxAdministrationState={fiscalPolicyVersion:1,configurationVersion:1,defaultTaxProfileId:profileId,profiles:[],products:[{id:productId,name:'Product',taxProfileId:profileId,taxProfileRevision:1,version:5}]};
+    const mock={...client(),getTaxAdministration:vi.fn(async()=>tax)};
+    const {result}=renderHook(()=>useAdministrationController({edge:mock as unknown as EdgeClient,currentUserId:'owner',permissions,onClose:vi.fn(),initialTarget:{surface:'administration',section:'stations'}}));
+    await waitFor(()=>expect(result.current.loaded).toBe(true));
+    act(()=>{result.current.setAssignment({productId,stationId,version:5,stationVersion:2});result.current.choose('other-draft','old',3,'keep');});
+    mock.getTaxAdministration.mockRejectedValueOnce(new EdgeClientError('Offline','EDGE_UNREACHABLE',0));
+    await act(async()=>{await result.current.run(async()=>({entityId:productId,version:6,catalogGeneration:20,changed:true,recoveryEpoch:0,reference:{kind:'STATION',id:stationId,version:2}}),'Saved','assignment');});
+    expect(result.current.assignment).toMatchObject({productId,stationId,version:6});
+    expect(result.current.tax?.products[0]?.version).toBe(6);
+    expect(result.current.choices['other-draft']).toMatchObject({value:'keep',version:3});
+    expect(result.current.reconciliationPending).toBe(true);
+  });
+  it('preserves captured Tax reference/Product versions on OCC and stores a successful Tax ACK',async()=>{
+    const productId=crypto.randomUUID(),profileId=crypto.randomUUID(),other=crypto.randomUUID(),key=`choice:product:${productId}`;
+    const tax:TaxAdministrationState={fiscalPolicyVersion:1,configurationVersion:1,defaultTaxProfileId:profileId,profiles:[],products:[{id:productId,name:'Product',taxProfileId:profileId,taxProfileRevision:1,version:5}]};
+    const mock={...client(),getTaxAdministration:vi.fn(async()=>tax)};
+    const {result}=renderHook(()=>useAdministrationController({edge:mock as unknown as EdgeClient,currentUserId:'owner',permissions,onClose:vi.fn(),initialTarget:{surface:'administration',section:'taxes'}}));
+    await waitFor(()=>expect(result.current.loaded).toBe(true));
+    act(()=>result.current.choose(key,profileId,5,other,3));
+    const intent={productId,expectedVersion:5,profileId:other,profileVersion:3};
+    const attempt=result.current.assignmentCommandId(key,intent);
+    await act(async()=>{await result.current.run(async()=>{throw new EdgeClientError('Stale','CATALOG_VERSION_CONFLICT',409);},'Saved',key);});
+    expect(result.current.choices[key]).toEqual({value:other,version:5,referenceVersion:3});
+    expect(result.current.conflict).toBe(true);
+    expect(result.current.assignmentCommandId(key,intent)).toBe(attempt);
+    mock.getTaxAdministration.mockRejectedValueOnce(new EdgeClientError('Offline','EDGE_UNREACHABLE',0));
+    await act(async()=>{await result.current.run(async()=>({entityId:productId,version:6,catalogGeneration:20,changed:true,recoveryEpoch:0,reference:{kind:'TAX_PROFILE',id:other,version:3}}),'Saved',key);});
+    expect(result.current.tax?.products[0]).toMatchObject({version:6,taxProfileId:other,taxProfileRevision:3});
+    expect(result.current.choices[key]).toBeUndefined();
+    expect(result.current.assignmentCommandId(key,intent)).not.toBe(attempt);
+  });
+  it('creates through catalog commands and reuses identity when an ACK is lost',async()=>{
+    const mock=client(),profileId='01991a00-0000-7000-8000-000000000711';
+    mock.getTaxAdministration.mockResolvedValue({profiles:[{id:profileId,name:'IVA',rateBasisPoints:800,calculationMode:'TAX_ADDED',active:true,version:1}],products:[],defaultTaxProfileId:null,configurationVersion:1});
+    mock.catalogCommand.mockRejectedValueOnce(new EdgeClientError('Lost ACK','EDGE_UNREACHABLE',0)).mockResolvedValue({changed:true});
+    await open(mock);await userEvent.click(navigation().getByRole('button',{name:/Impuestos/}));
+    fireEvent.change(await screen.findByLabelText('Nombre del producto'),{target:{value:'Coffee'}});
+    fireEvent.change(screen.getByLabelText('Precio (MXN)'),{target:{value:'100.00'}});
+    fireEvent.change(screen.getByLabelText('Perfil fiscal del producto'),{target:{value:profileId}});
+    await userEvent.click(screen.getByRole('button',{name:'Crear producto'}));
+    await waitFor(()=>expect(mock.catalogCommand).toHaveBeenCalledTimes(1));
+    await waitFor(()=>expect((screen.getByRole('button',{name:'Crear producto'}) as HTMLButtonElement).disabled).toBe(false));
+    await userEvent.click(screen.getByRole('button',{name:'Crear producto'}));
+    await waitFor(()=>expect(mock.catalogCommand).toHaveBeenCalledTimes(2));
+    expect(mock.catalogCommand.mock.calls[0]?.[0]).toEqual(mock.catalogCommand.mock.calls[1]?.[0]);
+    expect(mock.catalogCommand.mock.calls[0]?.[0]).toMatchObject({kind:'CREATE_PRODUCT',expectedVersion:0,payload:{basePrice:{amount:10000,currency:'MXN'}}});
+  });
   it('does not retry a confirmed mutation when reconciliation fails, and resumes only after an authoritative read',async()=>{
     const mock=client();await open(mock);
     fireEvent.change(screen.getByLabelText('Nombre comercial'),{target:{value:'Confirmado'}});

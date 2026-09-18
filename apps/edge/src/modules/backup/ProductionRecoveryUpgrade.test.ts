@@ -201,7 +201,7 @@ describe('hardware replacement through the complete 1W startup lifecycle', () =>
       expect(floor).toMatchObject({
         binding: targetBinding,
         recoveryEpoch: 1,
-        minimumSchemaVersion: 15,
+        minimumSchemaVersion: 16,
         personnel: {
           initializationState: 'ACTIVE',
           recoveryContext: { backupId, sourceEdgeId: binding.edgeId,
@@ -217,7 +217,7 @@ describe('hardware replacement through the complete 1W startup lifecycle', () =>
       });
       for (const id of [activeId, revokedId]) expect(isDeviceRevokedByFloor(floor, id)).toBe(true);
       inspect(target.dbPath, (db) => {
-        expect(inspectAdministrationSchema(db)).toBe(15);
+        expect(db.pragma('user_version',{simple:true})).toBe(16);
         expect(db.prepare("SELECT count(*) n FROM devices WHERE status!='REVOKED'").get()).toEqual({
           n: 0,
         });

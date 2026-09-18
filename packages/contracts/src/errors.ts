@@ -1,6 +1,8 @@
 import { z } from 'zod';
 
 export const ErrorCode = z.enum([
+  'CATALOG_VERSION_CONFLICT','CATALOG_REFERENCE_CHANGED','CATALOG_CURRENCY_MISMATCH','CATEGORY_NOT_FOUND','CATEGORY_INACTIVE',
+  'CATEGORY_HAS_ACTIVE_PRODUCTS','CATEGORY_SYSTEM_PROTECTED','SKU_CONFLICT','SKU_AMBIGUOUS','SKU_INVALID','CLIENT_CAPABILITY_REQUIRED',
   'ORDER_NOT_FOUND',
   'PRODUCT_NOT_FOUND',
   'PRODUCT_UNAVAILABLE',
@@ -207,6 +209,10 @@ export const PublicValidationIssueSchema = z.object({
  * objects, submitted values, filesystem paths and credential-shaped fields.
  */
 export const PublicErrorDetailsSchema = z.object({
+  entityType:z.enum(['PRODUCT','CATEGORY','TAX_PROFILE','STATION']).optional(),
+  entityId:PublicIdentifier.optional(),
+  expectedVersion:z.number().int().nonnegative().safe().optional(),
+  actualVersion:z.number().int().nonnegative().safe().optional(),
   diagnosticId: PublicIdentifier.optional(),
   tableId: PublicIdentifier.optional(),
   activeOrderId: PublicIdentifier.optional(),

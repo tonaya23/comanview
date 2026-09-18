@@ -40,7 +40,7 @@ async function fixture() {
   const dbPath = join(root, 'edge.db');
   const binding = { tenantId: randomUUID(), locationId: randomUUID(), edgeId: randomUUID() };
   const sqlite = new Database(dbPath);
-  for (const name of (await readdir(migrations)).filter((n) => /^\d{4}_.*\.sql$/.test(n)).sort())
+  for (const name of (await readdir(migrations)).filter((n) => /^\d{4}_.*\.sql$/.test(n)&&Number(n.slice(0,4))<=15).sort())
     sqlite.exec(await readFile(join(migrations, name), 'utf8'));
   sqlite
     .prepare(

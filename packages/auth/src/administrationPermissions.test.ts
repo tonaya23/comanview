@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { BASE_ROLE_PERMISSIONS, PERMISSIONS } from './index.js';
 
 describe('1W administrative role allowlists', () => {
+  it('limits commercial import base grants to OWNER and MANAGER',()=>{
+    for(const role of ['OWNER','MANAGER'] as const)expect(BASE_ROLE_PERMISSIONS[role]).toContain(PERMISSIONS.CATALOG_IMPORT);
+    for(const role of ['CASHIER','WAITER','KITCHEN'] as const)expect(BASE_ROLE_PERMISSIONS[role]).not.toContain(PERMISSIONS.CATALOG_IMPORT);
+  });
   it.each([
     PERMISSIONS.BUSINESS_DAY_POLICY_MANAGE, PERMISSIONS.CURRENCY_MANAGE,
     PERMISSIONS.TAX_PROFILE_MANAGE, PERMISSIONS.PERSONNEL_PRIVILEGED_MANAGE,

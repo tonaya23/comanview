@@ -229,7 +229,7 @@ describe('durable personnel security protocol',()=>{
       recoveryKey:floor.recoveryKey!,commandId:id(),now:new Date()});
     expect(await completePendingRecoveryAtStartup({dbPath,store:f.store})).toBe('COMPLETED');
     const db=new Database(dbPath);resources.push({root:f.root,db});
-    expect(db.pragma('user_version',{simple:true})).toBe(15);
+    expect(db.pragma('user_version',{simple:true})).toBe(16);
     expect(db.prepare('SELECT trust_domain_id FROM users WHERE id=?').get(f.ownerId)).toEqual({trust_domain_id:null});
     expect((await f.store.load()).personnel!.trustDomainId).toBe(floor.personnel!.trustDomainId);
     expect(await prepareProductionAdministrationUpgrade({dbPath,store:f.store,edgeSecretStore:{load:async()=>({active:null,pending:null}),hasPersistedState:async()=>false,save:async()=>{}}})).toEqual({state:'CURRENT'});

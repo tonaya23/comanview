@@ -8,6 +8,9 @@
 export * from './edge/db.js';
 export * from './edge/recoveryUpgradeSchema.js';
 export * from './edge/administrationUpgradeSchema.js';
+export * from './edge/catalogUpgradeSchema.js';
+export { CatalogProductVersionConflict } from './edge/repositories/ProductAssignmentTransaction.js';
+export { readCatalogState,projectedCatalogEntity,appendCatalogMutation,ensureCatalogBaseline } from './edge/catalogPropagation.js';
 export * from './edge/repositories/CatalogRepository.js';
 export * from './edge/repositories/OrderRepository.js';
 export * from './edge/repositories/CashRepository.js';

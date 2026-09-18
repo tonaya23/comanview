@@ -51,6 +51,13 @@ export class AuthService {
     return this.consistent(floor=>this.toResponse(this.currentActor(actor,new Date(),floor)));
   }
 
+  /** Floor lock -> SQLite transaction -> fresh session, then synchronous mutation.
+   * The caller must invoke revalidate inside its transaction and must never await.
+   */
+  withCurrentAuthorization<T>(actor:AuthenticatedActor,execute:(revalidate:()=>AuthenticatedActor,floor:RecoverySecurityFloor|undefined)=>T):Promise<T>{
+    return this.consistent(floor=>execute(()=>this.toActor(this.currentActor(actor,new Date(),floor)),floor));
+  }
+
   async withRealtimeAuthorization(token:string,permissions:readonly Permission[],deliver:(actor:AuthenticatedActor)=>void):Promise<'AUTHORIZED'|'TEMPORARILY_UNAVAILABLE'|'INVALID'>{
     let deliveryFailed=false;
     try {

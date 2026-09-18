@@ -1,5 +1,11 @@
 export { invalidatesLocalSession } from './sessionErrors.js';
+export { CatalogInvalidationController } from './catalogInvalidation.js';
+import { CatalogStateSchema,type CatalogState } from '@comanview/contracts';
+export type { CatalogCommandInput, CatalogCommandResult } from '@comanview/contracts';
 import {
+  CatalogCommandResultSchema,
+  type CatalogCommandInput,
+  type CatalogCommandResult,
   CategorySchema,
   ErrorResponseSchema,
   HealthResponseSchema,
@@ -132,8 +138,10 @@ export interface EdgeClient {
   logout(): Promise<LogoutResponse>;
   getAuditEntries(query?: Partial<AuditListQuery>): Promise<AuditListResponse>;
   getCategories(): Promise<CategoryResponse[]>;
+  getCatalogState():Promise<CatalogState>;
   getProducts(): Promise<ProductResponse[]>;
   createProduct(request: CreateProductRequest): Promise<ProductResponse>;
+  catalogCommand(request: CatalogCommandInput): Promise<CatalogCommandResult>;
   getTables(): Promise<RestaurantTableResponse[]>;
   createOrder(request: CreateOrderRequest): Promise<OrderResponse>;
   getOrder(orderId: string): Promise<OrderResponse>;
@@ -336,8 +344,10 @@ export function createEdgeClient(options: EdgeClientOptions = {}): EdgeClient {
       return request(`/audit${parameters ? `?${parameters}` : ''}`, AuditListResponseSchema);
     },
     getCategories: () => request('/catalog/categories', CategorySchema.array()),
+    getCatalogState:()=>request('/catalog/state',CatalogStateSchema),
     getProducts: () => request('/catalog/products', ProductSchema.array()),
     createProduct: (body) => request('/catalog/products', ProductSchema, { method: 'POST', body: JSON.stringify(body) }),
+    catalogCommand: (body) => request('/catalog/commands', CatalogCommandResultSchema, {method:'POST',body:JSON.stringify(body)}),
     getTables: () => request('/tables', RestaurantTableSchema.array()),
     createOrder: (body) =>
       request('/orders', OrderSchema, { method: 'POST', body: JSON.stringify(body) }),

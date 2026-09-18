@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { CatalogInvalidationController } from '@comanview/client-sdk';
 import {
   createEdgeClient,
   EdgeClientError,
@@ -174,6 +175,14 @@ export function App() {
   const [emergencyRecoveryBusy, setEmergencyRecoveryBusy] = useState(false);
   const [categories, setCategories] = useState<CategoryResponse[]>([]);
   const [products, setProducts] = useState<ProductResponse[]>([]);
+  const catalogRefresh=useRef<CatalogInvalidationController|null>(null);
+  useEffect(()=>{
+    if(!authUser?.permissions.includes(PermissionCodes.CATALOG_VIEW))return;
+    const refresh=new CatalogInvalidationController(edge,({categories,products})=>{setCategories(categories);setProducts(products);setLoadingCatalog(false);},()=>setLoadingCatalog(false));
+    catalogRefresh.current=refresh;void refresh.check();
+    const check=()=>{void refresh.check();};window.addEventListener('focus',check);
+    return()=>{refresh.stop();catalogRefresh.current=null;window.removeEventListener('focus',check);};
+  },[authUser]);
   const [tables, setTables] = useState<RestaurantTableResponse[]>([]);
   const [showOpenTables, setShowOpenTables] = useState(false);
   const [openCounterOrders, setOpenCounterOrders] = useState<OrderResponse[]>([]);
@@ -459,20 +468,12 @@ export function App() {
     const sequence = ++operationalReadSequence.current;
     try {
       const [
-        nextCategories,
-        nextProducts,
         nextTables,
         nextCounterOrders,
         currentCash,
         config,
         licenseStatus,
       ] = await Promise.all([
-        authUser.permissions.includes(PermissionCodes.CATALOG_VIEW)
-          ? edge.getCategories()
-          : Promise.resolve([]),
-        authUser.permissions.includes(PermissionCodes.CATALOG_VIEW)
-          ? edge.getProducts()
-          : Promise.resolve([]),
         authUser.permissions.includes(PermissionCodes.ORDER_VIEW)
           ? edge.getTables()
           : Promise.resolve([]),
@@ -488,8 +489,7 @@ export function App() {
         edge.getLicensingStatus(),
       ]);
       if (sequence !== operationalReadSequence.current) return;
-      setCategories(nextCategories);
-      setProducts(nextProducts);
+      void catalogRefresh.current?.check();
       setTables(nextTables);
       setOpenCounterOrders(nextCounterOrders);
       setCashSession(currentCash.session);
@@ -582,12 +582,14 @@ export function App() {
         try {
           const raw = JSON.parse(String(event.data));
           if (raw?.type === 'AUTHENTICATED') {
+            void catalogRefresh.current?.check();
             void refreshRealtimeTables();
             if (orderRef.current) void refreshRealtimeOrder(orderRef.current.id);
             return;
           }
           const message = OperationalRealtimeMessageSchema.safeParse(raw);
           if (!message.success) return;
+          if(message.data.type==='CATALOG_CHANGED')catalogRefresh.current?.invalidate(message.data);
           if (message.data.type === 'TABLES_CHANGED') void refreshRealtimeTables();
           if (
             message.data.type === 'ORDER_UPDATED' &&
@@ -747,9 +749,9 @@ export function App() {
         ].includes(problem.code)
       ) {
         try {
-          const nextProducts = await edge.getProducts();
-          setProducts(nextProducts);
-          if (configuredProduct) {
+          await catalogRefresh.current?.check(true);
+          const nextProducts=catalogRefresh.current?.getSnapshot()?.products;
+          if (configuredProduct&&nextProducts) {
             const nextConfigured =
               nextProducts.find(({ id }) => id === configuredProduct.id) ?? null;
             setConfiguredProduct(nextConfigured);

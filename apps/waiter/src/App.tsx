@@ -9,6 +9,7 @@ import {
 } from 'react';
 import {
   createEdgeClient,
+  CatalogInvalidationController,
   EdgeClientError,
   clearDevicePairing,
   createClientDevicePairing,
@@ -77,6 +78,14 @@ export function App() {
   const [tables, setTables] = useState<RestaurantTableResponse[]>([]);
   const [categories, setCategories] = useState<CategoryResponse[]>([]);
   const [products, setProducts] = useState<ProductResponse[]>([]);
+  const catalogRefresh=useRef<CatalogInvalidationController|null>(null);
+  useEffect(()=>{
+    if(!user?.permissions.includes(PermissionCodes.CATALOG_VIEW))return;
+    const refresh=new CatalogInvalidationController(edge,({categories,products})=>{setCategories(categories.filter(c=>c.active));setProducts(products);});
+    catalogRefresh.current=refresh;void refresh.check();
+    const check=()=>{void refresh.check();};window.addEventListener('focus',check);
+    return()=>{refresh.stop();catalogRefresh.current=null;window.removeEventListener('focus',check);};
+  },[user]);
   const [navigation, navigate] = useReducer(waiterNavigation, initialNavigation);
   const { categoryId, zoneId: selectedZone } = navigation;
   const setCategoryId = (id: string | null) => navigate({ type: 'category', id });
@@ -93,6 +102,7 @@ export function App() {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [connection, setConnection] = useState<LocalConnection>('CONNECTING');
+  useEffect(()=>{if(connection==='CONNECTED')void catalogRefresh.current?.check();},[connection]);
   const [realtime, setRealtime] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   useEffect(() => {
@@ -269,11 +279,7 @@ export function App() {
 
   useEffect(() => {
     if (!user) return;
-    void Promise.all([edge.getCategories(), edge.getProducts(), refreshTables()])
-      .then(([nextCategories, nextProducts]) => {
-        setCategories(nextCategories.filter((category) => category.active));
-        setProducts(nextProducts);
-      })
+    void refreshTables()
       .catch((problem) => setError(waiterError(problem)));
     const fallback = window.setInterval(() => {
       void refreshTables().catch(() => undefined);
@@ -300,6 +306,7 @@ export function App() {
         try {
           const raw = JSON.parse(String(event.data));
           if (raw?.type === 'AUTHENTICATED') {
+            void catalogRefresh.current?.check();
             setRealtime(true);
             void refreshTables().catch((problem) => setError(waiterError(problem)));
             void refreshOrder();
@@ -307,6 +314,7 @@ export function App() {
           }
           const message = OperationalRealtimeMessageSchema.safeParse(raw);
           if (!message.success) return;
+          if(message.data.type==='CATALOG_CHANGED')catalogRefresh.current?.invalidate(message.data);
           if (message.data.type === 'TABLES_CHANGED') {
             void refreshTables().catch((problem) => setError(waiterError(problem)));
             void refreshOrder();

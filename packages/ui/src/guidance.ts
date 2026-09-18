@@ -26,6 +26,17 @@ const go = (label:string,target:TypedNavigationTarget):GuidanceAction => ({label
 
 /** Spanish presentation catalog. Edge owns codes and policy, never localized copy. */
 export const ES_ERROR_GUIDANCE: Partial<Record<ErrorCode, GuidanceCopy>> = {
+  CATALOG_VERSION_CONFLICT:copy('El registro cambió','Actualiza el catálogo y revisa los cambios antes de guardar.','warning','after-action'),
+  CATALOG_CURRENCY_MISMATCH:copy('La moneda no coincide','Introduce el precio en la moneda configurada para este restaurante.','warning','after-action'),
+  CATALOG_REFERENCE_CHANGED:copy('La selección cambió','Vuelve a seleccionar la categoría, impuesto o estación vigente.','warning','after-action'),
+  CATEGORY_NOT_FOUND:copy('Categoría no encontrada','Selecciona una categoría disponible.','warning','after-action'),
+  CATEGORY_INACTIVE:copy('Categoría inactiva','Activa la categoría o selecciona otra.','warning','after-action'),
+  CATEGORY_HAS_ACTIVE_PRODUCTS:copy('La categoría tiene productos activos','Reasigna o desactiva esos productos antes de desactivar la categoría.','warning','after-action'),
+  CATEGORY_SYSTEM_PROTECTED:copy('Categoría protegida','Sin categoría debe permanecer disponible. Puedes cambiar su etiqueta, no su identidad.','warning','none'),
+  SKU_CONFLICT:copy('SKU en uso','Usa un SKU distinto; otro producto ya tiene este identificador.','warning','after-action'),
+  SKU_AMBIGUOUS:copy('SKU reservado por duplicados','Este SKU tiene duplicados históricos. Usa otro identificador.','warning','after-action'),
+  SKU_INVALID:copy('SKU inválido','Elimina caracteres de control y revisa el identificador.','warning','after-action'),
+  CLIENT_CAPABILITY_REQUIRED:copy('Actualiza esta aplicación','Esta versión no puede guardar el catálogo de forma segura. Actualiza el cliente.','warning','after-action'),
   ...Object.fromEntries(Object.entries(operationalErrorCopy).map(([code, explanation]) => [code, copy('Revisa la operación', explanation, 'warning', 'after-action')])),
   TABLE_OCCUPIED: copy('La mesa está ocupada','Otra operación ocupó esta mesa. Actualiza el mapa y entra al pedido vigente.','warning','retry'),
   TABLE_INACTIVE: copy('Mesa no disponible','Esta mesa ya no está activa. Revisa el mapa y selecciona otra mesa.','warning','after-action'),

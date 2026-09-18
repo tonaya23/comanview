@@ -4,6 +4,8 @@ import type { RestaurantAdministrationCommand,RestaurantAdministrationState } fr
 import type { AuthenticatedActor } from '../../app/authContext.js';
 import { AppError,parseContractErrorCode } from '../../app/errorHandler.js';
 import type { EdgeLicenseManager } from '../licensing/EdgeLicenseManager.js';
+import type { AuthService } from '../auth/application/AuthService.js';
+import { withProductAssignmentAuthorization,rethrowProductVersionConflict } from './productAssignmentAuthorization.js';
 
 const permissionByKind:Record<RestaurantAdministrationCommand['kind'],string>={
   UPDATE_BUSINESS_PROFILE:'BUSINESS_PROFILE_MANAGE',SET_BUSINESS_DAY_POLICY:'BUSINESS_DAY_POLICY_MANAGE',SET_CURRENCY:'CURRENCY_MANAGE',
@@ -12,7 +14,7 @@ const permissionByKind:Record<RestaurantAdministrationCommand['kind'],string>={
   SET_TIP_PREFERENCES:'TIP_PREFERENCES_MANAGE'};
 
 export class AdministrationService{
-  constructor(private repository:RestaurantAdministrationRepository,private binding:{tenantId:string;locationId:string;edgeId:string},private licensing:EdgeLicenseManager){}
+  constructor(private repository:RestaurantAdministrationRepository,private binding:{tenantId:string;locationId:string;edgeId:string},private licensing:EdgeLicenseManager,private auth?:Pick<AuthService,'withCurrentAuthorization'>,private onCommitted?:(result:import('@comanview/contracts').RestaurantAdministrationResult)=>void){}
   state():RestaurantAdministrationState{return this.repository.state(this.binding);}
   publicProfile(){const p=this.state().businessProfile;return{commercialName:p.commercialName,address:p.address,operatingHours:p.operatingHours,logo:p.logo,confirmed:p.confirmed};}
   execute(command:RestaurantAdministrationCommand,actor:AuthenticatedActor){
@@ -23,9 +25,10 @@ export class AdministrationService{
       deviceId:actor.deviceId,sessionId:actor.sessionId,actorUserId:actor.userId,actorRole:actor.roles[0]??null,authorizedByUserId:null,authorizedByRole:null,
       action:'RESTAURANT_ADMINISTRATION_CHANGED',entityType:'OPERATIONAL_CONFIGURATION',entityId:this.binding.locationId,outcome:'SUCCESS',reason:command.reason,
       commandId:command.commandId,before:null,after:null,amountAffected:null,currency:null,eventId:null};
-    try{return this.repository.execute(command,this.binding,audit);}catch(error){const rawCode=error instanceof Error?error.message:'',code=parseContractErrorCode(rawCode);
-      if(code&&/^(ADMINISTRATION_|BUSINESS_|CURRENCY_|CASH_REGISTER_|STATION_|ZONE_|TABLE_|PRODUCT_|COMMAND_)[A-Z_]*$/.test(code))
-        throw new AppError(code,code.endsWith('_REQUIRED')||code.endsWith('_NOT_FOUND')?404:409,'La configuración no fue modificada.');throw error;}
+    const execute=(authorize?:(epoch:number)=>void)=>{try{return this.repository.execute(command,this.binding,audit,authorize,this.onCommitted);}catch(error){rethrowProductVersionConflict(error);const rawCode=error instanceof Error?error.message:'',code=parseContractErrorCode(rawCode);
+      if(code&&/^(CATALOG_|ADMINISTRATION_|BUSINESS_|CURRENCY_|CASH_REGISTER_|STATION_|ZONE_|TABLE_|PRODUCT_|COMMAND_)[A-Z_]*$/.test(code))
+        throw new AppError(code,code.endsWith('_REQUIRED')||code.endsWith('_NOT_FOUND')?404:409,'La configuración no fue modificada.');throw error;}};
+    return command.kind==='ASSIGN_PRODUCT_STATION'?withProductAssignmentAuthorization(this.auth,actor,this.binding,'STATION_MANAGE',execute):execute();
   }
   operational(){const state=this.state();return state.operational;}
   effectiveTips(){const state=this.state(),legacy=this.licensing.currentConfiguration(),policy=legacy.tipPolicy,prefs=state.operational.tipPreferences;

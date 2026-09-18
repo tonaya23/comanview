@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import type Database from 'better-sqlite3';
 import { sql } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { EntityId, TaxProfile } from '@comanview/domain';
@@ -6,6 +7,7 @@ import { TaxAdministrationCommandSchema, TaxAdministrationResultSchema,TaxAdmini
   type TaxAdministrationCommand, type TaxAdministrationResult,type TaxAdministrationState } from '@comanview/contracts';
 import * as schema from '../schema.js';
 import { insertAuditEntry, type NewAuditEntry } from './AuditRepository.js';
+import { assignProductReference } from './ProductAssignmentTransaction.js';
 
 type DB = BetterSQLite3Database<typeof schema>;
 type Binding = { tenantId: string; locationId: string; edgeId: string };
@@ -26,14 +28,16 @@ export class TaxAdministrationRepository {
       products:this.db.all(sql`SELECT id,name,tax_profile_id taxProfileId,tax_profile_revision taxProfileRevision,version FROM products ORDER BY name,id`)});
   }
 
-  execute(input: TaxAdministrationCommand, binding: Binding, audit: NewAuditEntry): TaxAdministrationResult {
+  execute(input: TaxAdministrationCommand, binding: Binding, audit: NewAuditEntry, authorize:(epoch:number)=>void=()=>{},onCommitted?:(result:TaxAdministrationResult)=>void): TaxAdministrationResult {
     const command = TaxAdministrationCommandSchema.parse(input);
-    const digest = createHash('sha256').update(JSON.stringify({ binding, command })).digest('hex');
-    return this.db.transaction(tx => {
+    const digest = createHash('sha256').update(JSON.stringify({ binding, command, ...(command.kind==='ASSIGN_PRODUCT_TAX_PROFILE'?{actor:audit.actorUserId,device:audit.deviceId,session:audit.sessionId}:{}) })).digest('hex');
+    let assignment=false;
+    const result=this.db.transaction(tx => {
       const db = tx as unknown as DB;
       const installation = db.get<{ epoch: number }>(sql`SELECT recovery_epoch AS epoch FROM edge_installations
         WHERE singleton_key='PRIMARY' AND edge_id=${binding.edgeId} AND tenant_id=${binding.tenantId} AND location_id=${binding.locationId}`);
       if (!installation) throw new Error('ADMINISTRATION_BINDING_MISMATCH');
+      authorize(installation.epoch);
       if (audit.tenantId !== binding.tenantId || audit.locationId !== binding.locationId || !audit.actorUserId ||
         !audit.sessionId || !audit.deviceId || audit.action !== 'TAX_CONFIGURATION_CHANGED' || audit.commandId !== command.commandId)
         throw new Error('ADMINISTRATION_AUDIT_REQUIRED');
@@ -45,6 +49,7 @@ export class TaxAdministrationRepository {
       }
       if (db.get(sql`SELECT command_id FROM processed_commands WHERE command_id=${command.commandId}`))
         throw new Error('COMMAND_ID_CONFLICT');
+      if(command.kind==='ASSIGN_PRODUCT_TAX_PROFILE'){assignment=true;return assignProductReference(db,command,binding,installation.epoch,audit,digest,(this.db as DB & {$client:Database.Database}).$client);}
       let result: TaxAdministrationResult;
       let before: Record<string, unknown> | null = null;
       let after: Record<string, unknown>;
@@ -86,14 +91,6 @@ export class TaxAdministrationRepository {
             WHERE id=${profile.id}`);
           before = { ...profile }; after = { id: profile.id, name, rateBasisPoints: rate, calculationMode: mode, active: Boolean(active), version };
           result = { entityId: profile.id, version };
-        } else if (command.kind === 'ASSIGN_PRODUCT_TAX_PROFILE') {
-          if (!profile.active) throw new Error('TAX_PROFILE_INACTIVE');
-          const product = db.get<{ version: number; profileId: string }>(sql`SELECT version,tax_profile_id AS profileId FROM products WHERE id=${command.productId}`);
-          if (!product) throw new Error('PRODUCT_NOT_FOUND');
-          if (product.version !== command.expectedVersion) throw new Error('ADMINISTRATION_VERSION_CONFLICT');
-          result = { entityId: command.productId, version: product.version + 1 };
-          db.run(sql`UPDATE products SET tax_profile_id=${profile.id},tax_profile_revision=${profile.version},version=${result.version} WHERE id=${command.productId}`);
-          before = { ...product }; after = { ...result, profileId: profile.id, profileRevision: profile.version }; entityType = 'PRODUCT';
         } else {
           if (!profile.active) throw new Error('TAX_PROFILE_INACTIVE');
           const config = db.get<{ version: number; profileId: string | null }>(sql`SELECT version,default_tax_profile_id AS profileId
@@ -118,5 +115,7 @@ export class TaxAdministrationRepository {
       db.insert(schema.processedCommands).values({ commandId: command.commandId, processedAt: audit.occurredAt }).run();
       return result;
     }, { behavior: 'immediate' });
+    if(assignment&&result.changed){try{onCommitted?.(result);}catch{/* Best-effort invalidation; durable commit remains successful. */}}
+    return result;
   }
 }

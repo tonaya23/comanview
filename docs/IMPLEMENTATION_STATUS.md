@@ -6,9 +6,9 @@ El repositorio determina qué existe; el Master PRD determina el comportamiento 
 
 ## Current State
 
-- Current functional phase: **1X — UX/UI Foundation & Product Experience**
-- Current phase status: **CLOSED**
-- Current block: **TECHNICAL VALIDATION PASS; MANUAL ACCEPTANCE PASS**
+- Current functional phase: **Group B — Commercial Catalog**
+- Current phase status: **OPEN**
+- Current block: **B0 COMPLETE; B1 CLOSED; B2 NOT STARTED**
 - Last closed phase: **1X — UX/UI Foundation & Product Experience**
 - Closure commit message: `feat: complete phase 1X UX foundation`
 - Branch: `main`
@@ -17,6 +17,215 @@ El repositorio determina qué existe; el Master PRD determina el comportamiento 
 - 1X status: **CLOSED; X-A → X-I COMPLETE; UX ROUND 2 ACCEPTED**
 - Manual acceptance 1X: **PASS**, confirmada por el usuario para POS, Cobro, descarte vacío, Admin Local, Waiter, KDS, Super Admin, continuidad, responsive y uso real. Evidencia técnica en `docs/Acceptance_Phase_1X.md`.
 - Manual acceptance 1W: **PASS** (`phase-1w-final-acceptance`).
+
+### B1 — revisión transversal y cierre técnico (2026-09-18)
+
+**GROUP B OPEN; B0 COMPLETE; B1 CLOSED; B2 NOT STARTED.**
+B1a–B1d coherentes; detalle de matriz de escrituras, OCC, lifecycle/Floor, receipts,
+eventos, consumidores y Cloud en [Catalog B1 Review](Catalog_B1_Review.md).
+Corregido un defecto focal: lecturas schema14 no deben consultar una columna Product
+version inexistente; omiten la versión sin inventar OCC ni permitir escritura legacy.
+Validación transversal focal **362/362 PASS**, incluidos **23 PostgreSQL 18 reales** y
+43 del grupo host de upgrade/Floor (Windows DPAPI real). Typecheck/build de los nueve
+proyectos tocados PASS; diff/hygiene focal PASS; migrations históricas intactas.
+Tres intentos de refresh: NON_BLOCKING_DEBT con recuperación demostrada por siguiente
+check. Compactación de buffers: B5_HARDENING. Sin blockers/DECISION_REQUIRED pendientes.
+Sin suite global, nueva aceptación manual ni trabajo B2–B5/Group C. B1 CLOSED no cierra
+Group B ni autoriza commit: cambios locales preservados, NO COMMIT / NO PUSH.
+
+### Evidencia histórica B1a–B1d (anterior a la revisión transversal)
+
+Las referencias siguientes a B1 REVIEW PENDING describen cada entrega previa;
+el estado vigente de B1 es el cierre transversal registrado arriba.
+
+### B1a — lifecycle implementado, revisión completada
+
+La base de 1X permanece cerrada en `274e8544898f852617920435a2f16f73cbf8d76f`.
+B0 aprobado. B1a limita su alcance a schema/upgrade/restore; revisión de lifecycle
+completada según autorización de B1b. Group B permanece OPEN; B1 no se declara completo.
+
+Migration incremental 0016 y primitive transaccional de catálogo.
+Incluye categoría de sistema identificada por UNCATEGORIZED, versiones/orden, normalización
+SKU NFKC/uppercase independiente del locale, claims conflictivos para duplicados legacy,
+generation, estructura de receipts y concesión exclusiva del nuevo CATALOG_IMPORT.
+No modifica categorías legacy Category, versiones Product ni snapshots históricos.
+
+El startup productivo ejecuta `ProductionCatalogUpgrade` después de los upgrades anteriores,
+antes de abrir repositorios, WebSocket y workers. No ejecutar 0016 manualmente: su SQL y
+la normalización de datos forman una única transacción del primitive canónico.
+
+#### Orden y evidencia protegida
+
+- Preflight: archivo existente, fingerprint schema 15/16, integridad/FK, binding,
+  credencial persistida, epoch, revisiones y revocaciones. Sin fallback a DB vacía.
+- Reserva SQLite `BEGIN IMMEDIATE` y journal `CATALOG_SCHEMA_15_TO_16` en el Floor
+  existente, con binding, epoch, digest de migration/normalización y snapshot cifrado.
+  Es independiente de `administrationUpgradeJournal` 14→15: no autoriza Personnel baseline.
+- `PREPARING` → snapshot SQLite consistente/cifrado → `SNAPSHOT_READY` → SQL 0016 y
+  normalización → validación contra snapshot → commit SQLite → `VALIDATED` y mínimo 16
+  en una escritura protegida → validación final → quitar journal y publicar NORMAL.
+- El snapshot y el journal permiten reintentar antes/después de la migration y después
+  del avance del Floor. Mientras existe journal no se habilita operación normal.
+  Un snapshot fallido se conserva como evidencia; el reintento utiliza otro identificador.
+- Checksum, CAS, locking, identidad, Recovery Key y reglas monotónicas permanecen.
+  El Floor no contiene productos, categorías, claims ni estado comercial.
+
+#### Restore, compatibilidad y política
+
+- Backup 15 bajo Floor 16: staging autenticado y journal de restore autorizan la
+  transición dentro de la transacción de validación existente. Nunca NORMAL en 15,
+  ni reducción del Floor a 15. Personnel conserva el mínimo conocido sin rebootstrap.
+- Backup 16: valida la baseline existente; no aplica nuevamente 0016. Conserva identidad
+  UNCATEGORIZED, claims/conflictos, versiones, generation y permisos del backup.
+- El incremento de recoveryEpoch pertenece exclusivamente al restore existente.
+  Upgrade/restart no lo incrementan; generation inicia en 0 y no cambia por restart.
+- Floor 16 + DB 15 sin recuperación autorizada, schema parcial, binding/digest inválido,
+  Floor ausente/corrupto y política/generation parcial en un upgrade pendiente fallan cerrado.
+  Los validadores históricos limitados a schema 15 rechazan 16; no existe downgrade.
+- CATALOG_IMPORT es reconocido por auth/contracts y se añade a OWNER/MANAGER solamente.
+  La migration no repone otros permisos retirados; restart/restore16 no reejecutan grants.
+- Las migrations históricas permanecen intactas. Commands se registran en B1b abajo;
+  import/UI siguen pendientes de bloques posteriores.
+
+Validación focal: **137 pruebas PASS** (112 Edge lifecycle/recovery/security,
+8 Database, 17 Auth). Incluye SQLite real, store durable, concurrencia entre procesos,
+DPAPI Windows, hardware replacement y fault injection con el protocolo real.
+Typecheck acotado de Edge/Database/Auth/Contracts PASS. Builds de dependencias
+Auth/Contracts/Database para resolver exports locales PASS. `git diff --check` PASS.
+Sin suites globales, aceptación manual nueva, commit ni push.
+
+### B1b — Catalog Commands implementado, B1 REVIEW PENDING
+
+Frontera única `POST /catalog/commands` → `CatalogCommandService`. Contrato estricto:
+commandId/kind/payload, entityId y expectedVersion para cambios; altas expectedVersion=0
+y versión inicial 1. Los campos de identidad/actor/device/session no son autoridad del cliente.
+Referencia explícita = id + versión. Precio: minor units safe integer no negativo, moneda
+operacional exacta, reason obligatorio; no conversiones de float ni cambios fiscales implícitos.
+
+- Product: CREATE_PRODUCT, UPDATE_PRODUCT_DETAILS, SET_PRODUCT_ACTIVE,
+  SET_PRODUCT_AVAILABILITY, ASSIGN_PRODUCT_CATEGORY, UPDATE_PRODUCT_PRICE.
+  Active/available independientes; no se modifica ningún snapshot OrderItem.
+- Category: CREATE_CATEGORY, UPDATE_CATEGORY, SET_CATEGORY_ACTIVE, REORDER_CATEGORIES.
+  El label de UNCATEGORIZED puede cambiar sin cambiar identidad; no puede desactivarse.
+  Categorías con productos activos bloquean desactivación. Reorder valida todas las
+  versiones antes de mutar; transacción única, desempate de lectura displayOrder/id.
+- Coordinación: lease de lectura del Floor → BEGIN IMMEDIATE → revalidar sesión/permisos
+  actuales desde Auth/Personnel → binding/epoch/schema → receipt/digest → OCC/referencias
+  → claims y mutación → versiones/generation → auditoría y receipt → commit.
+- Digest canónico SHA-256 incluye comando, binding, actor/device/session y epoch.
+  Receipt confirmado devuelve el resultado original, no repite efectos; contenido/contexto
+  diferente produce COMMAND_ID_CONFLICT. Un receipt nunca concede autorización.
+- OCC usa products.version y categories.version. Cada entidad efectivamente cambiada
+  incrementa una vez; generation incrementa una vez por comando lógico, también en reorder.
+  No-op con versión vigente: changed=false, sin increments ni auditoría de mutación;
+  sí conserva receipt. Una versión stale falla incluso si parece no-op.
+- SKU NFKC/uppercase: adquirir/liberar claims y Product comparten transacción. Claims
+  CONFLICT legacy permanecen reservados incluso si sus miembros cambian de SKU; nunca
+  se elige un ganador automáticamente. El validador B1a reconoce esas reservas durables.
+- CATALOG_MANAGE no concede TAX_PROFILE_MANAGE ni STATION_MANAGE. Default fiscal
+  autoritativo permitido; perfil no-default y estación explícita requieren sus permisos.
+- Resultado incluye commandId, tipo/id/version, generation, recoveryEpoch, changed y
+  entidades autoritativas. GET conserva DTOs anteriores y expone versiones donde existen.
+- Legacy POST products/PATCH availability y métodos de servicio antiguos rechazan
+  CLIENT_CAPABILITY_REQUIRED. Admin usa el nuevo SDK y conserva commandId al reintentar
+  el mismo formulario tras ACK perdido; no se implementó Product/Category Admin final.
+- Audit CATALOG_CHANGED persiste atómicamente actor, comando, before y resultado after.
+  B1d, registrado abajo, incorpora Event Log/outbox/proyección comercial; no se emiten eventos
+  ficticios ni se difiere reconstruir auditoría. La integración administrativa Tax/Station
+  con Product version y sus eventos específicos se registra en B1c abajo.
+- Errores contractuales y guidance: OCC, referencia cambiada, categoría inexistente/
+  inactiva/protegida/con productos activos, SKU conflictivo/ambiguo/inválido, moneda
+  incorrecta y cliente incompatible. SDK conserva códigos y detalles públicos/diagnosticId.
+
+Validación focal B1b: **133 pruebas PASS** acumuladas sin contar reejecuciones:
+23 command service + 1 HTTP Auth real + 2 lecturas/legacy + 15 lifecycle B1a +
+20 Personnel + 8 Database + 5 Contracts + 2 SDK + 24 guidance + 26 Admin + 7 partición.
+Incluye rollback por fallo de auditoría/receipt/reorder, SKU rollback, escritores lógicos
+concurrentes, ACK perdido, revalidación de permisos y conflicto por epoch/identidad.
+Los filtros usados en microiteraciones no añaden skips persistentes. HTTP/lifecycle con
+snapshots completos quedan en el grupo aislado existente; tests in-memory rápidos en normal.
+Typechecks acotados Contracts/SDK/Database/Edge/POS/UI PASS; builds de dependencias
+Contracts/SDK/Database/UI PASS. Sin timeouts aumentados ni serialización del monorepo.
+`git diff --check` PASS. No suites globales ni aceptación manual nueva.
+Sin blockers conocidos de B1b; evidencia B1d abajo. B2–B5 pendientes, no certificados aquí.
+NO COMMIT. NO PUSH. Nada staged.
+
+### B1c — Tax / Station shared Product version implementado
+
+GROUP B OPEN; B0 COMPLETE; B1a/B1b/B1c IMPLEMENTED; **B1 REVIEW PENDING**.
+Tax y Station usan exclusivamente `products.version`: un escritor stale falla con
+`CATALOG_VERSION_CONFLICT`, incluidos escritores cruzados con Catalog. Referencias
+explícitas stale fallan con `CATALOG_REFERENCE_CHANGED`. Se conserva compatibilidad
+con comandos anteriores sin reference version: Edge valida la revisión vigente, como
+antes; Admin ahora captura y envía la versión seleccionada de TaxProfile/Station.
+
+La lease real de autorización del Security Floor envuelve `BEGIN IMMEDIATE`.
+Dentro se revalidan sesión/permisos especializados y epoch, también al recuperar un
+receipt. La misma transacción valida dominio, cambia Product/version/metadatos,
+avanza generation una vez y escribe Audit especializado, Event y receipt. No hay
+segundo comando ni commit separado. Tax conserva revisiones inmutables; Station
+comprueba tenant/location/actividad y `STATION_HAS_PENDING_WORK` ante cambio efectivo.
+Station null sigue admitido. No-op conserva versión/generation y no produce Audit/Event,
+pero sí receipt; digest incluye identidad del actor/device/session y binding.
+
+Eventos: `CATALOG_PRODUCT_TAX_ASSIGNED` y `CATALOG_PRODUCT_STATION_ASSIGNED`, con
+payloadVersion=1 y binding. B1d normaliza su payload a entityId/entityVersion,
+catalogGeneration y estado proyectado completo; acepta el descriptor histórico B1c
+como NOOP de proyección, reconciliado por baseline. El envelope existente aporta
+recoveryEpoch y local_sequence. Audit conserva
+la acción especializada, before/after, actor/device/session, commandId y eventId.
+Los receipts de Catalog y Administration no pueden reutilizar el mismo commandId.
+
+Admin/SDK conservan version, generation, changed, epoch y referencia autoritativa.
+ACK actualiza el estado local aun si falla la consulta posterior; otros borradores
+mantienen su OCC capturado. Un reintento del mismo intento conserva commandId; los
+conflictos requieren reconciliación explícita. No se implementó Product Admin B2.
+Cambios de Product no reescriben snapshots DRAFT/SENT/CLOSED; la excepción de edición
+explícita de DRAFT y la policy legacy permanecen intactas.
+
+Matriz de escrituras Product (auditoría de apps/packages/scripts; fixtures excluidos):
+
+| Frontera | Clasificación final | Tratamiento |
+| --- | --- | --- |
+| CatalogCommandService create/details/price/category/active/availability | SAFE_SHARED_VERSION | OCC/version/generation en transacción comercial |
+| Tax Administration assignment | SAFE_SHARED_VERSION | MUST_MIGRATE resuelto por primitive compartido |
+| Restaurant Administration Station assignment/clear | SAFE_SHARED_VERSION | MUST_MIGRATE resuelto por el mismo primitive |
+| GET Catalog / lecturas directas de Product / readiness | LEGACY_READ_ONLY | Sin escritura operacional |
+| POST products / PATCH availability legacy; métodos antiguos de CatalogService | MUST_REJECT | CLIENT_CAPABILITY_REQUIRED |
+| CatalogRepository.saveProduct | MUST_REJECT | Rechaza schema comercial; solo compatibilidad legacy pre-16, sin caller productivo |
+| prepareDevelopmentDatabase seed / assignStation | MUST_REJECT | Producción prohibida; schema 16 rechazado antes de seed/migrations |
+| applyCatalogSchemaMigration, normalización inicial category/sku_key | SAFE_SHARED_VERSION | Excepción lifecycle B1a: preserva versiones existentes; no command operacional; no reescribe si ya está migrado |
+
+No quedan escrituras productivas MUST_MIGRATE identificadas. Migrations históricas intactas.
+Validación focal B1c: **134 tests PASS** (47 Edge, 53 Database, 28 POS, 3 Contracts,
+3 SDK), sin contar reejecuciones; incluye 25 casos nuevos. HTTP usa Auth/Personnel/Floor
+reales; pruebas de concurrencia son escritores lógicos sobre SQLite real, no simulación
+de una carrera entre procesos. Rollback probado en Audit, Event y receipt.
+Typechecks Database/Edge/Contracts/SDK/POS PASS; builds focales de dependencias
+Contracts/Database/SDK PASS. `git diff --check` PASS. Sin suites globales, nuevos skips,
+timeouts aumentados ni aceptación manual. Sin DECISION_REQUIRED o blockers conocidos
+de B1c. Evidencia B1d abajo; B2–B5 y Group C no implementados.
+NO COMMIT. NO PUSH.
+
+### B1d — Catalog Events / Realtime / Cloud Baseline implementado
+
+**GROUP B OPEN; B0 COMPLETE; B1a/B1b/B1c/B1d IMPLEMENTED; B1 REVIEW PENDING.**
+Contrato y límites: [Catalog Propagation](Catalog_Propagation.md).
+
+- Diez eventos Product/Category con estado público autoritativo, atómicos con
+  versión/generation/Audit/receipt. Reorder multi-category: una generation/un evento.
+- `CATALOG_CHANGED` best-effort después del commit; GET `/catalog/state` autorizado.
+  POS/Waiter coalescen cargas y recuperan notificaciones perdidas por epoch/generation;
+  no modifican pedidos, pendientes, snapshots ni routing KDS.
+- Baseline consistente y durable en Event Log al startup comercial y por nueva epoch:
+  manifest/digest/identidad determinista y chunks acotados. Mismo Outbox/Inbox/Worker.
+- Cloud `0008_catalog_projection.sql`: read model, buffers y checkpoint; publicación
+  completa/validada, incrementales contiguos, dedup/replay, sin autoridad de escritura.
+- Validación focal **149/149 PASS** (incluye PostgreSQL 18 real 22/22); typecheck/build
+  de los siete proyectos afectados y `git diff --check` PASS. Límites en Catalog Propagation; sin suite global,
+  aceptación manual nueva, migrations históricas modificadas ni cambios de Security/Recovery.
+- B2–B5, Storefront, Cloud editing, modifiers y Group C continúan fuera de alcance.
+  NO COMMIT. NO PUSH. No se cierra B1.
 
 ### Cierre final — 2026-09-16
 

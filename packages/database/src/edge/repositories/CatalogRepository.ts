@@ -27,6 +27,16 @@ type DBWithClient = DB & { $client: Database.Database };
 export class CatalogRepository {
   constructor(private readonly db: DB) {}
 
+  getProductVersion(id:string):number|undefined{
+    // Legacy read-only callers have no Product OCC column. Never synthesize an
+    // expectedVersion; current/partially migrated schemas must still fail closed.
+    if ((this.db.get<{user_version:number}>(sql`PRAGMA user_version`)?.user_version ?? 0) < 15 &&
+      !this.db.get(sql`SELECT 1 FROM pragma_table_info('products') WHERE name='version'`) &&
+      !this.db.get(sql`SELECT 1 FROM sqlite_master WHERE type='table' AND name='catalog_state'`)) return undefined;
+    const row=this.db.get<{version:number}>(sql`SELECT version FROM products WHERE id=${id}`);
+    if(!row)throw new Error('PRODUCT_NOT_FOUND');return row.version;
+  }
+
   private hasFiscalRevisions(): boolean {
     return Boolean(this.db.get(sql`SELECT name FROM sqlite_master WHERE type='table' AND name='tax_profile_revisions'`));
   }
@@ -62,6 +72,7 @@ export class CatalogRepository {
    * Clears existing modifier group assignments and price overrides before reinserting.
   */
   saveProduct(product: Product): void {
+    if(this.db.get(sql`SELECT 1 FROM sqlite_master WHERE type='table' AND name='catalog_state'`))throw new Error('CLIENT_CAPABILITY_REQUIRED');
     const versionedTaxes = this.hasFiscalRevisions();
     const existingFiscal = versionedTaxes
       ? (this.db as DBWithClient).$client.prepare(
@@ -252,7 +263,9 @@ export class CatalogRepository {
     return products;
   }
 
-  getAllCategories(): { id: string; name: string; active: boolean }[] {
+  getAllCategories(): { id: string; name: string; active: boolean;version?:number;displayOrder?:number;systemKey?:'UNCATEGORIZED'|null }[] {
+    if(this.db.get(sql`SELECT 1 FROM pragma_table_info('categories') WHERE name='system_key'`))
+      return this.db.all<{id:string;name:string;active:number;version:number;displayOrder:number;systemKey:'UNCATEGORIZED'|null}>(sql`SELECT id,name,active,version,display_order displayOrder,system_key systemKey FROM categories ORDER BY display_order,id`).map(row=>({...row,active:Boolean(row.active)}));
     return this.db
       .select()
       .from(schema.categories)

@@ -7,6 +7,8 @@
 
 export * from './errors.js';
 export * from './catalog.js';
+export * from './catalogCommands.js';
+export * from './catalogPropagation.js';
 export * from './order.js';
 export * from './health.js';
 export * from './payment.js';

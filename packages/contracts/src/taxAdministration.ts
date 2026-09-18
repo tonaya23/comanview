@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ProductAssignmentResultFields } from './catalogCommands.js';
 
 const Command = z.object({ commandId: z.string().min(1).max(120), expectedVersion: z.number().int().nonnegative(),
   reason: z.string().trim().min(3).max(500) });
@@ -9,10 +10,10 @@ export const TaxAdministrationCommandSchema = z.discriminatedUnion('kind', [
   Command.extend({ kind: z.literal('REVISE_TAX_PROFILE'), profileId: z.string().uuid(), ...TaxFields }).strict(),
   Command.extend({ kind: z.literal('DEACTIVATE_TAX_PROFILE'), profileId: z.string().uuid() }).strict(),
   Command.extend({ kind: z.literal('SET_DEFAULT_TAX_PROFILE'), profileId: z.string().uuid() }).strict(),
-  Command.extend({ kind: z.literal('ASSIGN_PRODUCT_TAX_PROFILE'), profileId: z.string().uuid(), productId: z.string().uuid() }).strict(),
+  Command.extend({ kind: z.literal('ASSIGN_PRODUCT_TAX_PROFILE'), profileId: z.string().uuid(), profileVersion:z.number().int().positive().safe().optional(), productId: z.string().uuid() }).strict(),
 ]);
 export type TaxAdministrationCommand = z.infer<typeof TaxAdministrationCommandSchema>;
-export const TaxAdministrationResultSchema = z.object({ entityId: z.string().uuid(), version: z.number().int().positive() });
+export const TaxAdministrationResultSchema = z.object({ entityId: z.string().uuid(), version: z.number().int().positive(),...ProductAssignmentResultFields });
 export type TaxAdministrationResult = z.infer<typeof TaxAdministrationResultSchema>;
 export const TaxAdministrationStateSchema=z.object({fiscalPolicyVersion:z.number().int().nonnegative(),defaultTaxProfileId:z.string().uuid().nullable(),configurationVersion:z.number().int().positive(),
   profiles:z.array(z.object({id:z.string().uuid(),name:z.string(),rateBasisPoints:z.number().int().nonnegative(),calculationMode:z.enum(['TAX_ADDED','TAX_INCLUDED']),active:z.boolean(),version:z.number().int().positive()})),

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { KdsRealtimeMessageSchema } from './kds.js';
 import { TablesRealtimeMessageSchema } from './tables.js';
+import { CatalogChangedSchema } from './catalogPropagation.js';
 
 export const OrderRealtimeMessageSchema = z.object({
   type: z.literal('ORDER_UPDATED'),
@@ -29,6 +30,7 @@ export const OperationalRealtimeMessageSchema = z.union([
   KdsRealtimeMessageSchema,
   TablesRealtimeMessageSchema,
   OrderRealtimeMessageSchema,
+  CatalogChangedSchema,
 ]);
 export type OperationalRealtimeMessage = z.infer<typeof OperationalRealtimeMessageSchema>;
 export type OrderRealtimeMessage = z.infer<typeof OrderRealtimeMessageSchema>;

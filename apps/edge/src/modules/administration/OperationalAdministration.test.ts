@@ -10,9 +10,9 @@ function fixture(){const sqlite=new Database(':memory:');for(const name of readd
   const actor={userId:id(),sessionId:id(),deviceId:id(),tenantId:binding.tenantId,locationId:binding.locationId,displayName:'Owner',roles:['OWNER'],permissions:['ADMINISTRATION_VIEW','BUSINESS_DAY_POLICY_MANAGE','CURRENCY_MANAGE','CASH_REGISTER_MANAGE','TIP_PREFERENCES_MANAGE']} as AuthenticatedActor;
   const operation:AuthorizedOperation={actor,authorizedBy:null,permission:'CASH_SESSION_OPEN',requestedAt:new Date('2026-09-02T10:00:00.000Z')};return{sqlite,db,binding,admin,actor,operation,licensing};}
 describe('operational administration integration',()=>{
-  it('uses persisted currency/default register and lets only Edge validate business_date',()=>{const f=fixture();try{let version=1;
-    version=f.admin.execute({kind:'SET_CURRENCY',commandId:id(),expectedVersion:version,reason:'Choose currency',currency:'MXN'},f.actor).version;
-    version=f.admin.execute({kind:'SET_BUSINESS_DAY_POLICY',commandId:id(),expectedVersion:version,reason:'Choose business day',timeZone:'America/Matamoros',rollover:'04:00'},f.actor).version;
+  it('uses persisted currency/default register and lets only Edge validate business_date',async()=>{const f=fixture();try{let version=1;
+    version=(await f.admin.execute({kind:'SET_CURRENCY',commandId:id(),expectedVersion:version,reason:'Choose currency',currency:'MXN'},f.actor)).version;
+    version=(await f.admin.execute({kind:'SET_BUSINESS_DAY_POLICY',commandId:id(),expectedVersion:version,reason:'Choose business day',timeZone:'America/Matamoros',rollover:'04:00'},f.actor)).version;
     f.admin.execute({kind:'CREATE_CASH_REGISTER',commandId:id(),expectedVersion:0,reason:'Create main register',name:'Main',blindCashCount:true,makeDefault:true,displayOrder:0},f.actor);
     const service=new CashService(new CashRepository(f.db),new PrintJobRepository(f.db),{...defaultOperationalContext,...f.binding},f.licensing,undefined,f.admin),actual=resolveBusinessDate({operationalTimezone:'America/Matamoros',rollover:'04:00',version:1},f.operation.requestedAt);
     expect(()=>service.openSession({commandId:id(),openingFloatAmount:0,businessDate:'2000-01-01'},f.operation)).toThrow(expect.objectContaining({code:'BUSINESS_DATE_MISMATCH'}));

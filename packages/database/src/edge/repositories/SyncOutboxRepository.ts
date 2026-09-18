@@ -160,6 +160,7 @@ export class SyncOutboxRepository {
         .limit(limit)
         .all();
       const eligible: typeof unresolved = [];
+      let payloadBytes=0;
       for (const row of unresolved) {
         const canClaim =
           row.syncStatus === 'PENDING' ||
@@ -168,6 +169,10 @@ export class SyncOutboxRepository {
             row.leaseExpiresAt !== null &&
             row.leaseExpiresAt <= now);
         if (!canClaim) break;
+        // Bound transport bytes without leasing/sending later sequences ahead of the head.
+        const bytes=Buffer.byteLength(row.payload,'utf8')+2048;
+        if(eligible.length&&payloadBytes+bytes>750_000)break;
+        payloadBytes+=bytes;
         eligible.push(row);
         if (eligible.length >= limit) break;
       }

@@ -23,6 +23,7 @@ const api = vi.hoisted(() => ({
   getCurrentSession: vi.fn(),
   getHealth: vi.fn(),
   getCategories: vi.fn(),
+  getCatalogState:vi.fn(async()=>({capabilityVersion:1,recoveryEpoch:0,catalogGeneration:0})),
   getProducts: vi.fn(),
   getTables: vi.fn(),
   getOpenCounterOrders: vi.fn(),
@@ -140,6 +141,7 @@ class Socket {
 }
 beforeEach(() => {
   vi.resetAllMocks();
+  api.getCatalogState.mockResolvedValue({capabilityVersion:1,recoveryEpoch:0,catalogGeneration:0});
   vi.stubGlobal(
     'WebSocket',
     Socket,
@@ -228,6 +230,16 @@ async function start() {
 }
 
 describe('POS operational presentation', () => {
+  it('catalog invalidation refreshes future products without replacing the current order or issuing commands',async()=>{
+    await start();const reads=api.getOrder.mock.calls.length;
+    api.getCatalogState.mockResolvedValue({capabilityVersion:1,recoveryEpoch:1,catalogGeneration:0});
+    api.getProducts.mockResolvedValue([{id:productId,name:'Renamed future product',active:true,available:false,basePrice:money(7000),modifierGroups:[],displayOrder:0}]);
+    await act(async()=>{Socket.current.onmessage?.({data:JSON.stringify({type:'CATALOG_CHANGED',locationId:id,capabilityVersion:1,recoveryEpoch:1,catalogGeneration:0,affectedTypes:['PRODUCT'],affectedIds:[productId],fullInvalidation:false})});});
+    await waitFor(()=>expect(screen.queryByRole('button',{name:/Taco de prueba.*Agregar/})).toBeNull());
+    expect(screen.getByRole('heading',{name:'Mesa terraza'})).toBeTruthy();
+    expect(api.getOrder).toHaveBeenCalledTimes(reads);expect(api.addOrderItem).not.toHaveBeenCalled();expect(api.sendRound).not.toHaveBeenCalled();expect(api.createOrder).not.toHaveBeenCalled();
+    const count=api.getProducts.mock.calls.length;await act(async()=>{window.dispatchEvent(new Event('focus'));});expect(api.getProducts).toHaveBeenCalledTimes(count);
+  });
   it('does not carry an add-product success into the payment dialog', async () => {
     await start();
     api.addOrderItem.mockResolvedValue({ ...sale(), version: 8 });

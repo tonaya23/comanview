@@ -1,4 +1,5 @@
 import type { Pool, PoolClient } from 'pg';
+import { applyCatalogProjection } from './catalogProjection.js';
 
 export const OPERATIONAL_PROJECTION_NAME = 'operational_summaries';
 
@@ -33,6 +34,7 @@ interface EventContext {
 }
 
 export type ProjectionAction =
+  | {type:'CATALOG'}
   | { type: 'NOOP' }
   | {type:'ADMINISTRATION_CHANGED';entityType:string;publicState:Record<string,unknown>}
   | {
@@ -103,6 +105,14 @@ export class ProjectionLeaseLostError extends Error {
 
 export class CloudProjectionRepository {
   constructor(private readonly pool: Pool) {}
+  async readCatalog(version:number,binding:{edgeId:string;tenantId:string;locationId:string}){
+    // Single statement snapshot: never pairs a published checkpoint with partial entities.
+    const result=await this.pool.query(`SELECT c.recovery_epoch,c.generation,c.baseline_id,
+      COALESCE((SELECT jsonb_agg(jsonb_build_object('entityType',e.entity_type,'state',e.public_state) ORDER BY e.entity_type,e.entity_id)
+      FROM cloud_catalog_entities e WHERE e.projection_version=c.projection_version AND e.edge_id=c.edge_id AND e.recovery_epoch=c.recovery_epoch),'[]'::jsonb) entities
+      FROM cloud_catalog_checkpoint c WHERE c.projection_version=$1 AND c.edge_id=$2 AND c.tenant_id=$3 AND c.location_id=$4 AND c.generation IS NOT NULL`,[version,binding.edgeId,binding.tenantId,binding.locationId]);
+    return result.rows[0]??null;
+  }
 
   async claimEvents(input: {
     projectionName?: string;
@@ -330,6 +340,7 @@ export class CloudProjectionRepository {
     try {
       await client.query('BEGIN');
       for (const table of [
+        'cloud_catalog_chunks','cloud_catalog_baselines','cloud_catalog_deltas','cloud_catalog_entities','cloud_catalog_checkpoint',
         'cloud_cash_movements',
         'cloud_cash_session_summaries',
         'cloud_closed_sale_summaries',
@@ -462,6 +473,8 @@ export class CloudProjectionRepository {
   ): Promise<void> {
     const context: EventContext = event;
     switch (action.type) {
+      case 'CATALOG':
+        await applyCatalogProjection(client,event,version);return;
       case 'NOOP':
         return;
       case 'ADMINISTRATION_CHANGED':

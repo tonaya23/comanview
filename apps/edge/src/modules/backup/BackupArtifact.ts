@@ -6,11 +6,11 @@ import { basename,join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import Database from 'better-sqlite3';
 import { BackupManifestSchema,type BackupDestinationType,type BackupManifest,type BackupTrigger } from '@comanview/contracts';
-import { inspectAdministrationSchema, inspectRecoveryUpgradeSchema } from '@comanview/database';
+import { inspectCatalogSchema, validateCatalogBaseline, inspectAdministrationSchema, inspectRecoveryUpgradeSchema } from '@comanview/database';
 
 export const BACKUP_FORMAT_VERSION=1 as const;
-export const CURRENT_EDGE_SCHEMA_VERSION=15;
-export const BACKUP_APPLICATION_VERSION='1W';
+export const CURRENT_EDGE_SCHEMA_VERSION=16;
+export const BACKUP_APPLICATION_VERSION='B1a';
 const MANIFEST='manifest.json',PAYLOAD='database.enc';
 
 export interface SqliteBackupSource { backup(destinationFile:string):Promise<unknown> }
@@ -20,7 +20,7 @@ export async function createEncryptedBackupArtifact(input:{
   source:SqliteBackupSource;destinationDirectory:string;backupId:string;binding:ArtifactBinding;
   recoveryKey:string;trigger:BackupTrigger;destinationType:BackupDestinationType;businessDate:string|null;
   now?:Date;
-  schemaVersion?:13|14|15;
+  schemaVersion?:13|14|15|16;
 }):Promise<{artifactPath:string;manifest:BackupManifest}> {
   const now=input.now??new Date();
   const temporary=await mkdtemp(join(tmpdir(),'comanview-backup-create-'));
@@ -32,8 +32,8 @@ export async function createEncryptedBackupArtifact(input:{
     const snapshot=join(temporary,'database.sqlite');
     await input.source.backup(snapshot);
     const snapshotDb=new Database(snapshot,{readonly:true,fileMustExist:true});
-    let schemaVersion:13|14|15;
-    try{schemaVersion=input.schemaVersion??(snapshotDb.pragma('user_version',{simple:true})===15?15:14);}finally{snapshotDb.close();}
+    let schemaVersion:13|14|15|16;
+    try{schemaVersion=input.schemaVersion??(snapshotDb.pragma('user_version',{simple:true})===16?16:snapshotDb.pragma('user_version',{simple:true})===15?15:14);}finally{snapshotDb.close();}
     assertSqliteSnapshot(snapshot,input.binding,schemaVersion);
     const plaintextSize=(await stat(snapshot)).size;
     const core={formatVersion:BACKUP_FORMAT_VERSION,backupId:input.backupId,tenantId:input.binding.tenantId,
@@ -74,7 +74,7 @@ export async function verifyEncryptedBackupArtifact(input:{artifactPath:string;r
   expectedBackupId?:string;expectedBinding?:Partial<ArtifactBinding>;stagingDirectory?:string;
   allowLegacyUpgradeSnapshot?:boolean}):Promise<{manifest:BackupManifest;stagedDatabasePath:string;cleanup():Promise<void>}> {
   const manifest=BackupManifestSchema.parse(JSON.parse(await readFile(join(input.artifactPath,MANIFEST),'utf8')));
-  if(![14,CURRENT_EDGE_SCHEMA_VERSION].includes(manifest.schemaVersion)&&
+  if(![14,15,CURRENT_EDGE_SCHEMA_VERSION].includes(manifest.schemaVersion)&&
     !(input.allowLegacyUpgradeSnapshot&&manifest.schemaVersion===13))throw new Error('BACKUP_INCOMPATIBLE');
   if(input.expectedBackupId&&manifest.backupId!==input.expectedBackupId)throw new Error('RECOVERY_BACKUP_INVALID');
   assertBinding(manifest,input.expectedBinding);
@@ -120,15 +120,16 @@ function assertSqliteSnapshot(path:string,binding:ArtifactBinding,schemaVersion:
     if(integrity.length!==1||integrity[0]?.integrity_check!=='ok')throw new Error('BACKUP_INTEGRITY_FAILED');
     const declared=sqlite.pragma('user_version',{simple:true});
     if(declared!==0&&declared!==schemaVersion)throw new Error('BACKUP_INCOMPATIBLE');
-    if(schemaVersion===15)inspectAdministrationSchema(sqlite);
+    if(schemaVersion===16)validateCatalogBaseline(sqlite);
+    else if(schemaVersion===15)inspectAdministrationSchema(sqlite);
     const row=sqlite.prepare(`SELECT tenant_id tenantId,location_id locationId,edge_id edgeId,
       ${schemaVersion===13?'0':'recovery_epoch'} recoveryEpoch FROM edge_installations WHERE singleton_key='PRIMARY'`).get() as ArtifactBinding|undefined;
     if(!row||row.tenantId!==binding.tenantId||row.locationId!==binding.locationId||
       row.edgeId!==binding.edgeId||row.recoveryEpoch!==binding.recoveryEpoch)throw new Error('RECOVERY_LOCATION_MISMATCH');
   }finally{sqlite.close();}
 }
-export function backupSchemaVersion(sqlite:Database.Database):13|14|15{
-  return sqlite.pragma('user_version',{simple:true})===15?inspectAdministrationSchema(sqlite):inspectRecoveryUpgradeSchema(sqlite);
+export function backupSchemaVersion(sqlite:Database.Database):13|14|15|16{
+  return sqlite.pragma('user_version',{simple:true})===16?inspectCatalogSchema(sqlite):sqlite.pragma('user_version',{simple:true})===15?inspectAdministrationSchema(sqlite):inspectRecoveryUpgradeSchema(sqlite);
 }
 function decodeRecoveryKey(value:string){const key=Buffer.from(value,'base64url');if(key.length!==32)throw new Error('RECOVERY_KEY_INVALID');return key;}
 async function sha256File(path:string){const hash=createHash('sha256');for await(const chunk of createReadStream(path))hash.update(chunk as Buffer);return hash.digest('hex');}

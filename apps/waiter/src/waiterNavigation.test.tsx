@@ -13,6 +13,7 @@ import { readFileSync } from 'node:fs';
 const api = vi.hoisted(() => ({
   getCurrentSession: vi.fn(),
   getCategories: vi.fn(),
+  getCatalogState:vi.fn(async()=>({capabilityVersion:1,recoveryEpoch:0,catalogGeneration:0})),
   getProducts: vi.fn(),
   getTables: vi.fn(),
   getOrder: vi.fn(),
@@ -107,6 +108,7 @@ class Socket {
 }
 beforeEach(() => {
   vi.resetAllMocks();
+  api.getCatalogState.mockResolvedValue({capabilityVersion:1,recoveryEpoch:0,catalogGeneration:0});
   vi.stubGlobal('WebSocket', Socket);
   localStorage.clear();
   localStorage.setItem('comanview.waiter.sessionToken', 'test-session');
@@ -159,6 +161,17 @@ async function reconnect() {
 }
 
 describe('Waiter task navigation', () => {
+  it('focus recovers a missed catalog change without losing pending items, editing input or table',async()=>{
+    await openOrder();await userEvent.click(screen.getByRole('button',{name:'Editar'}));
+    const dialog=screen.getByRole('dialog',{name:'Taco'});fireEvent.change(within(dialog).getByLabelText('Instrucciones especiales'),{target:{value:'Keep draft'}});
+    const reads=api.getOrder.mock.calls.length;
+    api.getCatalogState.mockResolvedValue({capabilityVersion:1,recoveryEpoch:1,catalogGeneration:0});api.getProducts.mockResolvedValue([]);
+    await act(async()=>{window.dispatchEvent(new Event('focus'));});
+    await waitFor(()=>expect(api.getProducts).toHaveBeenCalledTimes(2));
+    expect((within(dialog).getByLabelText('Instrucciones especiales') as HTMLTextAreaElement).value).toBe('Keep draft');
+    expect(screen.getByRole('button',{name:'Pedido · 1 sin enviar'})).toBeTruthy();
+    expect(api.getOrder).toHaveBeenCalledTimes(reads);expect(api.sendRound).not.toHaveBeenCalled();expect(api.createOrder).not.toHaveBeenCalled();expect(api.addOrderItem).not.toHaveBeenCalled();
+  });
   it('keeps the real multi-table context across views without creating another order', async () => {
     api.getTables.mockResolvedValue([table(), { ...table(), id: productId, name: 'Mesa patio', zone: 'Patio' }]);
     api.getOrder.mockResolvedValue({ ...sale(), tableIds: [id, productId] });

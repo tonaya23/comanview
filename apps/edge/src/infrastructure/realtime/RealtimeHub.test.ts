@@ -16,6 +16,13 @@ class TestSocket extends EventEmitter {
 }
 
 describe('RealtimeHub location boundary', () => {
+  it('delivers catalog invalidation only after authorization and only to its location',async()=>{
+    const hub=new RealtimeHub(),local=new TestSocket(),other=new TestSocket();
+    let release!:()=>void;const pending=new Promise<void>(r=>{release=r;});
+    hub.subscribe(local,'local',async deliver=>{await pending;deliver();return 'AUTHORIZED';});hub.subscribe(other,'other');
+    hub.publish({type:'CATALOG_CHANGED',locationId:'local',recoveryEpoch:8,catalogGeneration:3,capabilityVersion:1,affectedTypes:['PRODUCT'],affectedIds:[],fullInvalidation:true});
+    expect(local.messages).toEqual([]);release();await vi.waitFor(()=>expect(local.messages).toHaveLength(1));expect(other.messages).toEqual([]);
+  });
   const event=(version:number)=>({type:'ORDER_UPDATED' as const,locationId:'local',orderId:'order',version,reason:'ITEM_ADDED' as const,occurredAt:'2026-09-15T00:00:00Z'});
   it('holds delivery during authorization, preserves order and coalesces concurrent revalidation',async()=>{
     const hub=new RealtimeHub(),socket=new TestSocket();

@@ -1,47 +1,18 @@
+import { AppError } from '../../../app/errorHandler.js';
 import { CatalogRepository } from '@comanview/database';
-import { Product, EntityId, ProductType } from '@comanview/domain';
-import { Money } from '@comanview/money';
+import { Product, EntityId } from '@comanview/domain';
 import {
   CreateProductRequest,
   SetProductAvailabilityRequest,
   ProductResponse,
 } from '@comanview/contracts';
 
-// Simplified for now, only creates REGULAR products without modifiers for testing
+// Legacy reads remain compatible; all commercial writes require CatalogCommandService.
 export class CatalogService {
   constructor(private readonly catalogRepo: CatalogRepository) {}
 
   async createProduct(request: CreateProductRequest): Promise<ProductResponse> {
-    const taxProfile = this.catalogRepo.getTaxProfile(EntityId.fromString(request.taxProfileId));
-    if (!taxProfile) throw new Error('TAX_PROFILE_REQUIRED');
-    if (!taxProfile.active) throw new Error('TAX_PROFILE_INACTIVE');
-    if (taxProfile.revision !== null && taxProfile.revision !== request.taxProfileRevision)
-      throw new Error('TAX_REVISION_INCONSISTENT');
-    if (taxProfile.revision === null && request.taxProfileRevision !== 1)
-      throw new Error('TAX_REVISION_INCONSISTENT');
-
-    const product = new Product({
-      id: EntityId.generate(),
-      name: request.name,
-      description: request.description,
-      productType: request.productType,
-      categoryId: request.categoryId
-        ? EntityId.fromString(request.categoryId)
-        : EntityId.generate(),
-      taxProfile,
-      basePrice: Money.fromMinorUnits(request.basePrice.amount, request.basePrice.currency),
-      stationId: request.stationId ? EntityId.fromString(request.stationId) : null,
-      sku: null,
-      barcode: null,
-      displayOrder: 0,
-      active: true,
-      available: true,
-      modifierGroups: [],
-    });
-
-    this.catalogRepo.saveProduct(product);
-
-    return this.mapToResponse(product);
+    throw new AppError('CLIENT_CAPABILITY_REQUIRED',409,'Use catalog commands.');
   }
 
   async getProduct(id: string): Promise<ProductResponse | null> {
@@ -63,21 +34,12 @@ export class CatalogService {
     id: string,
     request: SetProductAvailabilityRequest,
   ): Promise<ProductResponse | null> {
-    const product = this.catalogRepo.getProductById(EntityId.fromString(id));
-    if (!product) return null;
-
-    if (request.available) {
-      product.markAsAvailable();
-    } else {
-      product.markAsUnavailable();
-    }
-
-    this.catalogRepo.saveProduct(product);
-    return this.mapToResponse(product);
+    throw new AppError('CLIENT_CAPABILITY_REQUIRED',409,'Use catalog commands.');
   }
 
   private mapToResponse(product: Product): ProductResponse {
     return {
+      version:this.catalogRepo.getProductVersion(product.id.toString()),
       id: product.id.toString(),
       name: product.name,
       description: product.description,

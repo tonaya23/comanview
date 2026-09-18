@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 export const AuditActionSchema = z.enum([
+  'CATALOG_CHANGED',
   'TAX_CONFIGURATION_CHANGED',
   'PERSONNEL_CHANGED',
   'RESTAURANT_ADMINISTRATION_CHANGED',
@@ -18,6 +19,7 @@ export const AuditActionSchema = z.enum([
 ]);
 export const AuditOutcomeSchema = z.enum(['SUCCESS','REJECTED']);
 export const AuditEntityTypeSchema = z.enum([
+  'CATEGORY',
   'TAX_PROFILE', 'PRODUCT', 'OPERATIONAL_CONFIGURATION',
   'USER',
   'BUSINESS_PROFILE','CASH_REGISTER','STATION','ZONE','RESTAURANT_TABLE',

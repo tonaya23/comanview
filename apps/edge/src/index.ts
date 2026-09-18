@@ -38,8 +38,10 @@ import {
 import { loadEdgeSyncConfig, type EdgeSyncConfig } from '@comanview/config';
 import { DebugPrinterAdapter, PrintWorker, type PrinterAdapter } from '@comanview/printing';
 import { CatalogService } from './modules/catalog/application/CatalogService.js';
+import { CatalogCommandService } from './modules/catalog/application/CatalogCommandService.js';
 import { OrderService } from './modules/orders/application/OrderService.js';
 import { catalogRoutes } from './modules/catalog/http/routes.js';
+import { prepareProductionCatalogUpgrade } from './modules/catalog/application/ProductionCatalogUpgrade.js';
 import { orderRoutes } from './modules/orders/http/routes.js';
 import { CashService } from './modules/cash/application/CashService.js';
 import { cashRoutes } from './modules/cash/http/routes.js';
@@ -50,6 +52,7 @@ import { HealthResponseSchema } from '@comanview/contracts';
 import { PrintService } from './modules/printing/application/PrintService.js';
 import { printRoutes } from './modules/printing/http/routes.js';
 import { RealtimeHub } from './infrastructure/realtime/RealtimeHub.js';
+import { ensureCatalogBaseline } from '@comanview/database';
 import { KdsService } from './modules/kds/application/KdsService.js';
 import { kdsRoutes } from './modules/kds/http/routes.js';
 import { AuthService } from './modules/auth/application/AuthService.js';
@@ -126,9 +129,10 @@ export async function buildApp(dbPath: string = ':memory:', options: BuildAppOpt
     await completePendingRecoveryAtStartup({dbPath:resolve(dbPath),store:recoverySecurityStore});
     if(process.env['NODE_ENV']==='production'||options.enforceEstablishedInstallationSafety||
       options.establishedInstallationEvidence||(await recoverySecurityStore.load()).upgradeJournal||
-      (await recoverySecurityStore.load()).administrationUpgradeJournal){
+      (await recoverySecurityStore.load()).administrationUpgradeJournal||(await recoverySecurityStore.load()).catalogUpgradeJournal){
       const upgradeInput={dbPath:resolve(dbPath),store:recoverySecurityStore,edgeSecretStore:options.edgeSecretStore??createEdgeSecretStore()};
-      const pendingAdministration=Boolean((await recoverySecurityStore.load()).administrationUpgradeJournal);
+      const pendingCatalog=Boolean((await recoverySecurityStore.load()).catalogUpgradeJournal);
+      const pendingAdministration=Boolean((await recoverySecurityStore.load()).administrationUpgradeJournal)||pendingCatalog;
       const upgrade=pendingAdministration?{state:'CURRENT' as const}:await prepareProductionRecoveryUpgrade(upgradeInput);
       if(upgrade.state==='RECOVERY_REQUIRED')throw new AppError('RECOVERY_REQUIRED',503,
         `Productive upgrade/startup stopped: ${upgrade.code??'UPGRADE_FAILED'}.`);
@@ -136,10 +140,14 @@ export async function buildApp(dbPath: string = ':memory:', options: BuildAppOpt
       if(upgrade.state==='FIRST_BOOT'&&process.env['NODE_ENV']==='production')
         throw new Error('Edge is UNPROVISIONED. Complete durable provisioning before starting the service.');
       if(upgrade.state!=='FIRST_BOOT'){
-        const administration=await prepareProductionAdministrationUpgrade(upgradeInput);
+        const administration=pendingCatalog?{state:'CURRENT' as const}:await prepareProductionAdministrationUpgrade(upgradeInput);
         if(administration.state==='RECOVERY_REQUIRED')throw new AppError('RECOVERY_REQUIRED',503,
           `Productive administration upgrade stopped: ${administration.code??'ADMINISTRATION_UPGRADE_FAILED'}.`);
         if(administration.state==='UPGRADED')app.log.info({fromSchema:14,toSchema:15},'UPGRADE COMPLETED');
+        const catalog=await prepareProductionCatalogUpgrade(upgradeInput);
+        if(catalog.state==='RECOVERY_REQUIRED')throw new AppError('RECOVERY_REQUIRED',503,
+          `Productive catalog upgrade stopped: ${catalog.code??'CATALOG_UPGRADE_FAILED'}.`);
+        if(catalog.state==='UPGRADED')app.log.info({fromSchema:15,toSchema:16},'UPGRADE COMPLETED');
       }
     }
     const disposition=await assessStartupDatabase(resolve(dbPath),recoverySecurityStore,
@@ -207,10 +215,16 @@ export async function buildApp(dbPath: string = ':memory:', options: BuildAppOpt
     (revision) => licenseManager.noteDesiredRevision(revision));
 
   // Setup Services
-  const catalogService = new CatalogService(catalogRepo);
-  const administration=authRepo.personnelSchemaPresent()?new AdministrationService(new RestaurantAdministrationRepository(db),
-    {edgeId:edgeIdentity.edgeId,tenantId:operationalContext.tenantId,locationId:operationalContext.locationId},licenseManager):undefined;
+  if(getRawDatabase().pragma('user_version',{simple:true})===16)ensureCatalogBaseline(getRawDatabase(),edgeIdentity);
   const realtimeHub = new RealtimeHub();
+  const assignmentCommitted=(result:import('@comanview/contracts').TaxAdministrationResult)=>{
+    if(result.changed&&result.catalogGeneration!==undefined&&result.recoveryEpoch!==undefined)realtimeHub.publish({type:'CATALOG_CHANGED',locationId:operationalContext.locationId,capabilityVersion:1,recoveryEpoch:result.recoveryEpoch,catalogGeneration:result.catalogGeneration,affectedTypes:['PRODUCT'],affectedIds:[result.entityId],fullInvalidation:false});
+  };
+  const catalogService = new CatalogService(catalogRepo);
+  const authService = new AuthService(authRepo, operationalContext.tenantId,
+    operationalContext.locationId,recoverySecurityStore);
+  const administration=authRepo.personnelSchemaPresent()?new AdministrationService(new RestaurantAdministrationRepository(db),
+    {edgeId:edgeIdentity.edgeId,tenantId:operationalContext.tenantId,locationId:operationalContext.locationId},licenseManager,authService,assignmentCommitted):undefined;
   const printService = new PrintService(printRepo, orderRepo, licenseManager);
   const kdsService = new KdsService(kdsRepo, tableRepo, realtimeHub, licenseManager);
   const orderService = new OrderService(orderRepo, catalogRepo, operationalContext,
@@ -220,8 +234,6 @@ export async function buildApp(dbPath: string = ':memory:', options: BuildAppOpt
     ()=>requestPostZBackup(),administration);
   const paymentService = new PaymentService(orderRepo, cashRepo, auditRepo,
     operationalContext, realtimeHub, licenseManager,administration);
-  const authService = new AuthService(authRepo, operationalContext.tenantId,
-    operationalContext.locationId,recoverySecurityStore);
   const authGuard = new AuthGuard(authService, options.authMode ?? 'enforced');
   const backupManager=new BackupManager(backupRepo,db,getRawDatabase(),recoverySecurityStore,
     {edgeId:edgeIdentity.edgeId,tenantId:operationalContext.tenantId,locationId:operationalContext.locationId},
@@ -262,7 +274,7 @@ export async function buildApp(dbPath: string = ':memory:', options: BuildAppOpt
 
   // Setup Routes
   app.register(authRoutes(authService, authGuard), { prefix: '/auth' });
-  app.register(catalogRoutes(catalogService, authGuard), { prefix: '/catalog' });
+  app.register(catalogRoutes(catalogService, authGuard,new CatalogCommandService(getRawDatabase(),edgeIdentity,authService,message=>realtimeHub.publish(message))), { prefix: '/catalog' });
   app.register(orderRoutes(orderService, authGuard), { prefix: '/orders' });
   app.register(cashRoutes(cashService, authGuard), { prefix: '/cash-sessions' });
   app.register(paymentRoutes(paymentService, authGuard, authService));
@@ -276,7 +288,7 @@ export async function buildApp(dbPath: string = ':memory:', options: BuildAppOpt
   app.register(personnelRoutes(new PersonnelService(getRawDatabase(),recoverySecurityStore,licenseManager,syncConfig.licensing.publicKeyring),authGuard));
   if(administration)app.register(administrationRoutes(administration,authGuard));
   if(administration)app.register(taxAdministrationRoutes(new TaxAdministrationService(new TaxAdministrationRepository(db),
-    {edgeId:edgeIdentity.edgeId,tenantId:operationalContext.tenantId,locationId:operationalContext.locationId}),authGuard));
+    {edgeId:edgeIdentity.edgeId,tenantId:operationalContext.tenantId,locationId:operationalContext.locationId},authService,assignmentCommitted),authGuard));
   app.register(backupRoutes(backupManager,authGuard,recoveryCoordinator));
 
   // Health route

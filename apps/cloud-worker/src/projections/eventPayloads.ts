@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { CatalogMutationTypes,CatalogMutationPayloadSchema,CatalogBaselinePayloadSchema } from '@comanview/contracts';
 import type { ClaimedCloudEvent, ProjectionAction } from '@comanview/database';
 
 const uuid = z.string().uuid();
@@ -74,12 +75,26 @@ const schemas = {
   }),
 } as const;
 
-export const knownProjectionEventTypes = new Set([...Object.keys(schemas),'TAX_CONFIGURATION_CHANGED','RESTAURANT_ADMINISTRATION_CHANGED','PERSONNEL_CHANGED']);
+export const knownProjectionEventTypes = new Set([...Object.keys(schemas),'TAX_CONFIGURATION_CHANGED','RESTAURANT_ADMINISTRATION_CHANGED','PERSONNEL_CHANGED',...CatalogMutationTypes,'CATALOG_BASELINE_STARTED','CATALOG_BASELINE_CHUNK','CATALOG_BASELINE_COMPLETED']);
 
 export function toProjectionAction(event: ClaimedCloudEvent): ProjectionAction | null {
   if (event.schemaVersion !== 1) {
     throw new Error(`Unsupported event schema version ${event.schemaVersion}.`);
   }
+  if((CatalogMutationTypes as readonly string[]).includes(event.eventType)){
+    // B1c emitted reference-only v1 assignments before full projection existed.
+    // They cannot rebuild Products; the durable B1d baseline supplies their resulting state.
+    if(['CATALOG_PRODUCT_TAX_ASSIGNED','CATALOG_PRODUCT_STATION_ASSIGNED'].includes(event.eventType)&&!('entities' in event.payload)){
+      const old=z.object({payloadVersion:z.literal(1),productId:uuid,productVersion:z.number().int().positive(),catalogGeneration:z.number().int().nonnegative(),tenantId:uuid,locationId:uuid,edgeId:uuid,reference:z.object({kind:z.enum(['TAX_PROFILE','STATION']),id:uuid.nullable(),version:z.number().int().positive().nullable()})}).strict().parse(event.payload);
+      if(old.productId!==event.aggregateId||old.productVersion!==event.aggregateVersion||old.tenantId!==event.tenantId||old.locationId!==event.locationId||old.edgeId!==event.edgeId)throw new Error('CATALOG_BINDING_MISMATCH');
+      return {type:'NOOP'};
+    }
+    const parsed=CatalogMutationPayloadSchema.parse(event.payload);
+    const type=event.eventType.startsWith('CATALOG_PRODUCT_')?'PRODUCT':'CATEGORY';
+    if(parsed.entities.some(e=>e.entityType!==type)||(event.eventType!=='CATALOG_CATEGORY_REORDERED'&&parsed.entities.length!==1))throw new Error('CATALOG_EVENT_TYPE_INVALID');
+    return {type:'CATALOG'};
+  }
+  if(['CATALOG_BASELINE_STARTED','CATALOG_BASELINE_CHUNK','CATALOG_BASELINE_COMPLETED'].includes(event.eventType)){CatalogBaselinePayloadSchema.parse(event.payload);return {type:'CATALOG'};}
   switch (event.eventType) {
     case 'TAX_CONFIGURATION_CHANGED':
     case 'RESTAURANT_ADMINISTRATION_CHANGED':

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ProductAssignmentResultFields } from './catalogCommands.js';
 
 const Uuid = z.string().uuid();
 const Version = z.number().int().nonnegative();
@@ -24,7 +25,7 @@ export const RestaurantAdministrationCommandSchema=z.discriminatedUnion('kind',[
   Command.extend({kind:z.literal('UPDATE_CASH_REGISTER'),cashRegisterId:Uuid,name:z.string().trim().min(1).max(100),active:z.boolean(),blindCashCount:z.boolean(),makeDefault:z.boolean(),displayOrder:z.number().int()}).strict(),
   Command.extend({kind:z.literal('CREATE_STATION'),name:z.string().trim().min(1).max(100),purpose:z.string().trim().max(100).nullable(),kdsVisible:z.boolean(),displayOrder:z.number().int()}).strict(),
   Command.extend({kind:z.literal('UPDATE_STATION'),stationId:Uuid,name:z.string().trim().min(1).max(100),purpose:z.string().trim().max(100).nullable(),kdsVisible:z.boolean(),active:z.boolean(),displayOrder:z.number().int()}).strict(),
-  Command.extend({kind:z.literal('ASSIGN_PRODUCT_STATION'),productId:Uuid,stationId:Uuid.nullable()}).strict(),
+  Command.extend({kind:z.literal('ASSIGN_PRODUCT_STATION'),productId:Uuid,stationId:Uuid.nullable(),stationVersion:z.number().int().positive().safe().optional()}).strict(),
   Command.extend({kind:z.literal('CREATE_ZONE'),name:z.string().trim().min(1).max(100),displayOrder:z.number().int()}).strict(),
   Command.extend({kind:z.literal('UPDATE_ZONE'),zoneId:Uuid,name:z.string().trim().min(1).max(100),active:z.boolean(),displayOrder:z.number().int()}).strict(),
   Command.extend({kind:z.literal('CREATE_TABLE'),zoneId:Uuid,name:z.string().trim().min(1).max(100),capacity:z.number().int().positive().nullable(),displayOrder:z.number().int()}).strict(),
@@ -32,7 +33,7 @@ export const RestaurantAdministrationCommandSchema=z.discriminatedUnion('kind',[
   Command.extend({kind:z.literal('SET_TIP_PREFERENCES'),preferences:TipPreferences}).strict(),
 ]);
 export type RestaurantAdministrationCommand=z.infer<typeof RestaurantAdministrationCommandSchema>;
-export const RestaurantAdministrationResultSchema=z.object({entityId:Uuid,version:z.number().int().positive()});
+export const RestaurantAdministrationResultSchema=z.object({entityId:Uuid,version:z.number().int().positive(),...ProductAssignmentResultFields});
 export type RestaurantAdministrationResult=z.infer<typeof RestaurantAdministrationResultSchema>;
 
 export const RestaurantAdministrationStateSchema=z.object({

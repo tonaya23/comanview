@@ -1,4 +1,5 @@
 import type { FormEvent, ReactNode } from 'react';
+import { useRef } from 'react';
 import {
   Button,
   Select,
@@ -787,7 +788,7 @@ function StationsSection({ state }: { state: Context }) {
         <SelectField
           label="Estación de preparación"
           value={assignment.stationId}
-          onChange={(e) => setAssignment({ ...assignment, stationId: e.target.value })}
+          onChange={(e) => setAssignment({ ...assignment, stationId: e.target.value, stationVersion:admin.stations.find(s=>s.id===e.target.value)?.version })}
         >
           <option value="">Sin estación</option>
           {admin.stations
@@ -808,11 +809,12 @@ function StationsSection({ state }: { state: Context }) {
                 () =>
                   edge.executeRestaurantAdministration({
                     kind: 'ASSIGN_PRODUCT_STATION',
-                    commandId: commandId(),
+                    commandId: state.assignmentCommandId('assignment',{...assignment,reason}),
                     expectedVersion: assignment.version,
                     reason,
                     productId: assignment.productId,
                     stationId: assignment.stationId || null,
+                    ...(assignment.stationId ? {stationVersion:assignment.stationVersion} : {}),
                   }),
                 'Asignación actualizada.',
                 'assignment',
@@ -1182,6 +1184,7 @@ function ZonesTablesSection({ state }: { state: Context }) {
 }
 
 function TaxSection({ state }: { state: Context }) {
+  const pendingProduct=useRef<{key:string;commandId:string}|null>(null);
   const {
     edge,
     admin,
@@ -1371,16 +1374,16 @@ function TaxSection({ state }: { state: Context }) {
             currency = admin.operational.currency,
             amount = parseMoneyInputToMinorUnits(productForm.amount);
           if (!selected || !currency || amount === null) return;
+          const payload={name:productForm.name,description:'',taxProfile:{id:selected.id,version:selected.version},basePrice:{amount,currency}};
+          const key=JSON.stringify(payload);
+          if(pendingProduct.current?.key!==key)pendingProduct.current={key,commandId:commandId()};
+          const attempt=pendingProduct.current;
           void run(
-            () =>
-              edge.createProduct({
-                name: productForm.name,
-                description: '',
-                productType: 'STANDARD',
-                taxProfileId: selected.id,
-                taxProfileRevision: selected.version,
-                basePrice: { amount, currency },
-              }),
+            async () => {
+              const result=await edge.catalogCommand({commandId:attempt.commandId,kind:'CREATE_PRODUCT',expectedVersion:0,payload});
+              if(pendingProduct.current===attempt)pendingProduct.current=null;
+              return result;
+            },
             'Producto creado con el impuesto seleccionado.',
             'product',
           );
@@ -1456,6 +1459,7 @@ function TaxSection({ state }: { state: Context }) {
                 product.taxProfileId,
                 product.version,
                 e.target.value,
+                tax.profiles.find(p=>p.id===e.target.value)?.version,
               )
             }
           >
@@ -1480,11 +1484,12 @@ function TaxSection({ state }: { state: Context }) {
                     () =>
                       edge.executeTaxAdministration({
                         kind: 'ASSIGN_PRODUCT_TAX_PROFILE',
-                        commandId: commandId(),
+                        commandId: state.assignmentCommandId(key,{productId:product.id,...selection,reason}),
                         expectedVersion: selection.version,
                         reason,
                         productId: product.id,
                         profileId: selection.value,
+                        profileVersion: selection.referenceVersion,
                       }),
                     'Impuesto del producto actualizado.',
                     key,
