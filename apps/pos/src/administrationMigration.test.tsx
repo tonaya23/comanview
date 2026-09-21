@@ -135,21 +135,12 @@ describe('Admin Local section lifecycle', () => {
     expect(result.current.choices[key]).toBeUndefined();
     expect(result.current.assignmentCommandId(key,intent)).not.toBe(attempt);
   });
-  it('creates through catalog commands and reuses identity when an ACK is lost',async()=>{
-    const mock=client(),profileId='01991a00-0000-7000-8000-000000000711';
-    mock.getTaxAdministration.mockResolvedValue({profiles:[{id:profileId,name:'IVA',rateBasisPoints:800,calculationMode:'TAX_ADDED',active:true,version:1}],products:[],defaultTaxProfileId:null,configurationVersion:1});
-    mock.catalogCommand.mockRejectedValueOnce(new EdgeClientError('Lost ACK','EDGE_UNREACHABLE',0)).mockResolvedValue({changed:true});
-    await open(mock);await userEvent.click(navigation().getByRole('button',{name:/Impuestos/}));
-    fireEvent.change(await screen.findByLabelText('Nombre del producto'),{target:{value:'Coffee'}});
-    fireEvent.change(screen.getByLabelText('Precio (MXN)'),{target:{value:'100.00'}});
-    fireEvent.change(screen.getByLabelText('Perfil fiscal del producto'),{target:{value:profileId}});
-    await userEvent.click(screen.getByRole('button',{name:'Crear producto'}));
-    await waitFor(()=>expect(mock.catalogCommand).toHaveBeenCalledTimes(1));
-    await waitFor(()=>expect((screen.getByRole('button',{name:'Crear producto'}) as HTMLButtonElement).disabled).toBe(false));
-    await userEvent.click(screen.getByRole('button',{name:'Crear producto'}));
-    await waitFor(()=>expect(mock.catalogCommand).toHaveBeenCalledTimes(2));
-    expect(mock.catalogCommand.mock.calls[0]?.[0]).toEqual(mock.catalogCommand.mock.calls[1]?.[0]);
-    expect(mock.catalogCommand.mock.calls[0]?.[0]).toMatchObject({kind:'CREATE_PRODUCT',expectedVersion:0,payload:{basePrice:{amount:10000,currency:'MXN'}}});
+  it('tax configuration links to the single commercial product surface',async()=>{
+    const mock=client(); await open(mock);
+    await userEvent.click(navigation().getByRole('button',{name:/Impuestos/}));
+    expect(await screen.findByRole('button',{name:'Administrar productos'})).toBeTruthy();
+    expect(screen.queryByLabelText('Nombre del producto')).toBeNull();
+    expect(mock.catalogCommand).not.toHaveBeenCalled();
   });
   it('does not retry a confirmed mutation when reconciliation fails, and resumes only after an authoritative read',async()=>{
     const mock=client();await open(mock);

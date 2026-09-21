@@ -1556,6 +1556,8 @@ export function App() {
       ? hasPermission(PermissionCodes.DEVICE_VIEW)
       : target.section === 'personnel'
         ? hasPermission(PermissionCodes.PERSONNEL_VIEW)
+        : target.section === 'products' || target.section === 'categories'
+          ? hasPermission(PermissionCodes.CATALOG_VIEW)
         : hasPermission(PermissionCodes.ADMINISTRATION_VIEW);
   }
   function navigateToGuidance(target: TypedNavigationTarget) {
@@ -2099,7 +2101,7 @@ export function App() {
             <button type="button" onClick={() => void logout()}>
               Cerrar sesión
             </button>
-            {(hasPermission(PermissionCodes.ADMINISTRATION_VIEW) ||
+            {(hasPermission(PermissionCodes.ADMINISTRATION_VIEW) || hasPermission(PermissionCodes.CATALOG_VIEW) ||
               hasPermission(PermissionCodes.PERSONNEL_VIEW)) && (
               <button
                 type="button"
@@ -2196,6 +2198,7 @@ export function App() {
           edge={edge}
           currentUserId={authUser.id}
           permissions={authUser.permissions}
+          catalogRefreshToken={products}
           initialTarget={administrationTarget}
           onNavigate={navigateToGuidance}
           onClose={() => setAdministrationOpen(false)}

@@ -8,7 +8,7 @@ El repositorio determina qué existe; el Master PRD determina el comportamiento 
 
 - Current functional phase: **Group B — Commercial Catalog**
 - Current phase status: **OPEN**
-- Current block: **B0 COMPLETE; B1 CLOSED; B2 NOT STARTED**
+- Current block: **B0 COMPLETE; B1 CLOSED; B2 CLOSED; B3 NOT STARTED**
 - Last closed phase: **1X — UX/UI Foundation & Product Experience**
 - Closure commit message: `feat: complete phase 1X UX foundation`
 - Branch: `main`
@@ -18,7 +18,29 @@ El repositorio determina qué existe; el Master PRD determina el comportamiento 
 - Manual acceptance 1X: **PASS**, confirmada por el usuario para POS, Cobro, descarte vacío, Admin Local, Waiter, KDS, Super Admin, continuidad, responsive y uso real. Evidencia técnica en `docs/Acceptance_Phase_1X.md`.
 - Manual acceptance 1W: **PASS** (`phase-1w-final-acceptance`).
 
-### B1 — revisión transversal y cierre técnico (2026-09-18)
+### B2 — Products & Categories Admin (2026-09-18)
+
+**GROUP B OPEN; B0 COMPLETE; B1 CLOSED; B2 CLOSED; B3 NOT STARTED.**
+Catálogo → Productos/Categorías dentro de Admin Local: comandos B1/OCC/receipts,
+guardado secuencial con versiones autoritativas, estado parcial explícito y retry
+del mismo commandId. Permisos Tax/Station preservados, Money exacto, dirty drafts y
+refresh realtime sin sobrescritura. Creación trasladada de Impuestos a Catálogo.
+Polish comercial: En catálogo/Retirado separados de Disponible/No disponible;
+retirados/inactivas ocultos por defecto, filtros secundarios, retiro/reactivación
+desde lista, editor dedicado y feedback por sección/entidad/intento. Categorías con
+información bajo demanda y ordenación explícita. Sin cambios de dominio ni hard delete.
+Validación focal del polish: 76/76 tests, POS typecheck/build y 12/12 comprobaciones
+de presentación PASS (28 productos, desktop/tablet). Manual acceptance: **PASS**, según
+confirmación del usuario sobre la experiencia general de Productos/Categorías, claridad
+del retiro/reactivación y distinción active/available. No solicita más cambios UX.
+Revisión final B2: sin blockers ni cambios de producto; smoke B1 **6/6 PASS** sobre
+receipts/retry, OCC, estados independientes, permisos, snapshots y categorías.
+Se reutiliza validación reciente sin repetir suites grandes. Checkpoint Git pendiente.
+Semántica, validación y preparación QA: [Catalog Admin B2](Catalog_Admin_B2.md).
+B1 checkpoint: `111010b1fbb60f40b1540c67079219e72821839f`.
+B2 CLOSED en documentación. B3/B4/B5 y Group C no iniciados. NO COMMIT / NO PUSH de B2.
+
+### B1 — revisión transversal y cierre técnico (histórico, 2026-09-18)
 
 **GROUP B OPEN; B0 COMPLETE; B1 CLOSED; B2 NOT STARTED.**
 B1a–B1d coherentes; detalle de matriz de escrituras, OCC, lifecycle/Floor, receipts,

@@ -4,11 +4,24 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createAcceptanceSchema14, labPaths } from '../phase1wAcceptanceLabCli.js';
+import { applyAdministrationSchemaMigration, inspectCatalogSchema } from '@comanview/database';
+import { readFileSync } from 'node:fs';
 
 const roots:string[]=[];
 afterEach(async()=>{for(const root of roots.splice(0))await rm(root,{recursive:true,force:true});});
 
 describe('Phase 1W acceptance lab boundaries',()=>{
+  it('accepts the real schema 16 fingerprint after canonical migrations',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'cv-lab-schema16-'));roots.push(root);
+    const path=join(root,'edge.db');createAcceptanceSchema14(path);
+    const db=new Database(path);
+    try {
+      applyAdministrationSchemaMigration(db);
+      expect(inspectCatalogSchema(db)).toBe(15);
+      db.exec(readFileSync(new URL('../../../../migrations/edge/0016_commercial_catalog.sql',import.meta.url),'utf8'));
+      expect(inspectCatalogSchema(db)).toBe(16);
+    } finally { db.close(); }
+  });
   it('accepts only a direct isolated run below the dedicated parent',async()=>{
     const parent=await mkdtemp(join(tmpdir(),'comanview-phase-1w-parent-'));roots.push(parent);
     expect(labPaths(parent,join(parent,'phase-1w-smoke')).root).toBe(join(parent,'phase-1w-smoke'));

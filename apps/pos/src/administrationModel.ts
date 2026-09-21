@@ -6,6 +6,8 @@ export const ADMIN_SECTIONS = [
   { id: 'business-profile', label: 'Negocio', group: 'Restaurante' },
   { id: 'day-currency', label: 'Día y moneda', group: 'Restaurante' },
   { id: 'taxes', label: 'Impuestos', group: 'Restaurante' },
+  { id: 'products', label: 'Productos', group: 'Catálogo' },
+  { id: 'categories', label: 'Categorías', group: 'Catálogo' },
   { id: 'tips', label: 'Propinas', group: 'Restaurante' },
   { id: 'registers', label: 'Cajas', group: 'Operación' },
   { id: 'zones-tables', label: 'Zonas y mesas', group: 'Operación' },
@@ -13,6 +15,8 @@ export const ADMIN_SECTIONS = [
   { id: 'personnel', label: 'Personal', group: 'Equipo' },
 ] as const satisfies readonly { id: AdminSectionId; label: string; group: string }[];
 export const sectionIndex: Record<AdminSectionId, number> = {
+  products: 8,
+  categories: 9,
   'business-profile': 0,
   'day-currency': 1,
   registers: 2,
@@ -23,7 +27,7 @@ export const sectionIndex: Record<AdminSectionId, number> = {
   personnel: 7,
 };
 export function canOpenAdminSection(section: AdminSectionId, permissions: readonly string[]) {
-  return permissions.includes(section === 'personnel' ? 'PERSONNEL_VIEW' : 'ADMINISTRATION_VIEW');
+  return permissions.includes(section === 'products' || section === 'categories' ? 'CATALOG_VIEW' : section === 'personnel' ? 'PERSONNEL_VIEW' : 'ADMINISTRATION_VIEW');
 }
 export function resolveAdminTarget(
   target: TypedNavigationTarget | null | undefined,
@@ -58,7 +62,7 @@ export class AdministrationResources {
     fresh = false,
   ) {
     if (!canOpenAdminSection(section, permissions)) return { denied: true as const, resources: {} };
-    const keys: (keyof Resources)[] = section === 'personnel' ? ['people'] : ['admin'];
+    const keys: (keyof Resources)[] = section === 'products' || section === 'categories' ? [] : section === 'personnel' ? ['people'] : ['admin'];
     if (section === 'taxes' || section === 'stations') keys.push('tax');
     if (section === 'tips') keys.push('configuration');
     if (section === 'stations' && permissions.includes('CATALOG_VIEW')) keys.push('products');

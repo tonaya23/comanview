@@ -26,6 +26,7 @@ export type AdministrationProps = {
   currentUserId: string;
   permissions: readonly string[];
   initialTarget?: TypedNavigationTarget | null;
+  catalogRefreshToken?: unknown;
   onNavigate?(target: TypedNavigationTarget): void;
   onClose(): void;
 };
@@ -206,8 +207,7 @@ export function useAdministrationController({
       pin: '',
       role: 'CASHIER' as 'OWNER' | 'MANAGER' | 'CASHIER' | 'WAITER' | 'KITCHEN',
     }),
-    [assignment, setAssignment] = useState<{productId:string;stationId:string;version:number;stationVersion?:number|undefined}>({ productId: '', stationId: '', version: 0 }),
-    [productForm, setProductForm] = useState({ name: '', amount: '', taxProfileId: '' });
+    [assignment, setAssignment] = useState<{productId:string;stationId:string;version:number;stationVersion?:number|undefined}>({ productId: '', stationId: '', version: 0 });
   useEffect(() => {
     const previousPending = drafts.pendingKeys.join('|');
     drafts.observe('profile', 'business-profile', { profile, hours, logo }, profileVersion);
@@ -224,7 +224,6 @@ export function useAdministrationController({
     drafts.observe('zone', 'zones-tables', zone, 0);
     drafts.observe('table', 'zones-tables', table, 0);
     drafts.observe('tax', 'taxes', taxForm, 0);
-    drafts.observe('product', 'taxes', productForm, 0);
     drafts.observe('person', 'personnel', person, 0);
     if (previousPending !== drafts.pendingKeys.join('|')) setDraftTick(x => x + 1);
   }, [
@@ -241,7 +240,6 @@ export function useAdministrationController({
     zone,
     table,
     taxForm,
-    productForm,
     person,
     drafts,
     draftTick,
@@ -517,8 +515,6 @@ export function useAdministrationController({
     setPerson,
     assignment,
     setAssignment,
-    productForm,
-    setProductForm,
     load,
     run,
     close,

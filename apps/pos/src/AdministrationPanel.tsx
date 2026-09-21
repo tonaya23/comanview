@@ -1,3 +1,7 @@
+import { lazy, Suspense, useEffect, useState } from 'react';
+const CatalogAdministration = lazy(async () => ({
+  default: (await import('./CatalogAdministration.js')).CatalogAdministration,
+}));
 import {
   Button,
   InlineAlert,
@@ -21,6 +25,13 @@ export {
 
 export function AdministrationPanel(props: AdministrationProps) {
   const state = useAdministrationController(props);
+  const [catalogBusy, setCatalogBusy] = useState(false);
+  const [, setCatalogDirty] = useState({ product: false, category: false });
+  const [catalogVisited, setCatalogVisited] = useState(false);
+  const catalogActive = state.activeSection === 'products' || state.activeSection === 'categories';
+  useEffect(() => {
+    if (catalogActive) setCatalogVisited(true);
+  }, [catalogActive]);
   const {
     permissions,
     admin,
@@ -57,7 +68,6 @@ export function AdministrationPanel(props: AdministrationProps) {
     setTaxForm,
     setPerson,
     setAssignment,
-    setProductForm,
     load,
     close,
     navigate,
@@ -67,14 +77,18 @@ export function AdministrationPanel(props: AdministrationProps) {
     <AdministrationShell
       section={activeSection}
       permissions={permissions}
-      busy={busy}
+      busy={busy || catalogBusy}
       dirtySections={[
         ...new Set(
           drafts.pendingKeys.flatMap((key) => (drafts.get(key) ? [drafts.get(key)!.section] : [])),
         ),
       ]}
-      onNavigate={(target) => void navigate(target)}
-      onClose={() => void close()}
+      onNavigate={(target) => {
+        if (!catalogBusy) void navigate(target);
+      }}
+      onClose={() => {
+        if (!catalogBusy) void close();
+      }}
     >
       <PrerequisiteSummary
         admin={permissions.includes('ADMINISTRATION_VIEW') ? admin : null}
@@ -82,9 +96,12 @@ export function AdministrationPanel(props: AdministrationProps) {
         permissions={permissions}
         readiness={state.readiness}
         onReadiness={() => void state.consultReadiness()}
-        onNavigate={(target) => void navigate(target)}
+        onNavigate={(target) => {
+          if (!catalogBusy) void navigate(target);
+        }}
       />
       <div
+        hidden={catalogActive}
         onChangeCapture={(e) => {
           const key = (e.target as HTMLElement).closest('[data-draft]')?.getAttribute('data-draft');
           if (key) markDirty(key);
@@ -104,11 +121,17 @@ export function AdministrationPanel(props: AdministrationProps) {
             ) : null}
           </InlineAlert>
         )}
-        {notice && !error && !conflict && !drafts.dirty && !state.reconciliationPending && <InlineAlert tone="success">{notice}</InlineAlert>}
-        {state.reconciliationPending && !busy && <InlineAlert tone="warning" title="Guardado confirmado; consulta pendiente">
-          No repitas el cambio. Consulta el estado guardado antes de realizar otra operación.
-          <Button type="button" onClick={()=>void load(true)}>Consultar guardado</Button>
-        </InlineAlert>}
+        {notice && !error && !conflict && !drafts.dirty && !state.reconciliationPending && (
+          <InlineAlert tone="success">{notice}</InlineAlert>
+        )}
+        {state.reconciliationPending && !busy && (
+          <InlineAlert tone="warning" title="Guardado confirmado; consulta pendiente">
+            No repitas el cambio. Consulta el estado guardado antes de realizar otra operación.
+            <Button type="button" onClick={() => void load(true)}>
+              Consultar guardado
+            </Button>
+          </InlineAlert>
+        )}
         <p className="administration-hint">
           {drafts.dirty
             ? 'Hay borradores sin guardar. Puedes cambiar de apartado sin perderlos; guárdalos antes de salir.'
@@ -129,7 +152,12 @@ export function AdministrationPanel(props: AdministrationProps) {
         ))}
         <div className="admin-section-toolbar">
           {!conflict && (lastEdit || Object.keys(resourceErrors).length > 0) && (
-            <Button type="button" variant="secondary" disabled={busy} onClick={() => void load(true)}>
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={busy}
+              onClick={() => void load(true)}
+            >
               Actualizar sección
             </Button>
           )}
@@ -164,7 +192,6 @@ export function AdministrationPanel(props: AdministrationProps) {
                   }
                   if (activeSection === 'taxes') {
                     setTaxForm({ name: 'IVA', rate: '16', mode: 'TAX_INCLUDED' });
-                    setProductForm({ name: '', amount: '', taxProfileId: '' });
                   }
                   if (activeSection === 'personnel')
                     setPerson({ displayName: '', pin: '', role: 'CASHIER' });
@@ -194,7 +221,13 @@ export function AdministrationPanel(props: AdministrationProps) {
         {conflict && (
           <InlineAlert tone="warning" title="La configuración cambió" urgent>
             Tu intención local se conserva. Consulta el estado actual antes de volver a guardar.
-            {lastEdit && <p><strong>Edición pendiente</strong><br/>{lastEdit.label}: {lastEdit.value}</p>}
+            {lastEdit && (
+              <p>
+                <strong>Edición pendiente</strong>
+                <br />
+                {lastEdit.label}: {lastEdit.value}
+              </p>
+            )}
             <Button
               type="button"
               variant="secondary"
@@ -262,11 +295,50 @@ export function AdministrationPanel(props: AdministrationProps) {
             {getUserGuidance('PERMISSION_DENIED').explanation}
           </InlineAlert>
         ) : (
-          <div className="administration-grid" inert={busy || state.reconciliationPending} aria-busy={busy}>
+          <div
+            className="administration-grid"
+            inert={busy || state.reconciliationPending}
+            aria-busy={busy}
+          >
             <ActiveAdministrationSection state={state} />
           </div>
         )}
       </div>
+      {catalogVisited && (
+        <div hidden={!catalogActive}>
+          <Suspense fallback={<p role="status">Cargando catálogo…</p>}>
+            <CatalogAdministration
+              edge={props.edge}
+              permissions={permissions}
+              section={activeSection === 'categories' ? 'categories' : 'products'}
+              refreshToken={props.catalogRefreshToken}
+              visible={catalogActive}
+              confirm={confirm}
+              onBusy={setCatalogBusy}
+              onDirty={(product, category) => {
+                setCatalogDirty((current) =>
+                  current.product === product && current.category === category
+                    ? current
+                    : { product, category },
+                );
+                for (const [key, section, dirty] of [
+                  ['catalog-product', 'products', product],
+                  ['catalog-category', 'categories', category],
+                ] as const) {
+                  drafts.observe(key, section, dirty, 0);
+                  if (dirty) drafts.mark(key);
+                  else drafts.saved(key);
+                }
+              }}
+              onProducts={() => void navigate({ surface: 'administration', section: 'products' })}
+              onTaxes={() => void navigate({ surface: 'administration', section: 'taxes' })}
+              onCurrency={() =>
+                void navigate({ surface: 'administration', section: 'day-currency' })
+              }
+            />
+          </Suspense>
+        </div>
+      )}
       {dialogs}
       {pinRequest && (
         <PersonnelPinDialog

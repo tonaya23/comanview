@@ -10,14 +10,15 @@ import { createEdgeDatabase, SyncOutboxRepository } from '@comanview/database';
 import { EdgeProvisioningClient } from './modules/provisioning/EdgeProvisioningClient.js';
 import { WindowsDpapiEdgeSecretStore } from './modules/provisioning/EdgeSecretStore.js';
 import { initializeRecoverySecurityFloor, WindowsDpapiRecoverySecurityStore } from './modules/backup/RecoverySecurityStore.js';
-import { inspectAdministrationSchema } from '@comanview/database';
+import { inspectCatalogSchema } from '@comanview/database';
+import { archiveRuntime, bootTime, processStart, runtimeState, stopRecordedProcess, type LabRuntime } from './acceptanceLabRuntime.js';
 import { BASE_ROLE_PERMISSIONS } from '@comanview/auth';
 
 type Action='create'|'start'|'status'|'stop'|'destroy'|'copy-cloud-password'|'cloud-off'|'verify-owner';
 type Config={version:1;runId:string;root:string;container:string;databaseUrl:string;databasePassword:string;
   adminEmail:string;adminPassword:string;signingKid:string;privateKeyPem:string;publicKeyPem:string;
   tenantId:string;locationId:string;edgeId:string|null;credentialId:string|null;state:'CREATING'|'READY'};
-type Runtime={processes:Record<string,number>;startedAt:string};
+type Runtime=LabRuntime;
 const args=new Map<string,string>();for(let i=2;i<process.argv.length;i+=2)args.set(process.argv[i]!,process.argv[i+1]!);
 let paths!:ReturnType<typeof labPaths>;const repo=resolve(fileURLToPath(new URL('../../../',import.meta.url)));
 async function main(){const action=args.get('--action') as Action|undefined,acceptanceRoot=args.get('--acceptance-root'),labRoot=args.get('--lab-root');
@@ -88,10 +89,12 @@ async function create(){
 
 async function start(){
   const config=loadConfig();if(config.state!=='READY'||!config.edgeId||!config.credentialId)fail('ACCEPTANCE_LAB_NOT_READY');
-  if(existsSync(paths.runtime))fail('ACCEPTANCE_LAB_ALREADY_RUNNING');
+  const boot=bootTime(), previous=loadRuntime();
+  if(previous){if(runtimeState(previous,boot)!=='STALE')fail('ACCEPTANCE_LAB_RUNTIME_REQUIRES_REVIEW');archiveRuntime(paths.runtime);out('PREVIOUS_RUNTIME_ARCHIVED',true);}
   for(const port of [3000,4000,5173,5174,5175,5176])if(await portOpen(port))fail(`ACCEPTANCE_LAB_PORT_${port}_IN_USE`);
   docker(['start',config.container]);await waitForStablePostgres(config.container);
   const processes:Record<string,number>={};
+  const startedAt=new Date().toISOString();
   try{
     processes['cloud']=launchNode(join(repo,'apps/cloud-api'),'src/index.ts',cloudEnvironment(config),'cloud');
     await waitForHealth('http://127.0.0.1:4000/health','ACCEPTANCE_LAB_CLOUD_NOT_READY');
@@ -99,7 +102,7 @@ async function start(){
     await waitForHealth('http://127.0.0.1:3000/health','ACCEPTANCE_LAB_EDGE_NOT_READY',90_000);
     const floor=loadFloorReadOnly();
     const sqlite=new Database(paths.db,{readonly:true,fileMustExist:true});
-    try{if(inspectAdministrationSchema(sqlite)!==15||!floor.binding||floor.binding.edgeId!==config.edgeId||
+    try{if(inspectCatalogSchema(sqlite)!==16||!floor.binding||floor.binding.edgeId!==config.edgeId||
       floor.binding.tenantId!==config.tenantId||floor.binding.locationId!==config.locationId||floor.recoveryState!=='NORMAL'||
        floor.personnel?.initializationState!=='ACTIVE')fail('ACCEPTANCE_LAB_STARTUP_VALIDATION_FAILED');
       if(sqlite.prepare("SELECT 1 FROM installation_state WHERE bootstrap_status='COMPLETED'").get())verifyAcceptanceOwner(sqlite);}
@@ -111,7 +114,9 @@ async function start(){
     await Promise.all([waitForHealth('http://127.0.0.1:5173','ACCEPTANCE_LAB_POS_NOT_READY'),
       waitForHealth('http://127.0.0.1:5174','ACCEPTANCE_LAB_KDS_NOT_READY'),waitForHealth('http://127.0.0.1:5175','ACCEPTANCE_LAB_WAITER_NOT_READY'),
       waitForHealth('http://127.0.0.1:5176','ACCEPTANCE_LAB_SUPER_ADMIN_NOT_READY')]);
-    writeFileSync(paths.runtime,JSON.stringify({processes,startedAt:new Date().toISOString()} satisfies Runtime),{mode:0o600});
+    const processStarts:Record<string,string>={};
+    for(const [name,pid] of Object.entries(processes)){const value=processStart(pid);if(!value)fail('ACCEPTANCE_LAB_PROCESS_EXITED');processStarts[name]=value;}
+    writeFileSync(paths.runtime,JSON.stringify({processes,processStarts,bootAt:boot,startedAt} satisfies Runtime),{mode:0o600});
     await status();
   }catch(error){for(const pid of Object.values(processes).reverse())killTree(pid);dockerOptional(['stop',config.container]);throw error;}
 }
@@ -120,22 +125,22 @@ async function status(){
   const config=loadConfig(),runtime=loadRuntime();let schema:number|null=null,financialActivity:number|null=null,bindingOk=false,floor=false;
   if(existsSync(paths.db)){const db=new Database(paths.db,{readonly:true,fileMustExist:true});try{
     const names=new Set((db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{name:string}>).map(x=>x.name));
-    schema=names.has('personnel_security_intents')?15:names.has('backup_records')?14:names.has('installation_state')?13:null;
+    schema=Number(db.pragma('user_version',{simple:true}));
     const identity=db.prepare('SELECT edge_id edgeId,tenant_id tenantId,location_id locationId FROM edge_installations').get() as {edgeId:string;tenantId:string;locationId:string}|undefined;
     bindingOk=Boolean(identity&&identity.edgeId===config.edgeId&&identity.tenantId===config.tenantId&&identity.locationId===config.locationId);
     financialActivity=(db.prepare('SELECT (SELECT COUNT(*) FROM orders)+(SELECT COUNT(*) FROM payments)+(SELECT COUNT(*) FROM cash_sessions)+(SELECT COUNT(*) FROM cash_movements) n').get() as {n:number}).n;
   }finally{db.close();}}
   if(existsSync(paths.floor)){const value=loadFloorReadOnly();floor=Boolean(value.binding&&value.binding.edgeId===config.edgeId&&value.binding.tenantId===config.tenantId&&value.binding.locationId===config.locationId);}
   out('LAB_READY',config.state==='READY');out('RUN_ID',config.runId);out('ROOT',paths.root);out('EDGE_ID',config.edgeId);out('TENANT_ID',config.tenantId);out('LOCATION_ID',config.locationId);
-  out('SCHEMA',schema);out('BINDING_CONSISTENT',bindingOk);out('SECURITY_FLOOR_PRESENT',floor);out('FINANCIAL_ACTIVITY_ROWS',financialActivity);out('RUNNING',Boolean(runtime));
-  if(runtime){out('POS_URL','http://127.0.0.1:5173');out('WAITER_URL','http://127.0.0.1:5175');out('KDS_URL','http://127.0.0.1:5174');out('SUPER_ADMIN_URL','http://127.0.0.1:5176');out('CLOUD_RUNNING',Boolean(runtime.processes['cloud']));out('CLOUD_ADMIN_EMAIL',config.adminEmail);out('BROWSER_PROFILE',paths.browser);}
+  out('SCHEMA',schema);out('BINDING_CONSISTENT',bindingOk);out('SECURITY_FLOOR_PRESENT',floor);out('FINANCIAL_ACTIVITY_ROWS',financialActivity);out('RUNNING',Boolean(runtime&&runtimeState(runtime,bootTime())==='RUNNING'));
+  if(runtime&&runtimeState(runtime,bootTime())==='RUNNING'){out('POS_URL','http://127.0.0.1:5173');out('WAITER_URL','http://127.0.0.1:5175');out('KDS_URL','http://127.0.0.1:5174');out('SUPER_ADMIN_URL','http://127.0.0.1:5176');out('CLOUD_RUNNING',Boolean(runtime.processes['cloud']));out('CLOUD_ADMIN_EMAIL',config.adminEmail);out('BROWSER_PROFILE',paths.browser);}
 }
-async function stop(){const runtime=loadRuntime();if(runtime)for(const pid of Object.values(runtime.processes).reverse())killTree(pid);if(existsSync(paths.runtime))rmSync(paths.runtime,{force:true});
+async function stop(){const runtime=loadRuntime();if(runtime){const state=runtimeState(runtime,bootTime());if(state==='AMBIGUOUS')fail('ACCEPTANCE_LAB_RUNTIME_REQUIRES_REVIEW');if(state!=='STALE')for(const [name,pid] of Object.entries(runtime.processes).reverse())stopRecordedProcess(pid,runtime.processStarts?.[name]);archiveRuntime(paths.runtime);}
   if(existsSync(`${paths.floor}.lock`))await new Promise(resolveWait=>setTimeout(resolveWait,12_000));
   const config=loadConfig();dockerOptional(['stop',config.container]);out('LAB_STOPPED',true);}
 async function destroy(){const config=loadConfig();await stop();dockerOptional(['rm','-f',config.container]);const exact=resolve(paths.root);if(dirname(exact).toLowerCase()!==paths.parent.toLowerCase())fail('ACCEPTANCE_LAB_UNSAFE_PATH');rmSync(exact,{recursive:true,force:true});out('LAB_DESTROYED',true);}
 function copyCloudPassword(){const config=loadConfig();const result=spawnSync('powershell.exe',['-NoLogo','-NoProfile','-NonInteractive','-Command','$v=[Console]::In.ReadToEnd();Set-Clipboard -Value $v'],{input:config.adminPassword,windowsHide:true});if(result.status!==0)fail('ACCEPTANCE_LAB_CLIPBOARD_FAILED');out('CLOUD_ADMIN_PASSWORD_COPIED',true);}
-async function cloudOff(){const runtime=loadRuntime();if(!runtime)fail('ACCEPTANCE_LAB_NOT_RUNNING');const db=new Database(paths.db,{readonly:true,fileMustExist:true});try{const ready=db.prepare("SELECT 1 FROM installation_state WHERE singleton_key='PRIMARY' AND bootstrap_status='COMPLETED'").get();const license=db.prepare("SELECT 1 FROM edge_control_documents WHERE document_type='LICENSE' AND is_current=1").get();if(!ready||!license)fail('ACCEPTANCE_LAB_BOOTSTRAP_NOT_COMPLETE');}finally{db.close();}if(runtime.processes['cloud']){killTree(runtime.processes['cloud']);delete runtime.processes['cloud'];}dockerOptional(['stop',loadConfig().container]);writeFileSync(paths.runtime,JSON.stringify(runtime),{mode:0o600});out('CLOUD_OFFLINE',true);}
+async function cloudOff(){const runtime=loadRuntime();if(!runtime||runtimeState(runtime,bootTime())!=='RUNNING')fail('ACCEPTANCE_LAB_NOT_RUNNING');const db=new Database(paths.db,{readonly:true,fileMustExist:true});try{const ready=db.prepare("SELECT 1 FROM installation_state WHERE singleton_key='PRIMARY' AND bootstrap_status='COMPLETED'").get();const license=db.prepare("SELECT 1 FROM edge_control_documents WHERE document_type='LICENSE' AND is_current=1").get();if(!ready||!license)fail('ACCEPTANCE_LAB_BOOTSTRAP_NOT_COMPLETE');}finally{db.close();}if(runtime.processes['cloud']){stopRecordedProcess(runtime.processes['cloud'],runtime.processStarts?.['cloud']);delete runtime.processes['cloud'];}dockerOptional(['stop',loadConfig().container]);writeFileSync(paths.runtime,JSON.stringify(runtime),{mode:0o600});out('CLOUD_OFFLINE',true);}
 
 export function createAcceptanceSchema14(path:string){const db=new Database(path);try{const dir=join(repo,'migrations/edge');for(const file of readdirSync(dir).filter(x=>/^\d{4}_.*\.sql$/.test(x)&&Number(x.slice(0,4))<=14).sort())db.exec(readFileSync(join(dir,file),'utf8'));db.pragma('user_version=14');}finally{db.close();}}
 /** Read-only gate after the human completes signed pairing/OWNER bootstrap. */
@@ -151,7 +156,7 @@ export function verifyAcceptanceOwner(db:Database.Database):void{
   if(BASE_ROLE_PERMISSIONS.OWNER.some(permission=>!codes.has(permission)))throw new Error('ACCEPTANCE_LAB_OWNER_BASELINE_INCOMPLETE');
 }
 function cloudEnvironment(c:Config){return{NODE_ENV:'development',DATABASE_URL:c.databaseUrl,COMANVIEW_CLOUD_PORT:'4000',COMANVIEW_CLOUD_HOST:'127.0.0.1',COMANVIEW_CLOUD_DEV_ADMIN_EMAIL:c.adminEmail,COMANVIEW_CLOUD_DEV_ADMIN_PASSWORD:c.adminPassword,COMANVIEW_CLOUD_DEV_ADMIN_ROLE:'PLATFORM_ADMIN',COMANVIEW_CLOUD_SIGNING_KID:c.signingKid,COMANVIEW_CLOUD_SIGNING_PRIVATE_KEY_PEM:c.privateKeyPem};}
-function edgeEnvironment(c:Config){return{NODE_ENV:'production',COMANVIEW_EDGE_DB_PATH:paths.db,COMANVIEW_EDGE_SECRET_STORE:'windows-dpapi',COMANVIEW_EDGE_SECRET_PATH:paths.secret,COMANVIEW_RECOVERY_SECURITY_STORE:'windows-dpapi',COMANVIEW_RECOVERY_SECURITY_PATH:paths.floor,COMANVIEW_BACKUP_LOCAL_DIR:paths.backups,COMANVIEW_DEBUG_PRINT_DIR:paths.prints,COMANVIEW_CLOUD_URL:'http://127.0.0.1:4000',COMANVIEW_SYNC_ENABLED:'true',COMANVIEW_EDGE_SCHEMA_VERSION:'15',COMANVIEW_LICENSE_ENFORCEMENT_ENABLED:'true',COMANVIEW_LICENSE_PUBLIC_KEYRING:JSON.stringify({[c.signingKid]:c.publicKeyPem}),COMANVIEW_CONTROL_PULL_INTERVAL_MS:'5000',COMANVIEW_HEARTBEAT_INTERVAL_MS:'30000'};}
+function edgeEnvironment(c:Config){return{NODE_ENV:'production',COMANVIEW_EDGE_DB_PATH:paths.db,COMANVIEW_EDGE_SECRET_STORE:'windows-dpapi',COMANVIEW_EDGE_SECRET_PATH:paths.secret,COMANVIEW_RECOVERY_SECURITY_STORE:'windows-dpapi',COMANVIEW_RECOVERY_SECURITY_PATH:paths.floor,COMANVIEW_BACKUP_LOCAL_DIR:paths.backups,COMANVIEW_DEBUG_PRINT_DIR:paths.prints,COMANVIEW_CLOUD_URL:'http://127.0.0.1:4000',COMANVIEW_SYNC_ENABLED:'true',COMANVIEW_EDGE_SCHEMA_VERSION:'16',COMANVIEW_LICENSE_ENFORCEMENT_ENABLED:'true',COMANVIEW_LICENSE_PUBLIC_KEYRING:JSON.stringify({[c.signingKid]:c.publicKeyPem}),COMANVIEW_CONTROL_PULL_INTERVAL_MS:'5000',COMANVIEW_HEARTBEAT_INTERVAL_MS:'30000'};}
 async function login(c:Config){const response=await fetch('http://127.0.0.1:4000/admin/v1/auth/login',{method:'POST',headers:{'content-type':'application/json',origin:'http://127.0.0.1:4000'},body:JSON.stringify({email:c.adminEmail,password:c.adminPassword})});if(!response.ok)fail('ACCEPTANCE_LAB_CLOUD_LOGIN_FAILED');const cookie=response.headers.get('set-cookie')?.split(';')[0];if(!cookie)fail('ACCEPTANCE_LAB_CLOUD_COOKIE_MISSING');return cookie;}
 async function admin(path:string,body:unknown,headers:{origin:string;cookie:string},method='POST'){const response=await fetch(`http://127.0.0.1:4000${path}`,{method,headers:{...headers,'content-type':'application/json'},body:JSON.stringify(body)});const value=await response.json().catch(()=>null);if(!response.ok)throw new Error(`ACCEPTANCE_LAB_CLOUD_HTTP_${response.status}`);return value;}
 function launchNode(cwd:string,entry:string,extra:Record<string,string>,name:string){return launch(process.execPath,['--import','tsx',entry],cwd,extra,name);}

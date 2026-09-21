@@ -1,5 +1,4 @@
 import type { FormEvent, ReactNode } from 'react';
-import { useRef } from 'react';
 import {
   Button,
   Select,
@@ -1184,7 +1183,6 @@ function ZonesTablesSection({ state }: { state: Context }) {
 }
 
 function TaxSection({ state }: { state: Context }) {
-  const pendingProduct=useRef<{key:string;commandId:string}|null>(null);
   const {
     edge,
     admin,
@@ -1196,8 +1194,6 @@ function TaxSection({ state }: { state: Context }) {
     showLocalError,
     taxForm,
     setTaxForm,
-    productForm,
-    setProductForm,
     run,
     navigate,
     reason,
@@ -1366,86 +1362,7 @@ function TaxSection({ state }: { state: Context }) {
         </SelectField>
         <Button disabled={busy}>Crear perfil</Button>
       </form>
-      <form
-        data-draft="product"
-        onSubmit={(e) => {
-          e.preventDefault();
-          const selected = tax.profiles.find((x) => x.id === productForm.taxProfileId),
-            currency = admin.operational.currency,
-            amount = parseMoneyInputToMinorUnits(productForm.amount);
-          if (!selected || !currency || amount === null) return;
-          const payload={name:productForm.name,description:'',taxProfile:{id:selected.id,version:selected.version},basePrice:{amount,currency}};
-          const key=JSON.stringify(payload);
-          if(pendingProduct.current?.key!==key)pendingProduct.current={key,commandId:commandId()};
-          const attempt=pendingProduct.current;
-          void run(
-            async () => {
-              const result=await edge.catalogCommand({commandId:attempt.commandId,kind:'CREATE_PRODUCT',expectedVersion:0,payload});
-              if(pendingProduct.current===attempt)pendingProduct.current=null;
-              return result;
-            },
-            'Producto creado con el impuesto seleccionado.',
-            'product',
-          );
-        }}
-      >
-        <h4>Crear producto</h4>
-        <Field
-          label="Nombre del producto"
-          value={productForm.name}
-          set={(v) => setProductForm({ ...productForm, name: v })}
-        />
-        <Field
-          label={`Precio (${admin.operational.currency ?? 'moneda pendiente'})`}
-          value={productForm.amount}
-          set={(v) => setProductForm({ ...productForm, amount: v })}
-          inputMode="decimal"
-        />
-        <small>
-          Escribe el importe, por ejemplo 100.00. El impuesto se incluye o se agrega según el perfil
-          seleccionado.
-        </small>
-        <SelectField
-          label="Perfil fiscal del producto"
-          value={productForm.taxProfileId}
-          onChange={(e) => setProductForm({ ...productForm, taxProfileId: e.target.value })}
-        >
-          <option value="">Seleccione perfil fiscal…</option>
-          {tax.profiles
-            .filter((x) => x.active)
-            .map((x) => (
-              <option key={x.id} value={x.id}>
-                {x.name}
-              </option>
-            ))}
-        </SelectField>
-        <Button
-          disabled={
-            busy ||
-            !admin.operational.currency ||
-            !productForm.name.trim() ||
-            !productForm.taxProfileId ||
-            parseMoneyInputToMinorUnits(productForm.amount) === null
-          }
-        >
-          Crear producto
-        </Button>
-        {!admin.operational.currency && (
-          <PrerequisiteNotice
-            state={prerequisite({
-              key: 'currency',
-              label: 'Moneda',
-              status: 'missing',
-              guidance: getUserGuidance('CURRENCY_REQUIRED'),
-              authority: { source: 'edge' },
-            })}
-            onAction={state.navigate}
-          />
-        )}{' '}
-        {!productForm.taxProfileId && (
-          <small role="status">Selecciona un impuesto activo para crear el producto.</small>
-        )}
-      </form>
+      <Button type="button" onClick={() => void navigate({surface:'administration',section:'products'})}>Administrar productos</Button>
       <h4>Impuestos de los productos</h4>
       {tax.products.map((product) => (
         <div key={product.id}>

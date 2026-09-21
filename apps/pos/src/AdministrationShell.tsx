@@ -52,7 +52,7 @@ export function AdministrationShell({
       </header>
       <div className="admin-shell-layout">
         <nav aria-label="Administración del restaurante" className="admin-shell-navigation">
-          {['Restaurante', 'Operación', 'Equipo'].map((group) => {
+          {['Restaurante', 'Catálogo', 'Operación', 'Equipo'].map((group) => {
             const items = ADMIN_SECTIONS.filter(
               (item) => item.group === group && canOpenAdminSection(item.id, permissions),
             );
