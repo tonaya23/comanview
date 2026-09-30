@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
+import { readProductModifierConfigurations } from './productModifierConfiguration.js';
 import {
   CatalogStateSchema,
   CatalogProjectedEntitySchema,
@@ -19,9 +20,18 @@ export function readCatalogState(db: Database.Database) {
 }
 export function projectedCatalogEntity(
   db: Database.Database,
-  type: 'PRODUCT' | 'CATEGORY',
+  type: 'PRODUCT' | 'CATEGORY' | 'MODIFIER_GROUP' | 'MODIFIER_OPTION',
   id: string,
 ): CatalogProjectedEntity {
+  if(type==='MODIFIER_GROUP') {
+    const row=db.prepare('SELECT id,name,min_selections minSelections,max_selections maxSelections,active,version FROM modifier_groups WHERE id=?').get(id) as Record<string,unknown>;
+    return CatalogProjectedEntitySchema.parse({entityType:type,state:{...row,active:Boolean(row['active'])}});
+  }
+  if(type==='MODIFIER_OPTION') {
+    const row=db.prepare('SELECT id,group_id groupId,name,price_delta_amount amount,price_delta_currency currency,active,available,display_order displayOrder,version FROM modifier_options WHERE id=?').get(id) as Record<string,unknown>;
+    const {amount,currency,...fields}=row;
+    return CatalogProjectedEntitySchema.parse({entityType:type,state:{...fields,active:Boolean(row['active']),available:Boolean(row['available']),unitPriceDelta:{amount,currency}}});
+  }
   if (type === 'CATEGORY') {
     const row = db
       .prepare(
@@ -45,6 +55,7 @@ export function projectedCatalogEntity(
       active: Boolean(row['active']),
       available: Boolean(row['available']),
       basePrice: { amount: row['amount'], currency: row['currency'] },
+      ...(db.pragma('user_version',{simple:true})===18?{modifierAssignments:readProductModifierConfigurations(db).find(p=>p.productId===id)!.assignments}:{}),
     },
   });
 }
@@ -98,7 +109,8 @@ export function appendCatalogMutation(
  * Chunks are consecutive in local_sequence; subsequent mutations are ordered after COMPLETED. */
 export function ensureCatalogBaseline(db: Database.Database, binding: Binding): void {
   db.transaction(() => {
-    const state = readCatalogState(db);
+    let state = readCatalogState(db);
+    const structureVersion=Number(db.pragma('user_version',{simple:true}))>=18?2:1;
     const identity = db
       .prepare(
         "SELECT edge_id,tenant_id,location_id FROM edge_installations WHERE singleton_key='PRIMARY'",
@@ -113,11 +125,17 @@ export function ensureCatalogBaseline(db: Database.Database, binding: Binding): 
     if (
       db
         .prepare(
-          "SELECT 1 FROM event_log WHERE event_type='CATALOG_BASELINE_COMPLETED' AND recovery_epoch=? AND json_extract(payload,'$.sourceEpoch')=? LIMIT 1",
+          "SELECT 1 FROM event_log WHERE event_type='CATALOG_BASELINE_COMPLETED' AND recovery_epoch=? AND json_extract(payload,'$.sourceEpoch')=? AND COALESCE(json_extract(payload,'$.catalogStructureVersion'),1)>=? LIMIT 1",
         )
-        .get(state.recoveryEpoch, state.recoveryEpoch)
+        .get(state.recoveryEpoch, state.recoveryEpoch,structureVersion)
     )
       return;
+    // A full extended capture supersedes a legacy baseline at a newer generation.
+    // No epoch change and no fake business mutation; all chunks commit atomically.
+    if(structureVersion===2&&db.prepare("SELECT 1 FROM event_log WHERE event_type='CATALOG_BASELINE_COMPLETED' AND recovery_epoch=? AND json_extract(payload,'$.sourceEpoch')=? LIMIT 1").get(state.recoveryEpoch,state.recoveryEpoch)) {
+      db.prepare("UPDATE catalog_state SET generation=generation+1 WHERE singleton_key='PRIMARY'").run();
+      state=readCatalogState(db);
+    }
     const entities: CatalogProjectedEntity[] = [];
     for (const [table, type] of [
       ['categories', 'CATEGORY'],
@@ -126,6 +144,9 @@ export function ensureCatalogBaseline(db: Database.Database, binding: Binding): 
       for (const row of db.prepare(`SELECT id FROM ${table} ORDER BY id`).all() as { id: string }[])
         entities.push(projectedCatalogEntity(db, type, row.id));
     }
+    if(structureVersion===2)for(const [table,type] of [['modifier_groups','MODIFIER_GROUP'],['modifier_options','MODIFIER_OPTION']] as const)
+      for(const row of db.prepare(`SELECT id FROM ${table} ORDER BY id`).all() as {id:string}[])
+        entities.push(projectedCatalogEntity(db,type,row.id));
     const digest = createHash('sha256').update(canonicalCatalogJson(entities)).digest('hex');
     const baselineId = createHash('sha256')
       .update(canonicalCatalogJson({ ...binding, ...state, digest }))
@@ -145,6 +166,7 @@ export function ensureCatalogBaseline(db: Database.Database, binding: Binding): 
     }
     const manifest = {
       payloadVersion: 1 as const,
+      ...(structureVersion===2?{catalogStructureVersion:2 as const}:{}),
       ...binding,
       sourceEpoch: state.recoveryEpoch,
       baselineId,

@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import type Database from 'better-sqlite3';
 import { appendCatalogMutation, projectedCatalogEntity } from '../catalogPropagation.js';
+import { productAssignmentSchema } from '../productAssignmentSchema.js';
 import type {
   TaxAdministrationCommand,
   RestaurantAdministrationCommand,
@@ -37,7 +38,7 @@ export function assignProductReference(
   digest: string,
   raw: Database.Database,
 ): TaxAdministrationResult {
-  if (db.get<{ user_version: number }>(sql`PRAGMA user_version`)?.user_version !== 16)
+  if (productAssignmentSchema(raw) === null)
     throw new Error('RECOVERY_REQUIRED');
   if (
     db.get(

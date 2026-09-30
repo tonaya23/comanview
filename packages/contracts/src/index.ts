@@ -28,3 +28,4 @@ export * from './taxAdministration.js';
 export * from './personnelRecovery.js';
 export * from './personnelAdministration.js';
 export * from './restaurantAdministration.js';
+export * from './modifierAdministration.js';

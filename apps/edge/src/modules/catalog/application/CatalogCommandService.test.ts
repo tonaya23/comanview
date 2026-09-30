@@ -37,6 +37,7 @@ import type { AuthenticatedActor } from '../../../app/authContext.js';
 import { CatalogCommandService } from './CatalogCommandService.js';
 import { AppError } from '../../../app/errorHandler.js';
 import { EntityId } from '@comanview/domain';
+import { applyModifierQuantitySchemaMigration,applyModifierVersionSchemaMigration,readModifierAdministration,readProductModifierConfigurations } from '@comanview/database';
 
 let db: Database.Database,
   store: MemoryRecoverySecurityStore,
@@ -125,6 +126,113 @@ beforeEach(async () => {
   );
 });
 afterEach(() => db.close());
+
+async function modifierFixture(){
+  applyModifierQuantitySchemaMigration(db);applyModifierVersionSchemaMigration(db);
+  await store.mutate(f=>updateRecoverySecurityFloor(f,{minimumSchemaVersion:18}));
+}
+it('B3c assignments and overrides share Product OCC, preserve shared entities and normalize inheritance',async()=>{
+  await modifierFixture();
+  const g=await execute({kind:'CREATE_MODIFIER_GROUP',commandId:id(),expectedVersion:0,payload:{name:'Extras',minSelections:0,maxSelections:3,active:true}});
+  await execute({kind:'CREATE_MODIFIER_OPTION',commandId:id(),expectedVersion:0,group:{id:g.entityId!,version:1},payload:{name:'Queso',unitPriceDelta:{amount:1500,currency:'MXN'},active:true,available:true,displayOrder:0}});
+  const group=readModifierAdministration(db)[0]!,option=group.options[0]!,p=await create(),other=await create();
+  const command={kind:'SET_PRODUCT_MODIFIERS' as const,commandId:id(),entityId:p.entityId!,expectedVersion:1,payload:{assignments:[{groupId:group.id,groupVersion:group.version,displayOrder:0,overrides:{[option.id]:{amount:1000,currency:'MXN'}}}]}};
+  const saved=await execute(command);expect(saved.version).toBe(2);expect(await execute(command)).toEqual(saved);
+  await expect(execute({...command,commandId:id()})).rejects.toMatchObject({code:'CATALOG_VERSION_CONFLICT'});
+  await execute({...command,commandId:id(),entityId:other.entityId!});
+  const read=()=>readProductModifierConfigurations(db).find(x=>x.productId===p.entityId)!;
+  expect(read().assignments[0]!.overrides[option.id]).toEqual({amount:1000,currency:'MXN'});
+  await expect(execute({...command,commandId:id(),expectedVersion:2,payload:{assignments:[...command.payload.assignments,...command.payload.assignments]}})).rejects.toMatchObject({code:'CATALOG_REFERENCE_CHANGED'});
+  const normalized=await execute({...command,commandId:id(),expectedVersion:2,payload:{assignments:[{...command.payload.assignments[0]!,overrides:{[option.id]:{amount:1500,currency:'MXN'}}}]}});
+  expect(normalized.version).toBe(3);expect(read().assignments[0]!.overrides).toEqual({});
+  expect((await execute({...command,commandId:id(),expectedVersion:3,payload:{assignments:[{...command.payload.assignments[0]!,overrides:{}}]}})).changed).toBe(false);
+  await execute({kind:'UPDATE_MODIFIER_GROUP',commandId:id(),entityId:group.id,expectedVersion:2,payload:{name:'Shared update',minSelections:0,maxSelections:4,active:true}});
+  expect(read().version).toBe(3);expect(read().groups[0]!.name).toBe('Shared update');
+  expect(readProductModifierConfigurations(db).find(x=>x.productId===other.entityId)!.version).toBe(2);
+  await execute({...command,commandId:id(),expectedVersion:3,payload:{assignments:[]}});
+  expect(read().assignments).toEqual([]);expect(readModifierAdministration(db)[0]!.options).toHaveLength(1);
+  expect(readProductModifierConfigurations(db).find(x=>x.productId===other.entityId)!.assignments).toHaveLength(1);
+});
+it('B3-Core Extras/Tamaño flow captures effective unit overrides times quantities and preserves old snapshots',async()=>{
+  await modifierFixture();
+  const addGroup=async(name:string,min:number,max:number,options:[string,number][])=>{
+    const result=await execute({kind:'CREATE_MODIFIER_GROUP',commandId:id(),expectedVersion:0,payload:{name,minSelections:min,maxSelections:max,active:true}});
+    for(const [name,amount] of options){const g=readModifierAdministration(db).find(g=>g.id===result.entityId)!;await execute({kind:'CREATE_MODIFIER_OPTION',commandId:id(),expectedVersion:0,group:{id:g.id,version:g.version},payload:{name,unitPriceDelta:{amount,currency:'MXN'},active:true,available:true,displayOrder:g.options.length}});}
+    return readModifierAdministration(db).find(g=>g.id===result.entityId)!;
+  };
+  const extras=await addGroup('Extras',0,3,[['Extra queso',1500],['Extra tocino',2000]]),size=await addGroup('Tamaño',1,1,[['Chica',0],['Mediana',2000],['Grande',4000]]),p=await create();
+  const assignments=[{groupId:extras.id,groupVersion:extras.version,displayOrder:0,overrides:{[extras.options[0]!.id]:{amount:1000,currency:'MXN'}}},{groupId:size.id,groupVersion:size.version,displayOrder:1,overrides:{}}];
+  await execute({kind:'SET_PRODUCT_MODIFIERS',commandId:id(),entityId:p.entityId!,expectedVersion:1,payload:{assignments}});
+  const repo=new CatalogRepository(drizzle(db,{schema}));
+  const selections=new Map([[extras.id,[{modifierOptionId:EntityId.fromString(extras.options[0]!.id),quantity:2},{modifierOptionId:EntityId.fromString(extras.options[1]!.id),quantity:1}]],[size.id,[{modifierOptionId:EntityId.fromString(size.options[2]!.id),quantity:1}]]]);
+  const snapshot=repo.getProductById(EntityId.fromString(p.entityId!))!.createSnapshot(selections);
+  const saved=JSON.stringify(snapshot);
+  expect(snapshot.modifiers.map(m=>m.quantity)).toEqual([2,1,1]);
+  expect(snapshot.modifiers.reduce((sum,m)=>sum+m.priceDelta.amount*m.quantity,0)).toBe(8000);
+  await execute({kind:'SET_PRODUCT_MODIFIERS',commandId:id(),entityId:p.entityId!,expectedVersion:2,payload:{assignments:[{...assignments[1]!,displayOrder:0},{...assignments[0]!,displayOrder:1}]}});
+  const changed=readProductModifierConfigurations(db).find(x=>x.productId===p.entityId)!;
+  expect(changed.assignments.map(a=>a.groupId)).toEqual([size.id,extras.id]);expect(changed.version).toBe(3);
+  await execute({kind:'UPDATE_MODIFIER_OPTION',commandId:id(),entityId:extras.options[1]!.id,expectedVersion:1,group:{id:extras.id,version:extras.version},payload:{name:'Extra tocino',unitPriceDelta:{amount:3000,currency:'MXN'},active:true,available:true,displayOrder:1}});
+  expect(JSON.stringify(snapshot)).toBe(saved);
+  expect(repo.getProductById(EntityId.fromString(p.entityId!))!.createSnapshot(selections).modifiers.reduce((sum,m)=>sum+m.priceDelta.amount*m.quantity,0)).toBe(9000);
+  expect(readProductModifierConfigurations(db).find(x=>x.productId===p.entityId)!.version).toBe(3);
+});
+it('B3b extends a legacy baseline once with versioned groups/options and a newer generation',async()=>{
+  ensureCatalogBaseline(db,binding);
+  await modifierFixture();
+  const g=await execute({kind:'CREATE_MODIFIER_GROUP',commandId:id(),expectedVersion:0,payload:{name:'Extras',minSelections:0,maxSelections:3,active:true}});
+  await execute({kind:'CREATE_MODIFIER_OPTION',commandId:id(),expectedVersion:0,group:{id:g.entityId!,version:1},payload:{name:'Extra',unitPriceDelta:{amount:-50,currency:'MXN'},active:true,available:true,displayOrder:0}});
+  const generation=readCatalogState(db).catalogGeneration;
+  ensureCatalogBaseline(db,binding);
+  expect(readCatalogState(db).catalogGeneration).toBe(generation+1);
+  const events=db.prepare("SELECT payload FROM event_log WHERE event_type='CATALOG_BASELINE_CHUNK' ORDER BY local_sequence").all() as {payload:string}[];
+  const payload=JSON.parse(events.at(-1)!.payload);
+  expect(payload.catalogStructureVersion).toBe(2);
+  expect(payload.entities.map((e:{entityType:string})=>e.entityType)).toEqual(expect.arrayContaining(['MODIFIER_GROUP','MODIFIER_OPTION']));
+  ensureCatalogBaseline(db,binding);expect(readCatalogState(db).catalogGeneration).toBe(generation+1);
+});
+it('B3b Groups and Options use independent OCC, parent version, no-op/retry and atomic events',async()=>{
+  await modifierFixture();
+  const created=await execute({kind:'CREATE_MODIFIER_GROUP',commandId:id(),expectedVersion:0,payload:{name:'Extras',minSelections:0,maxSelections:3,active:true}});
+  const groupId=created.entityId!;
+  const option={kind:'CREATE_MODIFIER_OPTION' as const,commandId:id(),expectedVersion:0 as const,group:{id:groupId,version:1},payload:{name:'Queso',unitPriceDelta:{amount:1500,currency:'MXN'},active:true,available:true,displayOrder:0}};
+  const result=await execute(option);expect(await execute(option)).toEqual(result);
+  expect(result.version).toBe(2);
+  const g=readModifierAdministration(db)[0]!,o=g.options[0]!;
+  expect(o.version).toBe(1);expect(o.unitPriceDelta.amount).toBe(1500);
+  const noOp=await execute({kind:'SET_MODIFIER_OPTION_AVAILABILITY',commandId:id(),entityId:o.id,expectedVersion:1,group:{id:groupId,version:2},payload:{available:true}});
+  expect(noOp.changed).toBe(false);expect(noOp.catalogGeneration).toBe(result.catalogGeneration);
+  await expect(execute({...option,commandId:id()})).rejects.toMatchObject({code:'CATALOG_REFERENCE_CHANGED'});
+  let groupVersion=2,optionVersion=1;
+  for(const amount of [0,-100,1500]){
+    const updated=await execute({kind:'UPDATE_MODIFIER_OPTION',commandId:id(),entityId:o.id,expectedVersion:optionVersion,group:{id:groupId,version:groupVersion},payload:{...option.payload,unitPriceDelta:{amount,currency:'MXN'}}});
+    groupVersion++;optionVersion++;expect(updated.version).toBe(groupVersion);
+    expect(readModifierAdministration(db)[0]!.options[0]!.version).toBe(optionVersion);
+  }
+  const before=readCatalogState(db);
+  db.exec("CREATE TRIGGER reject_modifier_event BEFORE INSERT ON event_log BEGIN SELECT RAISE(ABORT,'event failure'); END");
+  await expect(execute({kind:'UPDATE_MODIFIER_GROUP',commandId:id(),entityId:groupId,expectedVersion:groupVersion,payload:{name:'Changed',minSelections:0,maxSelections:3,active:true}})).rejects.toMatchObject({code:'INTERNAL_ERROR'});
+  expect(readCatalogState(db)).toEqual(before);expect(readModifierAdministration(db)[0]!.name).toBe('Extras');
+  expect(db.prepare("SELECT count(*) n FROM audit_log WHERE action='CATALOG_CHANGED'").get()).toEqual({n:5});
+  expect(published).toHaveBeenCalledTimes(5);
+});
+
+it('B3b protects required shared configurations, validates rules and reorders with OCC',async()=>{
+  await modifierFixture();
+  await expect(execute({kind:'CREATE_MODIFIER_GROUP',commandId:id(),expectedVersion:0,payload:{name:'Invalid',minSelections:2,maxSelections:1,active:true}})).rejects.toMatchObject({code:'MODIFIER_CONFIGURATION_UNSATISFIABLE'});
+  const group=await execute({kind:'CREATE_MODIFIER_GROUP',commandId:id(),expectedVersion:0,payload:{name:'Required',minSelections:2,maxSelections:3,active:true}});
+  await execute({kind:'CREATE_MODIFIER_OPTION',commandId:id(),expectedVersion:0,group:{id:group.entityId!,version:1},payload:{name:'Only option',unitPriceDelta:{amount:0,currency:'MXN'},active:true,available:true,displayOrder:0}});
+  const product=await create();
+  db.prepare('INSERT INTO product_modifier_groups(product_id,modifier_group_id) VALUES(?,?)').run(product.entityId,group.entityId);
+  const current=readModifierAdministration(db)[0]!,option=current.options[0]!;
+  expect(current.products).toHaveLength(1); // quantity2 is satisfiable using one selectable Option.
+  for(const kind of ['SET_MODIFIER_OPTION_ACTIVE','SET_MODIFIER_OPTION_AVAILABILITY'] as const)
+    await expect(execute(kind==='SET_MODIFIER_OPTION_ACTIVE'?{kind,commandId:id(),entityId:option.id,expectedVersion:1,group:{id:current.id,version:2},payload:{active:false}}:{kind,commandId:id(),entityId:option.id,expectedVersion:1,group:{id:current.id,version:2},payload:{available:false}})).rejects.toMatchObject({code:'MODIFIER_CONFIGURATION_UNSATISFIABLE'});
+  await expect(execute({kind:'SET_MODIFIER_GROUP_ACTIVE',commandId:id(),entityId:current.id,expectedVersion:2,payload:{active:false}})).rejects.toMatchObject({code:'MODIFIER_GROUP_IN_USE'});
+  const reordered=await execute({kind:'REORDER_MODIFIER_OPTIONS',commandId:id(),entityId:current.id,expectedVersion:2,payload:{options:[{id:option.id,expectedVersion:1,displayOrder:2}]}});
+  expect(reordered.version).toBe(3);expect(readModifierAdministration(db)[0]!.options[0]!.version).toBe(2);
+  expect((db.prepare('SELECT version FROM products WHERE id=?').get(product.entityId) as {version:number}).version).toBe(product.version);
+});
 it('catalog notifies only committed effective mutations, not no-op, receipt replay or rollback',async()=>{
  const p=await create();expect(published).toHaveBeenCalledTimes(1);expect(published.mock.calls[0]?.[0]).toMatchObject({type:'CATALOG_CHANGED',catalogGeneration:1,recoveryEpoch:0,affectedIds:[p.entityId]});
  expect(JSON.parse((db.prepare('SELECT payload FROM event_log WHERE command_id=?').get(p.commandId) as {payload:string}).payload)).toMatchObject({entityId:p.entityId,entityVersion:1,catalogGeneration:1,entities:[{entityType:'PRODUCT',state:{id:p.entityId}}]});

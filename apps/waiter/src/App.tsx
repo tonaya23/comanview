@@ -62,6 +62,7 @@ interface ConfigurationState {
   product: ProductResponse;
   editingItemId: string | null;
   selectedModifierIds: string[];
+  quantities?:Record<string,number>;
   specialInstructions: string;
 }
 
@@ -485,6 +486,7 @@ export function App() {
       editingItemId: item?.id ?? null,
       selectedModifierIds:
         item?.productSnapshot.selectedModifiers.map((modifier) => modifier.modifierOptionId) ?? [],
+      quantities:Object.fromEntries((item?.productSnapshot.selectedModifiers??[]).map(m=>[m.modifierOptionId,m.quantity??1])),
       specialInstructions: item?.specialInstructions ?? '',
     });
     setConfigurationError(null);
@@ -493,7 +495,7 @@ export function App() {
   async function saveConfiguration(input = configuration, quickAdd = false) {
     if (!input || !order || pending) return;
     const invalid = activeModifierGroups(input.product)
-      .map((group) => modifierSelectionError(group, input.selectedModifierIds))
+      .map((group) => modifierSelectionError(group, input.selectedModifierIds,input.quantities))
       .find(Boolean);
     if (invalid) return setConfigurationError(invalid);
     setPending(true);
@@ -501,7 +503,7 @@ export function App() {
       const request = {
         commandId: crypto.randomUUID(),
         expectedVersion: order.version,
-        selectedModifierIds: input.selectedModifierIds,
+        selectedModifiers: input.selectedModifierIds.map(modifierOptionId=>({modifierOptionId,quantity:input.quantities?.[modifierOptionId]??1})),
         specialInstructions: input.specialInstructions,
       };
       const next = input.editingItemId
@@ -959,7 +961,7 @@ export function App() {
                       </span>
                     </div>
                     {item.productSnapshot.selectedModifiers.map((modifier) => (
-                      <small key={modifier.modifierOptionId}>+ {modifier.name}</small>
+                      <small key={modifier.modifierOptionId}>+ {modifier.name}{(modifier.quantity??1)>1?` ×${modifier.quantity}`:''}</small>
                     ))}
                     {item.specialInstructions && <p>NOTA · {item.specialInstructions}</p>}
                     <footer>
@@ -968,7 +970,7 @@ export function App() {
                           item.lineTotal?.amount ??
                             item.productSnapshot.basePrice.amount +
                               item.productSnapshot.selectedModifiers.reduce(
-                                (sum, mod) => sum + mod.priceDelta.amount,
+                                (sum, mod) => sum + mod.priceDelta.amount * (mod.quantity??1),
                                 0,
                               ),
                           order.currency,
@@ -1153,16 +1155,21 @@ export function App() {
                   .filter((option) => option.active)
                   .map((option) => {
                     const checked = configuration.selectedModifierIds.includes(option.id);
+                    const selectedCount = configuration.selectedModifierIds
+                      .filter(id => group.modifierGroup.options.some(candidate => candidate.id === id))
+                      .reduce((sum, id) => sum + (configuration.quantities?.[id] ?? 1), 0);
                     return (
+                      <div key={option.id}>
                       <button
                         type="button"
                         key={option.id}
-                        disabled={!option.available || pending}
+                        disabled={!option.available || pending || (!checked && selectedCount >= group.modifierGroup.maxSelections)}
                         aria-pressed={checked}
                         className={checked ? 'selected' : ''}
                         onClick={() =>
                           setConfiguration({
                             ...configuration,
+                            quantities:{...configuration.quantities,[option.id]:1},
                             selectedModifierIds: checked
                               ? configuration.selectedModifierIds.filter((id) => id !== option.id)
                               : [...configuration.selectedModifierIds, option.id],
@@ -1172,6 +1179,12 @@ export function App() {
                         {option.name}
                         {!option.available && ' · AGOTADO'}
                       </button>
+                      {checked && <div>
+                        <button type="button" aria-label={`Reducir ${option.name}`} disabled={pending||(configuration.quantities?.[option.id]??1)<=1} onClick={()=>setConfiguration({...configuration,quantities:{...configuration.quantities,[option.id]:(configuration.quantities?.[option.id]??1)-1}})}>−</button>
+                        <span aria-live="polite">{configuration.quantities?.[option.id]??1}</span>
+                        <button type="button" aria-label={`Aumentar ${option.name}`} disabled={pending||!option.available||configuration.selectedModifierIds.filter(id=>group.modifierGroup.options.some(o=>o.id===id)).reduce((sum,id)=>sum+(configuration.quantities?.[id]??1),0)>=group.modifierGroup.maxSelections} onClick={()=>setConfiguration({...configuration,quantities:{...configuration.quantities,[option.id]:(configuration.quantities?.[option.id]??1)+1}})}>+</button>
+                      </div>}
+                      </div>
                     );
                   })}
               </div>

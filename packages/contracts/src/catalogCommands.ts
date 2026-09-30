@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ModifierCommandObjects, CommercialModifierGroupSchema, ProductModifierCommandSchema } from './modifierAdministration.js';
 
 const id = z.string().uuid(),
   version = z.number().int().positive().safe();
@@ -16,6 +17,8 @@ const reference = z.object({ id, version }).strict();
 const base = { commandId: id };
 const product = { ...base, entityId: id, expectedVersion: version };
 export const CatalogCommandSchema = z.discriminatedUnion('kind', [
+  ...ModifierCommandObjects,
+  ProductModifierCommandSchema,
   z
     .object({
       ...base,
@@ -146,13 +149,13 @@ export const CommercialProductSchema = z
 export const CatalogCommandResultSchema = z
   .object({
     commandId: id,
-    entityType: z.enum(['PRODUCT', 'CATEGORY', 'CATEGORIES']),
+    entityType: z.enum(['PRODUCT', 'CATEGORY', 'CATEGORIES', 'MODIFIER_GROUP']),
     entityId: id.nullable(),
     version: version.nullable(),
     catalogGeneration: z.number().int().nonnegative().safe(),
     recoveryEpoch: z.number().int().nonnegative().safe(),
     changed: z.boolean(),
-    entities: z.array(z.union([CommercialProductSchema, CommercialCategorySchema])),
+    entities: z.array(z.union([CommercialProductSchema, CommercialCategorySchema, CommercialModifierGroupSchema])),
   })
   .strict();
 export type CatalogCommandResult = z.infer<typeof CatalogCommandResultSchema>;

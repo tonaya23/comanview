@@ -36,6 +36,11 @@ describe('Waiter presentation logic', () => {
     expect(modifierSelectionError(group, [])).toContain('al menos 1');
     expect(modifierSelectionError(group, ['one'])).toBeNull();
     expect(modifierSelectionError(group, ['one', 'two'])).toContain('máximo 1');
+    expect(modifierSelectionError(group, ['one'], { one: 2 })).toContain('máximo 1');
+    group.modifierGroup.minSelections = 2;
+    group.modifierGroup.maxSelections = 3;
+    expect(modifierSelectionError(group, ['one'], { one: 2 })).toBeNull();
+    expect(modifierSelectionError(group, ['one', 'two'], { one: 2, two: 2 })).toContain('máximo 3');
   });
 
   it('explains why simple table cancellation is unavailable', () => {

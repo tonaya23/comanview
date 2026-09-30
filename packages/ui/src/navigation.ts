@@ -1,7 +1,7 @@
 export type AdministrationNavigationTarget = {
   surface: 'administration';
   section: 'business-profile' | 'day-currency' | 'taxes' | 'tips' | 'registers' |
-    'stations' | 'zones-tables' | 'personnel' | 'products' | 'categories';
+    'stations' | 'zones-tables' | 'personnel' | 'products' | 'categories' | 'modifiers';
 };
 
 export type SystemNavigationTarget = {

@@ -45,6 +45,7 @@ export interface OrderItemConfigurationUpdatedEvent extends OrderDomainEvent {
   readonly itemId: EntityId;
   readonly productId: EntityId;
   readonly modifierOptionIds: EntityId[];
+  readonly selectedModifiers?: Array<{ modifierOptionId: EntityId; quantity: number }>;
   readonly specialInstructions: string | null;
 }
 

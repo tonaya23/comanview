@@ -127,7 +127,7 @@ export class OrderService {
     const product = this.catalogRepo.getProductById(EntityId.fromString(request.productId));
     if (!product) throw new ObjectNotFoundError(`Product ${request.productId} not found`);
 
-    const snapshot = this.createAuthoritativeSnapshot(product, request.selectedModifierIds ?? []);
+    const snapshot = this.createAuthoritativeSnapshot(product, request.selectedModifiers ?? (request.selectedModifierIds ?? []).map(modifierOptionId=>({modifierOptionId,quantity:1})));
 
     order.addItem(snapshot, request.commandId, request.specialInstructions);
 
@@ -147,7 +147,8 @@ export class OrderService {
     const order = this.orderRepo.getOrderById(EntityId.fromString(orderId));
     if (!order) throw new ObjectNotFoundError(`Order ${orderId} not found`);
 
-    const requestedModifierIds = [...request.selectedModifierIds].sort();
+    const selections=request.selectedModifiers ?? (request.selectedModifierIds ?? []).map(modifierOptionId=>({modifierOptionId,quantity:1}));
+    const canonical=(entries:Array<{modifierOptionId:string;quantity:number}>)=>JSON.stringify([...entries].sort((a,b)=>a.modifierOptionId.localeCompare(b.modifierOptionId)));
     const normalizedInstructions = normalizeSpecialInstructions(request.specialInstructions);
     if (this.orderRepo.hasProcessedCommand(request.commandId)) {
       const event = this.orderRepo.getProcessedCommandEvent(request.commandId);
@@ -155,12 +156,12 @@ export class OrderService {
         const payload = JSON.parse(event.payload) as {
           itemId?: string;
           modifierOptionIds?: string[];
+          selectedModifiers?: Array<{modifierOptionId:string;quantity:number}>;
           specialInstructions?: string | null;
         };
         if (
           payload.itemId === itemId &&
-          JSON.stringify([...(payload.modifierOptionIds ?? [])].sort()) ===
-            JSON.stringify(requestedModifierIds) &&
+          canonical(payload.selectedModifiers??(payload.modifierOptionIds??[]).map(modifierOptionId=>({modifierOptionId,quantity:1}))) === canonical(selections) &&
           payload.specialInstructions === normalizedInstructions
         ) {
           return mapOrderToResponse(order);
@@ -182,10 +183,12 @@ export class OrderService {
 
     const item = order.items.find((candidate) => candidate.id.toString() === itemId);
     if (!item) throw new OrderItemNotFoundError(itemId);
+    if(request.selectedModifiers===undefined&&item.snapshot.modifiers.some(modifier=>modifier.quantity>1))
+      throw new AppError('CLIENT_CAPABILITY_REQUIRED',409,'Modifier quantities require an updated client.');
     const productId = item.snapshot.productId;
     const product = this.catalogRepo.getProductById(productId);
     if (!product) throw new ObjectNotFoundError(`Product ${productId.toString()} not found`);
-    const snapshot = this.createAuthoritativeSnapshot(product, request.selectedModifierIds);
+    const snapshot = this.createAuthoritativeSnapshot(product, selections);
 
     order.updateDraftItemConfiguration(
       item.id,
@@ -589,9 +592,9 @@ export class OrderService {
     }
   }
 
-  private createAuthoritativeSnapshot(product: Product, selectedModifierIds: string[]) {
-    const modifierSelections = new Map<string, EntityId[]>();
-    for (const selectedId of selectedModifierIds) {
+  private createAuthoritativeSnapshot(product: Product, selections: Array<{modifierOptionId:string;quantity:number}>) {
+    const modifierSelections = new Map<string, Array<{modifierOptionId:EntityId;quantity:number}>>();
+    for (const {modifierOptionId:selectedId,quantity} of selections) {
       const optionId = EntityId.fromString(selectedId);
       const owningGroup = product.modifierGroups.find((pmg) =>
         pmg.modifierGroup.options.some((option) => option.id.equals(optionId)),
@@ -602,7 +605,7 @@ export class OrderService {
         );
       }
       const groupId = owningGroup.modifierGroup.id.toString();
-      modifierSelections.set(groupId, [...(modifierSelections.get(groupId) ?? []), optionId]);
+      modifierSelections.set(groupId, [...(modifierSelections.get(groupId) ?? []), {modifierOptionId:optionId,quantity}]);
     }
     return product.createSnapshot(modifierSelections,
       this.catalogRepo.getFiscalPolicyVersion(this.context.tenantId, this.context.locationId));

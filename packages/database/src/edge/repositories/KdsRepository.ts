@@ -21,7 +21,7 @@ export interface KdsTicketItemView {
   orderItemId: string;
   quantity: number;
   productName: string;
-  modifiers: Array<{ modifierOptionId: string; name: string }>;
+  modifiers: Array<{ modifierOptionId: string; name: string; quantity?: number }>;
   specialInstructions: string | null;
   prepStatus: OrderItemPrepStatus;
 }
@@ -114,11 +114,13 @@ export class KdsRepository {
 
     if (rows.length === 0) return [];
     const itemIds = rows.map((row) => row.orderItemId);
+    const hasQuantity=Boolean(this.db.get(sql`SELECT 1 FROM pragma_table_info('order_item_modifiers') WHERE name='quantity'`));
     const modifierRows = this.db
       .select({
         orderItemId: schema.orderItemModifiers.orderItemId,
         modifierOptionId: schema.orderItemModifiers.modifierOptionId,
         name: schema.orderItemModifiers.name,
+        quantity: hasQuantity ? sql<number>`quantity` : sql<number>`1`,
       })
       .from(schema.orderItemModifiers)
       .where(inArray(schema.orderItemModifiers.orderItemId, itemIds))
@@ -127,7 +129,7 @@ export class KdsRepository {
     const modifiersByItem = new Map<string, KdsTicketItemView['modifiers']>();
     for (const modifier of modifierRows) {
       const current = modifiersByItem.get(modifier.orderItemId) ?? [];
-      current.push({ modifierOptionId: modifier.modifierOptionId, name: modifier.name });
+      current.push({ modifierOptionId: modifier.modifierOptionId, name: modifier.name, quantity: modifier.quantity });
       modifiersByItem.set(modifier.orderItemId, current);
     }
 

@@ -10,7 +10,7 @@ import { createEdgeDatabase, SyncOutboxRepository } from '@comanview/database';
 import { EdgeProvisioningClient } from './modules/provisioning/EdgeProvisioningClient.js';
 import { WindowsDpapiEdgeSecretStore } from './modules/provisioning/EdgeSecretStore.js';
 import { initializeRecoverySecurityFloor, WindowsDpapiRecoverySecurityStore } from './modules/backup/RecoverySecurityStore.js';
-import { inspectCatalogSchema } from '@comanview/database';
+import { inspectModifierVersionSchema } from '@comanview/database';
 import { archiveRuntime, bootTime, processStart, runtimeState, stopRecordedProcess, type LabRuntime } from './acceptanceLabRuntime.js';
 import { BASE_ROLE_PERMISSIONS } from '@comanview/auth';
 
@@ -102,7 +102,7 @@ async function start(){
     await waitForHealth('http://127.0.0.1:3000/health','ACCEPTANCE_LAB_EDGE_NOT_READY',90_000);
     const floor=loadFloorReadOnly();
     const sqlite=new Database(paths.db,{readonly:true,fileMustExist:true});
-    try{if(inspectCatalogSchema(sqlite)!==16||!floor.binding||floor.binding.edgeId!==config.edgeId||
+    try{if(inspectModifierVersionSchema(sqlite)!==18||!floor.binding||floor.binding.edgeId!==config.edgeId||
       floor.binding.tenantId!==config.tenantId||floor.binding.locationId!==config.locationId||floor.recoveryState!=='NORMAL'||
        floor.personnel?.initializationState!=='ACTIVE')fail('ACCEPTANCE_LAB_STARTUP_VALIDATION_FAILED');
       if(sqlite.prepare("SELECT 1 FROM installation_state WHERE bootstrap_status='COMPLETED'").get())verifyAcceptanceOwner(sqlite);}
@@ -156,7 +156,7 @@ export function verifyAcceptanceOwner(db:Database.Database):void{
   if(BASE_ROLE_PERMISSIONS.OWNER.some(permission=>!codes.has(permission)))throw new Error('ACCEPTANCE_LAB_OWNER_BASELINE_INCOMPLETE');
 }
 function cloudEnvironment(c:Config){return{NODE_ENV:'development',DATABASE_URL:c.databaseUrl,COMANVIEW_CLOUD_PORT:'4000',COMANVIEW_CLOUD_HOST:'127.0.0.1',COMANVIEW_CLOUD_DEV_ADMIN_EMAIL:c.adminEmail,COMANVIEW_CLOUD_DEV_ADMIN_PASSWORD:c.adminPassword,COMANVIEW_CLOUD_DEV_ADMIN_ROLE:'PLATFORM_ADMIN',COMANVIEW_CLOUD_SIGNING_KID:c.signingKid,COMANVIEW_CLOUD_SIGNING_PRIVATE_KEY_PEM:c.privateKeyPem};}
-function edgeEnvironment(c:Config){return{NODE_ENV:'production',COMANVIEW_EDGE_DB_PATH:paths.db,COMANVIEW_EDGE_SECRET_STORE:'windows-dpapi',COMANVIEW_EDGE_SECRET_PATH:paths.secret,COMANVIEW_RECOVERY_SECURITY_STORE:'windows-dpapi',COMANVIEW_RECOVERY_SECURITY_PATH:paths.floor,COMANVIEW_BACKUP_LOCAL_DIR:paths.backups,COMANVIEW_DEBUG_PRINT_DIR:paths.prints,COMANVIEW_CLOUD_URL:'http://127.0.0.1:4000',COMANVIEW_SYNC_ENABLED:'true',COMANVIEW_EDGE_SCHEMA_VERSION:'16',COMANVIEW_LICENSE_ENFORCEMENT_ENABLED:'true',COMANVIEW_LICENSE_PUBLIC_KEYRING:JSON.stringify({[c.signingKid]:c.publicKeyPem}),COMANVIEW_CONTROL_PULL_INTERVAL_MS:'5000',COMANVIEW_HEARTBEAT_INTERVAL_MS:'30000'};}
+function edgeEnvironment(c:Config){return{NODE_ENV:'production',COMANVIEW_EDGE_DB_PATH:paths.db,COMANVIEW_EDGE_SECRET_STORE:'windows-dpapi',COMANVIEW_EDGE_SECRET_PATH:paths.secret,COMANVIEW_RECOVERY_SECURITY_STORE:'windows-dpapi',COMANVIEW_RECOVERY_SECURITY_PATH:paths.floor,COMANVIEW_BACKUP_LOCAL_DIR:paths.backups,COMANVIEW_DEBUG_PRINT_DIR:paths.prints,COMANVIEW_CLOUD_URL:'http://127.0.0.1:4000',COMANVIEW_SYNC_ENABLED:'true',COMANVIEW_EDGE_SCHEMA_VERSION:'18',COMANVIEW_LICENSE_ENFORCEMENT_ENABLED:'true',COMANVIEW_LICENSE_PUBLIC_KEYRING:JSON.stringify({[c.signingKid]:c.publicKeyPem}),COMANVIEW_CONTROL_PULL_INTERVAL_MS:'5000',COMANVIEW_HEARTBEAT_INTERVAL_MS:'30000'};}
 async function login(c:Config){const response=await fetch('http://127.0.0.1:4000/admin/v1/auth/login',{method:'POST',headers:{'content-type':'application/json',origin:'http://127.0.0.1:4000'},body:JSON.stringify({email:c.adminEmail,password:c.adminPassword})});if(!response.ok)fail('ACCEPTANCE_LAB_CLOUD_LOGIN_FAILED');const cookie=response.headers.get('set-cookie')?.split(';')[0];if(!cookie)fail('ACCEPTANCE_LAB_CLOUD_COOKIE_MISSING');return cookie;}
 async function admin(path:string,body:unknown,headers:{origin:string;cookie:string},method='POST'){const response=await fetch(`http://127.0.0.1:4000${path}`,{method,headers:{...headers,'content-type':'application/json'},body:JSON.stringify(body)});const value=await response.json().catch(()=>null);if(!response.ok)throw new Error(`ACCEPTANCE_LAB_CLOUD_HTTP_${response.status}`);return value;}
 function launchNode(cwd:string,entry:string,extra:Record<string,string>,name:string){return launch(process.execPath,['--import','tsx',entry],cwd,extra,name);}

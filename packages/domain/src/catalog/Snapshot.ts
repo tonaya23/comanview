@@ -5,14 +5,19 @@ export interface ModifierSnapshotProps {
   id: EntityId;
   name: string;
   priceDelta: Money;
+  quantity?: number;
 }
 
 export class ModifierSnapshot {
-  constructor(private readonly props: ModifierSnapshotProps) {}
+  constructor(private readonly props: ModifierSnapshotProps) {
+    if (!Number.isSafeInteger(props.quantity ?? 1) || (props.quantity ?? 1) < 1)
+      throw new Error('MODIFIER_QUANTITY_INVALID');
+  }
 
   get id(): EntityId { return this.props.id; }
   get name(): string { return this.props.name; }
   get priceDelta(): Money { return this.props.priceDelta; }
+  get quantity(): number { return this.props.quantity ?? 1; }
 }
 
 export interface ProductSnapshotProps {
@@ -53,7 +58,7 @@ export class ProductSnapshot {
   get modifiers(): ReadonlyArray<ModifierSnapshot> { return this.props.modifiers; }
 
   lineAmounts(quantity: number): { base: Money; tax: Money; total: Money } {
-    const modifierTotal = this.modifiers.reduce((sum, m) => sum.add(m.priceDelta), Money.zero(this.basePrice.currency));
+    const modifierTotal = this.modifiers.reduce((sum, m) => sum.add(m.priceDelta.multiply(m.quantity)), Money.zero(this.basePrice.currency));
     const amount = this.basePrice.add(modifierTotal).multiply(quantity);
     if (this.taxPolicyVersion === 0) return { base: amount, tax: Money.zero(amount.currency), total: amount };
     const tax = calculateLineTax(amount.amount, this.taxRateBasisPoints, this.taxCalculationMode);

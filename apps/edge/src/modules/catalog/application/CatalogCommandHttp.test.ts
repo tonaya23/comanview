@@ -36,7 +36,7 @@ import { AuthService } from '../../auth/application/AuthService.js';
 import { AuthGuard } from '../../auth/http/AuthGuard.js';
 import { errorHandler } from '../../../app/errorHandler.js';
 
-it('HTTP uses real Auth/Personnel/Floor, rejects legacy, and rechecks revoked persisted grants on receipt retry', async () => {
+it.each([16, 17, 18] as const)('HTTP schema %s uses real Auth/Personnel/Floor, rejects legacy, and rechecks revoked persisted grants on receipt retry', async (targetSchema) => {
   const root = await mkdtemp(join(tmpdir(), 'cv-catalog-http-')),
     dbPath = join(root, 'edge.db');
   let db: Database.Database | undefined;
@@ -82,6 +82,10 @@ it('HTTP uses real Auth/Personnel/Floor, rejects legacy, and rechecks revoked pe
     };
     expect(await prepareProductionAdministrationUpgrade(input)).toEqual({ state: 'UPGRADED' });
     expect(await prepareProductionCatalogUpgrade(input)).toEqual({ state: 'UPGRADED' });
+    if (targetSchema >= 17) {
+      expect(await prepareProductionCatalogUpgrade({...input, targetSchema:17})).toEqual({state:'UPGRADED'});
+      if (targetSchema === 18) expect(await prepareProductionCatalogUpgrade({...input, targetSchema:18})).toEqual({state:'UPGRADED'});
+    }
     db = new Database(dbPath);
     const orm = drizzle(db, { schema }),
       repo = new AuthRepository(orm),
@@ -181,6 +185,34 @@ it('HTTP uses real Auth/Personnel/Floor, rejects legacy, and rechecks revoked pe
       payload: { ...payload, tenantId: binding.tenantId },
     });
     expect(unknown.statusCode).toBe(400);
+    if (targetSchema === 18) {
+      expect((await store.load())?.minimumSchemaVersion).toBe(18);
+      expect((await store.load())?.recoveryState).toBe('NORMAL');
+      const empty = await app.inject({method:'GET',url:'/catalog/modifiers',headers});
+      expect(empty.statusCode,empty.body).toBe(200);
+      expect(empty.json().groups).toEqual([]);
+      const createGroup = {commandId:id(),kind:'CREATE_MODIFIER_GROUP',expectedVersion:0,
+        payload:{name:'Extras',minSelections:0,maxSelections:3,active:true}};
+      const createdGroup = await app.inject({method:'POST',url:'/catalog/commands',headers,payload:createGroup});
+      expect(createdGroup.statusCode,createdGroup.body).toBe(200);
+      expect(createdGroup.json()).toMatchObject({changed:true,version:1});
+      const readBack = await app.inject({method:'GET',url:'/catalog/modifiers',headers});
+      expect(readBack.statusCode,readBack.body).toBe(200);
+      expect(readBack.json().groups).toEqual([expect.objectContaining({id:createdGroup.json().entityId,name:'Extras',version:1,minSelections:0,maxSelections:3,options:[]})]);
+      // Reload through a fresh HTTP application, Auth repository and file connection.
+      const reopenedDb = new Database(dbPath,{fileMustExist:true}), reopenedApp=Fastify();
+      try {
+        const reopenedOrm=drizzle(reopenedDb,{schema});
+        const reopenedAuth=new AuthService(new AuthRepository(reopenedOrm),binding.tenantId,binding.locationId,store);
+        reopenedApp.setValidatorCompiler(validatorCompiler);
+        reopenedApp.setSerializerCompiler(serializerCompiler);
+        reopenedApp.setErrorHandler(errorHandler);
+        reopenedApp.register(catalogRoutes(new CatalogService(new CatalogRepository(reopenedOrm)),new AuthGuard(reopenedAuth,'enforced'),new CatalogCommandService(reopenedDb,binding,reopenedAuth)),{prefix:'/catalog'});
+        const reloaded=await reopenedApp.inject({method:'GET',url:'/catalog/modifiers',headers});
+        expect(reloaded.statusCode,reloaded.body).toBe(200);
+        expect(reloaded.json()).toEqual(readBack.json());
+      } finally {await reopenedApp.close();reopenedDb.close();}
+    }
     const profileId = id();
     db.prepare(
       "INSERT INTO tax_profiles(id,name,rate_basis_points,calculation_mode) VALUES(?,'Tax',0,'TAX_ADDED')",
@@ -241,7 +273,7 @@ it('HTTP uses real Auth/Personnel/Floor, rejects legacy, and rechecks revoked pe
       expect(response.statusCode, response.body).toBe(200);
       expect(response.json()).toMatchObject({
         version: 1,
-        catalogGeneration: 2,
+        catalogGeneration: targetSchema === 18 ? 3 : 2,
         changed: false,
         recoveryEpoch: 0,
       });
@@ -260,11 +292,43 @@ it('HTTP uses real Auth/Personnel/Floor, rejects legacy, and rechecks revoked pe
       expect(retry.statusCode, retry.body).toBe(403);
       expect(retry.json().error).toBe('PERMISSION_DENIED');
     }
+    if(targetSchema===18){
+      const assignment={kind:'SET_PRODUCT_MODIFIERS',commandId:id(),entityId:product.json().entityId,expectedVersion:1,payload:{assignments:[]}};
+      const allowed=await app.inject({method:'POST',url:'/catalog/commands',headers,payload:assignment});
+      expect(allowed.statusCode,allowed.body).toBe(200);expect(allowed.json()).toMatchObject({changed:false,version:1});
+      expect((await app.inject({method:'POST',url:'/catalog/commands',headers,payload:assignment})).json()).toEqual(allowed.json());
+    }
+    // Effective mutations as well as the no-op/retry checks above, on every schema.
+    db.exec("INSERT OR IGNORE INTO role_permissions SELECT id,'TAX_PROFILE_MANAGE' FROM roles WHERE name='OWNER'; INSERT OR IGNORE INTO role_permissions SELECT id,'STATION_MANAGE' FROM roles WHERE name='OWNER'");
+    const otherProfile=id(), station=id();
+    db.prepare("INSERT INTO tax_profiles(id,name,rate_basis_points,calculation_mode,version) VALUES(?,'Other tax',1600,'TAX_ADDED',1)").run(otherProfile);
+    db.prepare("INSERT INTO tax_profile_revisions(tax_profile_id,revision,rate_basis_points,calculation_mode,created_at) VALUES(?,1,1600,'TAX_ADDED',1)").run(otherProfile);
+    db.prepare("INSERT INTO stations(id,tenant_id,location_id,name) VALUES(?,?,?,'Kitchen')").run(station,binding.tenantId,binding.locationId);
+    for(const [url,mutation] of [
+      ['/administration/taxes/commands',{kind:'ASSIGN_PRODUCT_TAX_PROFILE',commandId:id(),expectedVersion:1,productId:product.json().entityId,profileId:otherProfile,profileVersion:1,reason:'Effective tax assignment'}],
+      ['/administration/commands',{kind:'ASSIGN_PRODUCT_STATION',commandId:id(),expectedVersion:2,productId:product.json().entityId,stationId:station,stationVersion:1,reason:'Effective station assignment'}],
+    ] as const) {
+      const response=await app.inject({method:'POST',url,headers,payload:mutation});
+      expect(response.statusCode,response.body).toBe(200);
+      expect(response.json()).toMatchObject({changed:true,version:mutation.expectedVersion+1});
+      expect((await app.inject({method:'POST',url,headers,payload:mutation})).json()).toEqual(response.json());
+    }
+    expect(db.prepare('SELECT tax_profile_id tax,station_id station,version FROM products WHERE id=?').get(product.json().entityId)).toEqual({tax:otherProfile,station,version:3});
     db.prepare("DELETE FROM role_permissions WHERE permission_code='CATALOG_MANAGE'").run();
     const denied = await app.inject({ method: 'POST', url: '/catalog/commands', headers, payload });
     expect(denied.statusCode).toBe(403);
     expect(denied.json().error).toBe('PERMISSION_DENIED');
-    expect(db.prepare('SELECT count(*) n FROM catalog_command_receipts').get()).toEqual({ n: 2 });
+    expect(db.prepare('SELECT count(*) n FROM catalog_command_receipts').get()).toEqual({ n: targetSchema===18?4:2 });
+    const modifiers = await app.inject({method:'GET',url:'/catalog/modifiers',headers});
+    expect(modifiers.statusCode, modifiers.body).toBe(targetSchema === 18 ? 200 : 409);
+    if (targetSchema === 18) expect(modifiers.json()).toEqual({currency:'MXN',groups:[expect.objectContaining({name:'Extras',version:1})]});
+    const productModifiers=await app.inject({method:'GET',url:`/catalog/products/${product.json().entityId}/modifiers`,headers});
+    expect(productModifiers.statusCode).toBe(targetSchema===18?200:409);
+    if(targetSchema===18)expect(productModifiers.json()).toMatchObject({version:3,assignments:[],groups:[]});
+    if(targetSchema===18)expect((await app.inject({method:'POST',url:'/catalog/commands',headers,payload:{kind:'SET_PRODUCT_MODIFIERS',commandId:id(),entityId:product.json().entityId,expectedVersion:3,payload:{assignments:[]}}})).statusCode).toBe(403);
+    expect((await app.inject({method:'GET',url:'/catalog/modifiers'})).statusCode).toBe(401);
+    db.prepare("DELETE FROM role_permissions WHERE permission_code='CATALOG_VIEW'").run();
+    expect((await app.inject({method:'GET',url:'/catalog/modifiers',headers})).statusCode).toBe(403);
   } finally {
     await app.close();
     db?.close();

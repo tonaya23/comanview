@@ -7,6 +7,9 @@ import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import {
   applyCatalogSchemaMigration,
+  applyModifierQuantitySchemaMigration,
+  applyModifierVersionSchemaMigration,
+  readModifierAdministration,
   ensureCatalogBaseline,
   readCatalogState,
   CatalogRepository,
@@ -67,9 +70,9 @@ afterAll(async () => {
   }
 });
 
-it.skipIf(!url)(
-  'real command → Event/notification → client refresh → Outbox/Inbox/projection, including retry and new epoch',
-  async () => {
+it.skipIf(!url).each([16, 18] as const)(
+  'schema %s real command → Event/notification → client refresh → Outbox/Inbox/projection, including retry and new epoch',
+  async (targetSchema) => {
     sqlite = new Database(':memory:');
     sqlite.pragma('foreign_keys=ON');
     const directory = fileURLToPath(new URL('../../../../../../migrations/edge/', import.meta.url));
@@ -229,13 +232,26 @@ it.skipIf(!url)(
           leaseDurationMs: 1000,
         });
         if (!claimed.length) break;
-        for (const event of claimed)
+        for (const event of claimed) {
+          const beforeBaseline = event.eventType.startsWith('CATALOG_BASELINE_')
+            ? await projection.readCatalog(projectionVersion, binding)
+            : null;
           await projection.completeEvent({
             event,
             workerId,
             projectionVersion,
             action: { type: 'CATALOG' },
           });
+          if (
+            event.eventType.startsWith('CATALOG_BASELINE_') &&
+            event.eventType !== 'CATALOG_BASELINE_COMPLETED'
+          ) {
+            const partial = await projection.readCatalog(projectionVersion, binding);
+            if (event.recoveryEpoch === 0)
+              expect(partial?.entities).toEqual(beforeBaseline?.entities);
+            else expect(partial).toBeNull();
+          }
+        }
       }
       expect(await projection.countUnprocessed(projectionVersion)).toBe(0);
       await refresh.check();
@@ -354,19 +370,231 @@ it.skipIf(!url)(
     expect(notices).toHaveLength(beforeNotices);
     expect(sqlite.prepare('SELECT count(*) n FROM event_log').get()).toEqual(beforeEvents);
     expect(await transfer()).toEqual(final);
+    let modifierFinal: Awaited<ReturnType<typeof transfer>> | undefined;
+    if (targetSchema === 18) {
+      applyModifierQuantitySchemaMigration(sqlite);
+      applyModifierVersionSchemaMigration(sqlite);
+      await store.mutate((f) => updateRecoverySecurityFloor(f, { minimumSchemaVersion: 18 }));
+      const execute = (value: unknown) =>
+        commands.execute(CatalogCommandSchema.parse(value), actor);
+      const createdGroup = await execute({
+        kind: 'CREATE_MODIFIER_GROUP',
+        commandId: randomUUID(),
+        expectedVersion: 0,
+        payload: { name: 'Extras', minSelections: 0, maxSelections: 3, active: true },
+      });
+      const groupId = createdGroup.entityId!;
+      const current = () => readModifierAdministration(sqlite).find((g) => g.id === groupId)!;
+      const assertProjection = async () => {
+        const view = await transfer(),
+          group = current();
+        expect(view.entities).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              entityType: 'MODIFIER_GROUP',
+              state: expect.objectContaining({
+                id: groupId,
+                version: group.version,
+                name: group.name,
+                minSelections: group.minSelections,
+                maxSelections: group.maxSelections,
+                active: group.active,
+              }),
+            }),
+            ...group.options.map((o) =>
+              expect.objectContaining({ entityType: 'MODIFIER_OPTION', state: o }),
+            ),
+          ]),
+        );
+        return view;
+      };
+      await assertProjection();
+      await execute({
+        kind: 'UPDATE_MODIFIER_GROUP',
+        commandId: randomUUID(),
+        entityId: groupId,
+        expectedVersion: current().version,
+        payload: { name: 'Extras compartidos', minSelections: 0, maxSelections: 4, active: true },
+      });
+      await assertProjection();
+      for (const [name, amount] of [
+        ['Queso', 1500],
+        ['Tocino', 2000],
+      ] as const) {
+        await execute({
+          kind: 'CREATE_MODIFIER_OPTION',
+          commandId: randomUUID(),
+          expectedVersion: 0,
+          group: { id: groupId, version: current().version },
+          payload: {
+            name,
+            unitPriceDelta: { amount, currency: 'MXN' },
+            active: true,
+            available: true,
+            displayOrder: current().options.length,
+          },
+        });
+        await assertProjection();
+      }
+      const optionId = current().options[0]!.id;
+      const currentOption = () => current().options.find((o) => o.id === optionId)!;
+      const optionEdit = {
+        kind: 'UPDATE_MODIFIER_OPTION',
+        commandId: randomUUID(),
+        entityId: optionId,
+        expectedVersion: currentOption().version,
+        group: { id: groupId, version: current().version },
+        payload: {
+          name: 'Sin queso',
+          unitPriceDelta: { amount: -1000, currency: 'MXN' },
+          active: true,
+          available: true,
+          displayOrder: 0,
+        },
+      };
+      await execute(optionEdit);
+      await assertProjection();
+      await execute({
+        kind: 'SET_MODIFIER_OPTION_AVAILABILITY',
+        commandId: randomUUID(),
+        entityId: optionId,
+        expectedVersion: currentOption().version,
+        group: { id: groupId, version: current().version },
+        payload: { available: false },
+      });
+      await assertProjection();
+      await execute({
+        kind: 'SET_MODIFIER_OPTION_ACTIVE',
+        commandId: randomUUID(),
+        entityId: optionId,
+        expectedVersion: currentOption().version,
+        group: { id: groupId, version: current().version },
+        payload: { active: false },
+      });
+      await assertProjection();
+      await execute({
+        kind: 'REORDER_MODIFIER_OPTIONS',
+        commandId: randomUUID(),
+        entityId: groupId,
+        expectedVersion: current().version,
+        payload: {
+          options: [...current().options]
+            .reverse()
+            .map((o, displayOrder) => ({ id: o.id, expectedVersion: o.version, displayOrder })),
+        },
+      });
+      await assertProjection();
+      const assign = {
+        kind: 'SET_PRODUCT_MODIFIERS',
+        commandId: randomUUID(),
+        entityId: productId,
+        expectedVersion: 4,
+        payload: {
+          assignments: [
+            {
+              groupId,
+              groupVersion: current().version,
+              displayOrder: 0,
+              overrides: { [optionId]: { amount: 500, currency: 'MXN' } },
+            },
+          ],
+        },
+      };
+      await execute(assign);
+      expect(readProduct(await transfer())).toMatchObject({
+        version: 5,
+        modifierAssignments: [
+          { groupId, displayOrder: 0, overrides: { [optionId]: { amount: 500, currency: 'MXN' } } },
+        ],
+      });
+      await execute(assign);
+      expect(readProduct(await transfer())).toMatchObject({ version: 5 });
+      ensureCatalogBaseline(sqlite, binding);
+      expect(readProduct(await assertProjection())).toMatchObject({
+        version: 5,
+        modifierAssignments: [
+          { groupId, displayOrder: 0, overrides: { [optionId]: { amount: 500, currency: 'MXN' } } },
+        ],
+      });
+      await execute({
+        ...assign,
+        commandId: randomUUID(),
+        expectedVersion: 5,
+        payload: { assignments: [{ ...assign.payload.assignments[0]!, overrides: {} }] },
+      });
+      expect(readProduct(await transfer())).toMatchObject({
+        version: 6,
+        modifierAssignments: [{ groupId, displayOrder: 0, overrides: {} }],
+      });
+      await execute({
+        ...assign,
+        commandId: randomUUID(),
+        expectedVersion: 6,
+        payload: { assignments: [] },
+      });
+      expect(readProduct(await transfer())).toMatchObject({ version: 7, modifierAssignments: [] });
+      await execute({
+        kind: 'SET_MODIFIER_GROUP_ACTIVE',
+        commandId: randomUUID(),
+        entityId: groupId,
+        expectedVersion: current().version,
+        payload: { active: false },
+      });
+      modifierFinal = await assertProjection();
+      // Old command receipt and duplicate transport cannot roll projection versions back.
+      await execute(optionEdit);
+      expect(await transfer()).toEqual(modifierFinal);
+      ensureCatalogBaseline(sqlite, binding);
+      modifierFinal = await assertProjection();
+      const generation = readCatalogState(sqlite).catalogGeneration;
+      ensureCatalogBaseline(sqlite, binding);
+      expect(readCatalogState(sqlite).catalogGeneration).toBe(generation);
+    }
     // Model the already validated restore boundary; encrypted physical restore has its own lifecycle tests.
     sqlite.exec(
       'UPDATE edge_installations SET recovery_epoch=1;UPDATE catalog_state SET generation=0',
     );
     await store.mutate((f) => updateRecoverySecurityFloor(f, { recoveryEpoch: 1 }));
-    await expect(commands.execute(price, actor)).rejects.toMatchObject({ code: 'COMMAND_ID_CONFLICT' });
+    await expect(commands.execute(price, actor)).rejects.toMatchObject({
+      code: 'COMMAND_ID_CONFLICT',
+    });
     ensureCatalogBaseline(sqlite, binding);
     expect((await transfer()).generation).toBe('0');
     expect(refresh.getSnapshot()?.state).toMatchObject({ recoveryEpoch: 1, catalogGeneration: 0 });
     expect(readProduct(await projection.readCatalog(projectionVersion, binding))).toMatchObject({
-      version: 4,
+      version: targetSchema === 18 ? 7 : 4,
       stationId: station,
     });
+    if (modifierFinal) {
+      const view = await projection.readCatalog(projectionVersion, binding);
+      const modifiers = (entities: CatalogProjectedEntity[]) =>
+        entities.filter(
+          (e) => e.entityType === 'MODIFIER_GROUP' || e.entityType === 'MODIFIER_OPTION',
+        );
+      expect(modifiers(view.entities)).toEqual(modifiers(modifierFinal.entities));
+      // Fresh worker repository/projection version replays all persisted Inbox events.
+      const restarted = new CloudProjectionRepository(cloud.pool),
+        replayVersion = 100,
+        replayWorker = randomUUID();
+      for (let i = 0; i < 100; i++) {
+        const events = await restarted.claimEvents({
+          projectionVersion: replayVersion,
+          workerId: replayWorker,
+          limit: 100,
+          leaseDurationMs: 1000,
+        });
+        if (!events.length) break;
+        for (const event of events)
+          await restarted.completeEvent({
+            event,
+            workerId: replayWorker,
+            projectionVersion: replayVersion,
+            action: { type: 'CATALOG' },
+          });
+      }
+      expect(await restarted.countUnprocessed(replayVersion)).toBe(0);
+      expect(await restarted.readCatalog(replayVersion, binding)).toEqual(view);
+    }
     refresh.stop();
   },
 );

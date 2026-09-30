@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { existsSync, unlinkSync } from 'node:fs';
+import { existsSync, unlinkSync, readFileSync, readdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -28,7 +29,11 @@ function makeDatabase() {
   const path = join(tmpdir(), `comanview-kds-${Date.now()}-${Math.random()}.db`);
   paths.push(path);
   prepareDevelopmentDatabase(path);
-  return { path, handle: createEdgeDatabase(path) };
+  const handle = createEdgeDatabase(path);
+  const directory = fileURLToPath(new URL('../../../../../migrations/edge/', import.meta.url));
+  for (const migration of readdirSync(directory).filter(name => /^001[567]_.*\.sql$/.test(name)).sort())
+    handle.sqlite.exec(readFileSync(join(directory, migration), 'utf8'));
+  return { path, handle };
 }
 
 describe('KDS persistence projection', () => {
@@ -48,6 +53,7 @@ describe('KDS persistence projection', () => {
       id: EntityId.generate(),
       name: 'Queso extra',
       priceDelta: Money.fromMinorUnits(500, 'MXN'),
+      quantity: 2,
     });
     order.addItem(
       new ProductSnapshot({
@@ -98,6 +104,7 @@ describe('KDS persistence projection', () => {
       specialInstructions: 'solo una rodaja de tomate',
     });
     expect(kitchen[0]!.items[0]!.modifiers[0]!.name).toBe('Queso extra');
+    expect(kitchen[0]!.items[0]!.modifiers[0]!.quantity).toBe(2);
     const routedItems = [...kitchen, ...bar].flatMap((ticket) => ticket.items);
     expect(routedItems).toHaveLength(2);
     expect(routedItems.some((item) => item.productName === 'Sin estación')).toBe(false);

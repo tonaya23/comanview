@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import { dirname, join, resolve } from 'node:path';
 import { EntityId } from '@comanview/domain';
-import { inspectCatalogSchema, validateCatalogBaseline, administrationMigrationDigest, applyAdministrationSchemaMigration, inspectAdministrationSchema,initializeLegacyAdministrationBaseline } from '@comanview/database';
+import { inspectModifierVersionSchema, inspectModifierQuantitySchema, inspectCatalogSchema, validateCatalogBaseline, administrationMigrationDigest, applyAdministrationSchemaMigration, inspectAdministrationSchema,initializeLegacyAdministrationBaseline } from '@comanview/database';
 import { createEncryptedBackupArtifact, verifyEncryptedBackupArtifact } from '../backup/BackupArtifact.js';
 import { performPersonnelSecurityOperation, updateRecoverySecurityFloor, type RecoverySecurityStore } from '../backup/RecoverySecurityStore.js';
 import { verifyFloor, type UpgradeResult } from '../backup/ProductionRecoveryUpgrade.js';
@@ -18,12 +18,12 @@ export async function prepareProductionAdministrationUpgrade(input:{dbPath:strin
     if(!floor.installationEstablished||!floor.binding||!floor.recoveryKey||floor.journal||floor.upgradeJournal||floor.recoveryState==='RECOVERY_REQUIRED')
       throw new Error('ADMINISTRATION_SECURITY_UNAVAILABLE');
     const preflight=new Database(input.dbPath,{readonly:true,fileMustExist:true});
-    let version:14|15|16;
+    let version:14|15|16|17|18;
     try{
-      version=preflight.pragma('user_version',{simple:true})===16?inspectCatalogSchema(preflight):inspectAdministrationSchema(preflight);
-      if(version===16){
+      version=preflight.pragma('user_version',{simple:true})===18?inspectModifierVersionSchema(preflight):preflight.pragma('user_version',{simple:true})===17?inspectModifierQuantitySchema(preflight):preflight.pragma('user_version',{simple:true})===16?inspectCatalogSchema(preflight):inspectAdministrationSchema(preflight);
+      if(version>=16){
         validateCatalogBaseline(preflight);verifyFloor(preflight,floor,floor.binding);
-        if(floor.minimumSchemaVersion!==16||floor.personnel?.initializationState!=='ACTIVE')throw new Error('ADMINISTRATION_SCHEMA_DOWNGRADE');
+        if(floor.minimumSchemaVersion!==version||floor.personnel?.initializationState!=='ACTIVE')throw new Error('ADMINISTRATION_SCHEMA_DOWNGRADE');
         return {state:'CURRENT'};
       }
       verifyFloor(preflight,floor,floor.binding,Boolean(floor.administrationUpgradeJournal));

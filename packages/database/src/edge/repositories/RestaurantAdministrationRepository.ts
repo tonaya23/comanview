@@ -63,13 +63,13 @@ export class RestaurantAdministrationRepository{
       tables:this.db.all<Row>(sql`SELECT id,zone_id zoneId,name,capacity,active,display_order displayOrder,version FROM restaurant_tables
         WHERE tenant_id=${binding.tenantId} AND location_id=${binding.locationId} ORDER BY display_order,id`).map(r=>({...r,active:Boolean(r['active'])}))});
   }
-  execute(input:RestaurantAdministrationCommand,binding:Binding,audit:NewAuditEntry,authorize:(epoch:number)=>void=()=>{},onCommitted?:(result:RestaurantAdministrationResult)=>void):RestaurantAdministrationResult{
+  execute(input:RestaurantAdministrationCommand,binding:Binding,audit:NewAuditEntry,authorize:(epoch:number,sqlite:Database.Database)=>void=()=>{},onCommitted?:(result:RestaurantAdministrationResult)=>void):RestaurantAdministrationResult{
     const command=RestaurantAdministrationCommandSchema.parse(input),digest=createHash('sha256').update(JSON.stringify({binding,command,...(command.kind==='ASSIGN_PRODUCT_STATION'?{actor:audit.actorUserId,device:audit.deviceId,session:audit.sessionId}:{})})).digest('hex');
     let assignment=false;
     const result=this.db.transaction(tx=>{const db=tx as unknown as DB;
       const installation=db.get<{epoch:number}>(sql`SELECT recovery_epoch epoch FROM edge_installations WHERE singleton_key='PRIMARY' AND edge_id=${binding.edgeId}
         AND tenant_id=${binding.tenantId} AND location_id=${binding.locationId}`);if(!installation)throw new Error('ADMINISTRATION_BINDING_MISMATCH');
-      authorize(installation.epoch);
+      authorize(installation.epoch,(this.db as DB & {$client:Database.Database}).$client);
       if(audit.action!=='RESTAURANT_ADMINISTRATION_CHANGED'||audit.commandId!==command.commandId||!audit.actorUserId||!audit.sessionId||!audit.deviceId)
         throw new Error('ADMINISTRATION_AUDIT_REQUIRED');
       const receipt=db.get<{digest:string;result:string;epoch:number}>(sql`SELECT request_digest digest,response_json result,recovery_epoch epoch

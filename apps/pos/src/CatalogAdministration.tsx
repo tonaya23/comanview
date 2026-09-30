@@ -25,6 +25,7 @@ import {
   type ProductSavePlan,
 } from './catalogEditor.js';
 import './catalogAdministration.css';
+import { ProductModifiersEditor } from './ProductModifiersEditor.js';
 
 type Props = {
   edge: EdgeClient;
@@ -67,6 +68,7 @@ export function CatalogAdministration(props: Props) {
     [dependencyError, setDependencyError] = useState(false);
   const [feedback, setFeedback] = useState<Partial<Record<Props['section'], Feedback>>>({});
   const [busy, setBusy] = useState(false);
+  const [modifierDirty,setModifierDirty]=useState(false),[modifierBusy,setModifierBusy]=useState(false);
   const currentFeedback = feedback[section];
   const error = currentFeedback?.error;
   const notice = currentFeedback?.notice;
@@ -103,11 +105,12 @@ export function CatalogAdministration(props: Props) {
   const canTax = permissions.includes('TAX_PROFILE_MANAGE'),
     canStation = permissions.includes('STATION_MANAGE');
   const refs = { categories, tax, admin };
-  const productDirty =
+  const productFieldsDirty =
     !!editor &&
     (!editor.base ||
       JSON.stringify({ ...editor.draft, reason: '' }) !==
         JSON.stringify(productDraft(editor.base)));
+  const productDirty=productFieldsDirty||modifierDirty;
   const categoryDirty =
     !!categoryEditor && (!categoryEditor.base || categoryEditor.name !== categoryEditor.base.name);
   const latest = products.find((p) => p.id === editor?.base?.id);
@@ -128,8 +131,8 @@ export function CatalogAdministration(props: Props) {
     );
   }, [productDirty, categoryDirty, pendingAction, progress, busy]);
   useEffect(() => {
-    props.onBusy(busy);
-  }, [busy]);
+    props.onBusy(busy||modifierBusy);
+  }, [busy,modifierBusy]);
   useEffect(() => {
     if (editor) heading.current?.focus();
   }, [editor?.base?.id, !!editor]);
@@ -271,6 +274,7 @@ export function CatalogAdministration(props: Props) {
     if (editor) setEditor({ ...editor, draft: { ...editor.draft, [key]: value } });
   }
   async function saveProduct() {
+    if(modifierDirty||modifierBusy){setError('Guarda o descarta primero los cambios de opciones y extras.');return;}
     if (!editor || !canManage) return;
     if (
       editor.base?.active &&
@@ -425,7 +429,7 @@ export function CatalogAdministration(props: Props) {
       },
     });
   }
-  const blocked = busy || !!pendingAction;
+  const blocked = busy || !!pendingAction || modifierBusy;
   if (!canView)
     return <InlineAlert tone="warning">No tienes permiso para consultar el catálogo.</InlineAlert>;
   if (!loaded) return <p role="status">Cargando catálogo…</p>;
@@ -866,7 +870,7 @@ export function CatalogAdministration(props: Props) {
                 </p>
               </InlineAlert>
             )}
-            <fieldset disabled={!canManage || blocked || !!plan.current || !!createAttempt.current}>
+            <fieldset disabled={!canManage || blocked || modifierDirty || !!plan.current || !!createAttempt.current}>
               <legend>Información</legend>
               <label>
                 Nombre
@@ -927,7 +931,7 @@ export function CatalogAdministration(props: Props) {
                 />
               </label>
             </fieldset>
-            <fieldset disabled={!canManage || blocked || !!plan.current || !!createAttempt.current}>
+            <fieldset disabled={!canManage || blocked || modifierDirty || !!plan.current || !!createAttempt.current}>
               <legend>Precio e impuestos</legend>
               <label>
                 Precio ({editor.base?.basePrice.currency ?? admin?.operational.currency})
@@ -976,7 +980,7 @@ export function CatalogAdministration(props: Props) {
                 </small>
               )}
             </fieldset>
-            <fieldset disabled={!canManage || blocked || !!plan.current || !!createAttempt.current}>
+            <fieldset disabled={!canManage || blocked || modifierDirty || !!plan.current || !!createAttempt.current}>
               <legend>Preparación</legend>
               <label>
                 Estación de preparación
@@ -1004,14 +1008,8 @@ export function CatalogAdministration(props: Props) {
                 <small>Solo un rol con permiso de estaciones puede cambiar esta asignación.</small>
               )}
             </fieldset>
-            <section aria-label="Opciones y extras">
-              <h4>Opciones y extras</h4>
-              <p>
-                La configuración de tamaños, extras e ingredientes opcionales estará disponible en
-                la siguiente fase.
-              </p>
-            </section>
-            <fieldset disabled={!canManage || blocked || !!plan.current || !!createAttempt.current}>
+            {editor.base?<ProductModifiersEditor key={editor.base.id} edge={edge} productId={editor.base.id} productVersion={editor.base.version??0} refreshToken={props.refreshToken} canManage={canManage} disabled={productFieldsDirty||busy||!!pendingAction||!!plan.current} confirm={props.confirm} onDirty={setModifierDirty} onBusy={setModifierBusy} onSaved={async()=>{await reload();const fresh=refresh.current?.getSnapshot()?.products.find(p=>p.id===editor.base!.id);if(fresh)setEditor({base:fresh,draft:productDraft(fresh)});}}/>:<p>Guarda el producto para configurar sus opciones y extras.</p>}
+            <fieldset disabled={!canManage || blocked || modifierDirty || !!plan.current || !!createAttempt.current}>
               <legend>Estado</legend>
               <label className="catalog-toggle">
                 <input

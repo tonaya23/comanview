@@ -3,6 +3,8 @@ import { CatalogService } from '../application/CatalogService.js';
 import {
   CreateProductRequestSchema,
   SetProductAvailabilityRequestSchema,
+  ModifierAdministrationSchema,
+  ProductModifierConfigurationSchema,
 } from '@comanview/contracts';
 import { PERMISSIONS } from '@comanview/auth';
 import type { AuthGuard } from '../../auth/http/AuthGuard.js';
@@ -17,6 +19,11 @@ export function catalogRoutes(
   commands: CatalogCommandService,
 ): FastifyPluginAsyncZod {
   return async (fastify) => {
+    fastify.get<{Params:{id:string}}>('/products/:id/modifiers',{preHandler:auth.requirePermission(PERMISSIONS.CATALOG_VIEW),schema:{response:{200:ProductModifierConfigurationSchema}}},request=>commands.productModifiers(request.params.id));
+    fastify.get('/modifiers', {
+      preHandler: auth.requirePermission(PERMISSIONS.CATALOG_VIEW),
+      schema: { response: { 200: ModifierAdministrationSchema } },
+    }, () => commands.modifiers());
     fastify.get('/state',{preHandler:auth.requirePermission(PERMISSIONS.CATALOG_VIEW),schema:{response:{200:CatalogStateSchema}}},()=>commands.state());
     fastify.post('/commands',{preHandler:auth.requirePermission(PERMISSIONS.CATALOG_MANAGE),schema:{body:CatalogCommandSchema}},
       request=>commands.execute(request.body,actorFrom(request)));

@@ -22,6 +22,10 @@ import { insertPrintJobs, type NewPrintJob } from './PrintJobRepository.js';
 import { insertAuditEntry, type NewAuditEntry } from './AuditRepository.js';
 
 type DB = BetterSQLite3Database<typeof schema>;
+function modifierQuantities(db: DB, itemId: string): Map<string, number> {
+  if (!db.get(sql`SELECT 1 FROM pragma_table_info('order_item_modifiers') WHERE name='quantity'`)) return new Map();
+  return new Map(db.all<{modifierOptionId:string; quantity:number}>(sql`SELECT modifier_option_id AS modifierOptionId,quantity FROM order_item_modifiers WHERE order_item_id=${itemId}`).map(row=>[row.modifierOptionId,row.quantity]));
+}
 
 type FiscalSnapshot = { id: string; policyVersion: 0 | 1; profileId: string | null;
   profileRevision: number | null; rate: number; mode: string; sendStatus: string };
@@ -292,8 +296,9 @@ export class OrderRepository {
           .from(schema.orderItemModifiers)
           .where(eq(schema.orderItemModifiers.orderItemId, item.id.toString()))
           .all();
+        const quantities = modifierQuantities(db,item.id.toString());
         const persistedConfiguration = persistedModifiers
-          .map((modifier) => ({ ...modifier }))
+          .map((modifier) => ({ ...modifier, quantity: quantities.get(modifier.modifierOptionId) ?? 1 }))
           .sort((left, right) => left.modifierOptionId.localeCompare(right.modifierOptionId));
         const currentConfiguration = [...snap.modifiers]
           .map((modifier) => ({
@@ -301,6 +306,7 @@ export class OrderRepository {
             name: modifier.name,
             priceDeltaAmount: modifier.priceDelta.amount,
             priceDeltaCurrency: modifier.priceDelta.currency,
+            quantity: modifier.quantity,
           }))
           .sort((left, right) => left.modifierOptionId.localeCompare(right.modifierOptionId));
         const configurationChanged =
@@ -321,6 +327,9 @@ export class OrderRepository {
                 priceDeltaCurrency: mod.priceDelta.currency,
               })
               .run();
+            if (db.get(sql`SELECT 1 FROM pragma_table_info('order_item_modifiers') WHERE name='quantity'`))
+              db.run(sql`UPDATE order_item_modifiers SET quantity=${mod.quantity} WHERE order_item_id=${item.id.toString()} AND modifier_option_id=${mod.id.toString()}`);
+            else if(mod.quantity!==1)throw new Error('MODIFIER_SCHEMA_REQUIRED');
           }
         }
       }
@@ -444,12 +453,14 @@ export class OrderRepository {
         .where(eq(schema.orderItemModifiers.orderItemId, itemRow.id))
         .all();
 
+      const quantities = modifierQuantities(this.db,itemRow.id);
       const modifiers: ModifierSnapshot[] = modRows.map(
         (m) =>
           new ModifierSnapshot({
             id: EntityId.fromString(m.modifierOptionId),
             name: m.name,
             priceDelta: Money.fromMinorUnits(m.priceDeltaAmount, m.priceDeltaCurrency),
+            quantity: quantities.get(m.modifierOptionId) ?? 1,
           }),
       );
 

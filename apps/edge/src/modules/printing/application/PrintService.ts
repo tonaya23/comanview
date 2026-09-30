@@ -222,6 +222,7 @@ export class PrintService {
             modifierOptionId: modifier.id.toString(),
             name: modifier.name,
             priceDelta: modifier.priceDelta.toJSON(),
+            quantity: modifier.quantity,
           })),
           specialInstructions: item.specialInstructions,
           stationId: item.snapshot.stationId?.toString() ?? null,

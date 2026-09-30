@@ -62,6 +62,20 @@ const target = {
   configuration: {},
 } satisfies PrintTarget;
 
+describe('captured modifier quantities', () => {
+  it('renders quantity in debug and ESC/POS without consulting catalog', () => {
+    const quantityJob: PrintJob = { ...job, payload: { ...job.payload,
+      items: job.payload.items.map(item => ({ ...item, modifiers: item.modifiers.map(modifier => ({
+        ...modifier, quantity: 2,
+      })) })),
+    } };
+    expect(renderDebugTicket(quantityJob)).toContain('Queso ×2');
+    // ESC/POS uses its existing character transliteration for the printer charset.
+    expect(new TextDecoder().decode(renderEscPosTicket(quantityJob))).toMatch(/Queso .2/);
+    expect(renderDebugTicket(job)).not.toContain('×1');
+  });
+});
+
 describe('captured fiscal totals', () => {
   const fiscalJob: PrintJob = { ...job, jobType: 'PRECHECK', payload: {
     kind: 'PRECHECK', orderId: 'o', orderNumber: 'A-1', orderType: 'COUNTER', tableIds: [],

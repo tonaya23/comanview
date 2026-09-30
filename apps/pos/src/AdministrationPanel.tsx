@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useState } from 'react';
 const CatalogAdministration = lazy(async () => ({
   default: (await import('./CatalogAdministration.js')).CatalogAdministration,
 }));
+const ModifierAdministration=lazy(async()=>({default:(await import('./ModifierAdministration.js')).ModifierAdministration}));
 import {
   Button,
   InlineAlert,
@@ -26,6 +27,9 @@ export {
 export function AdministrationPanel(props: AdministrationProps) {
   const state = useAdministrationController(props);
   const [catalogBusy, setCatalogBusy] = useState(false);
+  const [modifierBusy,setModifierBusy]=useState(false),[modifierVisited,setModifierVisited]=useState(false);
+  const modifierActive=state.activeSection==='modifiers';
+  useEffect(()=>{if(modifierActive)setModifierVisited(true);},[modifierActive]);
   const [, setCatalogDirty] = useState({ product: false, category: false });
   const [catalogVisited, setCatalogVisited] = useState(false);
   const catalogActive = state.activeSection === 'products' || state.activeSection === 'categories';
@@ -77,17 +81,17 @@ export function AdministrationPanel(props: AdministrationProps) {
     <AdministrationShell
       section={activeSection}
       permissions={permissions}
-      busy={busy || catalogBusy}
+      busy={busy || catalogBusy || modifierBusy}
       dirtySections={[
         ...new Set(
           drafts.pendingKeys.flatMap((key) => (drafts.get(key) ? [drafts.get(key)!.section] : [])),
         ),
       ]}
       onNavigate={(target) => {
-        if (!catalogBusy) void navigate(target);
+        if (!catalogBusy && !modifierBusy) void navigate(target);
       }}
       onClose={() => {
-        if (!catalogBusy) void close();
+        if (!catalogBusy && !modifierBusy) void close();
       }}
     >
       <PrerequisiteSummary
@@ -97,11 +101,11 @@ export function AdministrationPanel(props: AdministrationProps) {
         readiness={state.readiness}
         onReadiness={() => void state.consultReadiness()}
         onNavigate={(target) => {
-          if (!catalogBusy) void navigate(target);
+          if (!catalogBusy && !modifierBusy) void navigate(target);
         }}
       />
       <div
-        hidden={catalogActive}
+        hidden={catalogActive || modifierActive}
         onChangeCapture={(e) => {
           const key = (e.target as HTMLElement).closest('[data-draft]')?.getAttribute('data-draft');
           if (key) markDirty(key);
@@ -339,6 +343,10 @@ export function AdministrationPanel(props: AdministrationProps) {
           </Suspense>
         </div>
       )}
+      {modifierVisited&&<div hidden={!modifierActive}><Suspense fallback={<p role="status">Cargando modificadores…</p>}><ModifierAdministration edge={props.edge} permissions={permissions} visible={modifierActive} refreshToken={props.catalogRefreshToken} confirm={confirm} onBusy={setModifierBusy} onDirty={dirty=>{
+        drafts.observe('catalog-modifiers','modifiers',dirty,0);
+        if(dirty)drafts.mark('catalog-modifiers');else drafts.saved('catalog-modifiers');
+      }}/></Suspense></div>}
       {dialogs}
       {pinRequest && (
         <PersonnelPinDialog

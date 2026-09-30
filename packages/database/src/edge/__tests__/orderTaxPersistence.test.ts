@@ -4,14 +4,14 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { EntityId, Order, ProductSnapshot } from '@comanview/domain';
+import { EntityId, Order, ProductSnapshot, ModifierSnapshot } from '@comanview/domain';
 import { Money } from '@comanview/money';
 import * as schema from '../schema.js';
 import { OrderRepository } from '../repositories/OrderRepository.js';
 import { CatalogRepository } from '../repositories/CatalogRepository.js';
 
 const directory = fileURLToPath(new URL('../../../../../migrations/edge/', import.meta.url));
-function fixture(version: 14 | 15) {
+function fixture(version: 14 | 15 | 16 | 17) {
   const db = new Database(':memory:');
   for (const name of readdirSync(directory).filter(f => /^\d{4}_.*\.sql$/.test(f) && Number(f.slice(0, 4)) <= version).sort())
     db.exec(readFileSync(join(directory, name), 'utf8'));
@@ -44,6 +44,36 @@ function rehydrateWith(o: Order, snapshot: ProductSnapshot): Order {
     rounds: [], payments: [], events: [], createdAt: o.createdAt });
 }
 describe('fiscal snapshot persistence', () => {
+  it('migrates legacy modifier rows to one and roundtrips explicit quantity without changing unit price', () => {
+    const { db, repo } = fixture(16);
+    try {
+      const original = order(0);
+      const snapshot = (quantity: number) => new ProductSnapshot({
+        productId: original.items[0]!.snapshot.productId, productName: 'Quantity meal',
+        basePrice: Money.fromMinorUnits(10000, 'MXN'), taxRateBasisPoints: 1600,
+        taxCalculationMode: 'TAX_ADDED', stationId: null,
+        modifiers: [new ModifierSnapshot({ id: modifierId, name: 'Extra',
+          priceDelta: Money.fromMinorUnits(250, 'MXN'), quantity })],
+      });
+      const modifierId = EntityId.generate();
+      original.updateDraftItemConfiguration(original.items[0]!.id, snapshot(1), null);
+      repo.saveOrder(original, false);
+      db.exec(readFileSync(join(directory, '0017_modifier_quantity.sql'), 'utf8'));
+      expect(db.prepare('SELECT quantity FROM order_item_modifiers').get()).toEqual({ quantity: 1 });
+      const loaded = repo.getOrderById(original.id)!;
+      expect(loaded.items[0]!.snapshot.modifiers[0]!.quantity).toBe(1);
+      loaded.updateDraftItemConfiguration(loaded.items[0]!.id, snapshot(3), null);
+      repo.saveOrder(loaded, false);
+      const result = repo.getOrderById(original.id)!;
+      expect(result.items[0]!.snapshot.modifiers[0]!.quantity).toBe(3);
+      expect(result.items[0]!.snapshot.modifiers[0]!.priceDelta.amount).toBe(250);
+      expect(result.getTotal().amount).toBe(10750);
+      result.sendDraftItems(); repo.saveOrder(result, false);
+      expect(repo.getOrderById(original.id)!.getTotal().amount).toBe(10750);
+      expect(() => db.prepare('UPDATE order_item_modifiers SET quantity=0').run()).toThrow();
+      expect(() => db.prepare('UPDATE order_item_modifiers SET quantity=1.5').run()).toThrow();
+    } finally { db.close(); }
+  });
   it('captures the current immutable TaxProfile revision without mutating existing Products or Items', () => {
     const { db, repo } = fixture(15);
     try {

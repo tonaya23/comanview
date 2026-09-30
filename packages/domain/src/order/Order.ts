@@ -419,6 +419,7 @@ export class Order {
       modifierOptionIds: [...snapshot.modifiers]
         .map((modifier) => modifier.id)
         .sort((left, right) => left.toString().localeCompare(right.toString())),
+      selectedModifiers: snapshot.modifiers.map(modifier=>({modifierOptionId:modifier.id,quantity:modifier.quantity})),
       specialInstructions: normalizedInstructions,
     };
     this.emit(event);

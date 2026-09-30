@@ -42,6 +42,7 @@ export function mapOrderToResponse(order: Order): OrderResponse {
           modifierOptionId: modifier.id.toString(),
           name: modifier.name,
           priceDelta: modifier.priceDelta.toJSON(),
+          quantity: modifier.quantity,
         })),
       },
     })),

@@ -87,7 +87,7 @@ export function KitchenTicket({
             </h3>
             {item.modifiers.map((modifier) => (
               <div key={modifier.modifierOptionId} className="modifier">
-                + {modifier.name}
+                + {modifier.name}{(modifier.quantity??1)>1?` ×${modifier.quantity}`:''}
               </div>
             ))}
             {item.specialInstructions && (

@@ -84,7 +84,9 @@ export class Product {
    *
    * @param selectedOptions Map of ModifierGroup ID -> Array of selected ModifierOption IDs
    */
-  public createSnapshot(selectedOptions: Map<string, EntityId[]>, taxPolicyVersion: 0 | 1 = 0): ProductSnapshot {
+  public createSnapshot(input: Map<string, Array<EntityId | { modifierOptionId: EntityId; quantity: number }>>, taxPolicyVersion: 0 | 1 = 0): ProductSnapshot {
+    const selectedOptions = new Map([...input].map(([group, options]) => [group, options.map(option =>
+      option instanceof EntityId ? { modifierOptionId: option, quantity: 1 } : option)]));
     if (!this.active) {
       throw new ProductInactiveError(this.id.toString());
     }
@@ -106,11 +108,13 @@ export class Product {
           `ModifierGroup ${groupId} is not assigned to this Product.`,
         );
       }
-      if (new Set(optionIds.map((id) => id.toString())).size !== optionIds.length) {
+      if (new Set(optionIds.map((entry) => entry.modifierOptionId.toString())).size !== optionIds.length) {
         throw new InvalidModifierSelectionError(
           `ModifierGroup ${groupId} contains duplicate selections.`,
         );
       }
+      if(optionIds.some(entry=>!Number.isSafeInteger(entry.quantity)||entry.quantity<1))
+        throw new InvalidModifierSelectionError('MODIFIER_QUANTITY_INVALID');
     }
 
     for (const pmg of this.modifierGroups) {
@@ -124,18 +128,19 @@ export class Product {
 
       const selectionsForGroup = selectedOptions.get(group.id.toString()) || [];
 
-      if (selectionsForGroup.length < group.minSelections) {
+      const selectedCount = selectionsForGroup.reduce((sum, entry) => sum + BigInt(entry.quantity), 0n);
+      if (selectedCount < BigInt(group.minSelections)) {
         throw new InvalidModifierSelectionError(
           `Group ${group.name} requires at least ${group.minSelections} selections.`,
         );
       }
-      if (selectionsForGroup.length > group.maxSelections) {
+      if (selectedCount > BigInt(group.maxSelections)) {
         throw new InvalidModifierSelectionError(
           `Group ${group.name} allows at most ${group.maxSelections} selections.`,
         );
       }
 
-      for (const optionId of selectionsForGroup) {
+      for (const { modifierOptionId: optionId, quantity } of selectionsForGroup) {
         const option = group.getOption(optionId);
         if (!option) {
           throw new InvalidModifierSelectionError(
@@ -155,6 +160,7 @@ export class Product {
             id: option.id,
             name: option.name,
             priceDelta: finalPrice,
+            quantity,
           }),
         );
       }

@@ -6,7 +6,7 @@ import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import * as edgeSchema from '@comanview/database/edge';
 import { EntityId } from '@comanview/domain';
-import { insertAuditEntry,inspectCatalogSchema,applyCatalogSchemaMigration,validateCatalogBaseline,inspectAdministrationSchema,applyAdministrationSchemaMigration,initializeLegacyAdministrationBaseline,type BackupRepository } from '@comanview/database';
+import { insertAuditEntry,inspectModifierVersionSchema,applyModifierVersionSchemaMigration,inspectModifierQuantitySchema,applyModifierQuantitySchemaMigration,inspectCatalogSchema,applyCatalogSchemaMigration,validateCatalogBaseline,inspectAdministrationSchema,applyAdministrationSchemaMigration,initializeLegacyAdministrationBaseline,type BackupRepository } from '@comanview/database';
 import type { RecoveryAuthorizationEnvelope } from '@comanview/contracts';
 import { verifyRecoveryAuthorization } from '@comanview/licensing';
 import { AppError } from '../../app/errorHandler.js';
@@ -171,10 +171,12 @@ export async function completePendingRecoveryAtStartup(input:{dbPath:string;stor
       const tx=sqlite.transaction(()=>{
         // The already authenticated staging image is the safety snapshot. A legacy
         // restore gets schema only, NEVER the production personnel baseline.
-        if(sqlite.pragma('user_version',{simple:true})!==16&&inspectAdministrationSchema(sqlite)===14)applyAdministrationSchemaMigration(sqlite);
+        if(Number(sqlite.pragma('user_version',{simple:true}))<16&&inspectAdministrationSchema(sqlite)===14)applyAdministrationSchemaMigration(sqlite);
         // The authenticated restore image and validation receipt authorize this
         // schema transition inside the existing restore transaction, never NORMAL at 15.
-        applyCatalogSchemaMigration(sqlite);
+        if(Number(sqlite.pragma('user_version',{simple:true}))<=16)applyCatalogSchemaMigration(sqlite);
+        if(Number(sqlite.pragma('user_version',{simple:true}))<=17)applyModifierQuantitySchemaMigration(sqlite);
+        applyModifierVersionSchemaMigration(sqlite);
         const changed=sqlite.prepare(`UPDATE edge_installations SET tenant_id=?, location_id=?, edge_id=?, recovery_epoch=?
           WHERE singleton_key='PRIMARY'`).run(journal.targetBinding.tenantId,journal.targetBinding.locationId,
             journal.targetBinding.edgeId,journal.nextRecoveryEpoch);
@@ -232,7 +234,7 @@ export async function completePendingRecoveryAtStartup(input:{dbPath:string;stor
     }finally{sqlite.close();}
     const completedAt=new Date().toISOString();
     floor=updateRecoverySecurityFloor(floor,{recoveryEpoch:Math.max(floor.recoveryEpoch,journal.nextRecoveryEpoch),
-      minimumSchemaVersion:16,recoveryState:'NORMAL',journal:null,pendingRecoveryAuthorizationAck:journal.authorizationId?{
+      minimumSchemaVersion:18,recoveryState:'NORMAL',journal:null,pendingRecoveryAuthorizationAck:journal.authorizationId?{
         authorizationId:journal.authorizationId,commandId:EntityId.generate().toString(),consumedAt:completedAt}:floor.pendingRecoveryAuthorizationAck,
       pendingRecoveryAudit:{recoveryId:journal.recoveryId,commandId:journal.commandId,backupId:journal.backupId,startedAt:journal.startedAt,
         completedAt,enteredFromRecoveryRequired:journal.enteredFromRecoveryRequired}});
@@ -274,7 +276,9 @@ async function assertSnapshot(path:string,expected:string){
 function assertIntegrityAndSchema(db:Database.Database){
   const integrity=db.pragma('integrity_check') as Array<{integrity_check:string}>;
   if(integrity.length!==1||integrity[0]?.integrity_check!=='ok')throw new Error('RECOVERY_BACKUP_INVALID');
-  if(db.pragma('user_version',{simple:true})===16){inspectCatalogSchema(db);validateCatalogBaseline(db);}
+  if(db.pragma('user_version',{simple:true})===18){inspectModifierVersionSchema(db);validateCatalogBaseline(db);}
+  else if(db.pragma('user_version',{simple:true})===17){inspectModifierQuantitySchema(db);validateCatalogBaseline(db);}
+  else if(db.pragma('user_version',{simple:true})===16){inspectCatalogSchema(db);validateCatalogBaseline(db);}
   else inspectAdministrationSchema(db);
 }
 function validationReceipt(j:RecoveryJournal){return {recoveryId:j.recoveryId,backupId:j.backupId,

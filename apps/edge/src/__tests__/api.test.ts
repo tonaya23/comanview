@@ -1,13 +1,87 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { buildApp } from '../index.js';
 import type { FastifyInstance } from 'fastify';
-import { readFileSync } from 'fs';
+import { readFileSync, readdirSync, mkdtempSync, rmSync } from 'fs';
+import Database from 'better-sqlite3';
+import { randomUUID } from 'node:crypto';
+import { MemoryRecoverySecurityStore, initializeRecoverySecurityFloor } from '../modules/backup/RecoverySecurityStore.js';
+import { prepareProductionAdministrationUpgrade } from '../modules/personnel/ProductionAdministrationUpgrade.js';
+import { prepareProductionCatalogUpgrade } from '../modules/catalog/application/ProductionCatalogUpgrade.js';
 import path from 'path';
 import os from 'os';
+
+it('B3a quantity HTTP compatibility, retry, validation atomicity and restart on schema17', async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'cv-quantity-api-'));
+  const dbPath = path.join(root, 'edge.db');
+  let app: FastifyInstance | undefined;
+  const productId = randomUUID(), groupId = randomUUID(), optionId = randomUUID(), taxId = randomUUID();
+  const binding = {edgeId:randomUUID(),tenantId:'01991a00-0000-7000-8000-000000000301',locationId:'01991a00-0000-7000-8000-000000000302'};
+  const credentialId=randomUUID(), store=new MemoryRecoverySecurityStore();
+  const input={dbPath,store,edgeSecretStore:{load:async()=>({active:{credentialId,credential:'quantity-fixture-only'},pending:null}),save:async()=>{},hasPersistedState:async()=>true}};
+  try {
+    let db = new Database(dbPath);
+    try {
+      const directory = path.resolve(__dirname, '../../../../migrations/edge');
+      for (const file of readdirSync(directory).filter(name => /^\d{4}_.*\.sql$/.test(name) && Number(name.slice(0, 4)) <= 14).sort())
+        db.exec(readFileSync(path.join(directory, file), 'utf8'));
+      db.prepare("INSERT INTO edge_installations(singleton_key,edge_id,tenant_id,location_id,credential_id,created_at,provisioning_state) VALUES('PRIMARY',?,?,?,?,1,'ACTIVE')")
+        .run(binding.edgeId,binding.tenantId,binding.locationId,credentialId);
+      await initializeRecoverySecurityFloor({store,sqlite:db,binding});
+      db.close();
+      expect(await prepareProductionAdministrationUpgrade(input)).toEqual({state:'UPGRADED'});
+      expect(await prepareProductionCatalogUpgrade(input)).toEqual({state:'UPGRADED'});
+      expect(await prepareProductionCatalogUpgrade({...input,targetSchema:17})).toEqual({state:'UPGRADED'});
+      db=new Database(dbPath);
+      db.prepare(`UPDATE operational_configuration SET currency='MXN',fiscal_policy_version=1 WHERE location_id=? AND tenant_id=?`)
+        .run('01991a00-0000-7000-8000-000000000302','01991a00-0000-7000-8000-000000000301');
+      db.prepare("INSERT INTO tax_profiles(id,name,rate_basis_points,calculation_mode) VALUES(?,'Tax',0,'TAX_INCLUDED')").run(taxId);
+      db.prepare("INSERT INTO tax_profile_revisions(tax_profile_id,revision,rate_basis_points,calculation_mode) VALUES(?,1,0,'TAX_INCLUDED')").run(taxId);
+      db.prepare(`INSERT INTO products(id,category_id,name,tax_profile_id,base_price_amount,base_price_currency)
+        SELECT ?,id,'Quantity meal',?,10000,'MXN' FROM categories WHERE system_key='UNCATEGORIZED'`).run(productId,taxId);
+      db.prepare("INSERT INTO modifier_groups(id,name,min_selections,max_selections) VALUES(?,'Extras',0,3)").run(groupId);
+      db.prepare("INSERT INTO modifier_options(id,group_id,name,price_delta_amount,price_delta_currency) VALUES(?,?,'Cheese',250,'MXN')").run(optionId,groupId);
+      db.prepare('INSERT INTO product_modifier_groups(product_id,modifier_group_id) VALUES(?,?)').run(productId,groupId);
+    } finally { if(db.open)db.close(); }
+    app = await buildApp(dbPath, { authMode: 'test-bypass', recoverySecurityStore:store });
+    const created = await app.inject({method:'POST',url:'/orders',payload:{orderType:'COUNTER',channel:'POS',currency:'MXN'}});
+    expect(created.statusCode,created.body).toBe(201);
+    const orderId = created.json().id;
+    let version = created.json().version;
+    for (const selection of [{selectedModifierIds:[optionId]}, {selectedModifiers:[{modifierOptionId:optionId,quantity:1}]},
+      {selectedModifiers:[{modifierOptionId:optionId,quantity:2}]}]) {
+      const response = await app.inject({method:'POST',url:`/orders/${orderId}/items`,payload:{commandId:randomUUID(),expectedVersion:version,productId,...selection}});
+      expect(response.statusCode,response.body).toBe(200);
+      version=response.json().version;
+    }
+    const before = (await app.inject({method:'GET',url:`/orders/${orderId}`})).json();
+    expect(before.items.map((item:{productSnapshot:{selectedModifiers:Array<{quantity:number}>}})=>item.productSnapshot.selectedModifiers[0]!.quantity).sort()).toEqual([1,1,2]);
+    const item = before.items.find((item:{productSnapshot:{selectedModifiers:Array<{quantity:number}>}})=>item.productSnapshot.selectedModifiers[0]!.quantity===2);
+    for (const selection of [{selectedModifierIds:[optionId,optionId]}, ...[0,-1,1.5,4].map(quantity=>({selectedModifiers:[{modifierOptionId:optionId,quantity}]}))]) {
+      const rejected=await app.inject({method:'POST',url:`/orders/${orderId}/items`,payload:{commandId:randomUUID(),expectedVersion:version,productId,...selection}});
+      expect(rejected.statusCode).toBeGreaterThanOrEqual(400);
+      expect((await app.inject({method:'GET',url:`/orders/${orderId}`})).json()).toEqual(before);
+    }
+    const editUrl=`/orders/${orderId}/items/${item.id}/configuration`;
+    const legacy=await app.inject({method:'PATCH',url:editUrl,payload:{commandId:randomUUID(),expectedVersion:version,selectedModifierIds:[optionId],specialInstructions:null}});
+    expect(legacy.statusCode).toBe(409);
+    expect(legacy.json().error).toBe('CLIENT_CAPABILITY_REQUIRED');
+    const edit={commandId:randomUUID(),expectedVersion:version,selectedModifiers:[{modifierOptionId:optionId,quantity:2}],specialInstructions:'keep two'};
+    const updated=await app.inject({method:'PATCH',url:editUrl,payload:edit});
+    expect(updated.statusCode,updated.body).toBe(200);
+    const retry=await app.inject({method:'PATCH',url:editUrl,payload:edit});
+    expect(retry.statusCode,retry.body).toBe(200);
+    expect(retry.json()).toEqual(updated.json());
+    await app.close(); app=undefined;
+    app=await buildApp(dbPath,{authMode:'test-bypass',recoverySecurityStore:store});
+    expect((await app.inject({method:'GET',url:`/orders/${orderId}`})).json()).toEqual(updated.json());
+  } finally { await app?.close(); rmSync(root,{recursive:true,force:true}); }
+});
 
 describe('Edge API Integration Tests', () => {
   let app: FastifyInstance;
   let tmpPath: string;
+  // Orders use fixed test data, not the Catalog writes rejected since B1.
+  const productId = '01991a00-0000-7000-8000-000000000801';
 
   beforeAll(async () => {
     tmpPath = path.join(os.tmpdir(), `comanview-api-test-${Date.now()}.db`);
@@ -55,6 +129,10 @@ describe('Edge API Integration Tests', () => {
     `);
     sqlite.close();
 
+    const fixtures = new Database(tmpPath);
+    fixtures.prepare(`INSERT INTO products(id,name,description,product_type,tax_profile_id,base_price_amount,base_price_currency)
+      VALUES(?, 'Test Burger', 'Delicious burger', 'STANDARD', 'f47ac10b-58cc-4372-a567-0e02b2c3d479', 1500, 'MXN')`).run(productId);
+    fixtures.close();
     app = await buildApp(tmpPath, { authMode: 'test-bypass' });
     await app.ready();
   });
@@ -91,8 +169,6 @@ describe('Edge API Integration Tests', () => {
     expect(body.database.status).toBe('OK');
   });
 
-  let productId: string;
-
   it('empty-counter discard enforces emptiness and OCC on the authoritative database',async()=>{
     const create=await app.inject({method:'POST',url:'/orders',payload:{orderType:'COUNTER',channel:'POS',currency:'MXN'}});
     expect(create.statusCode).toBe(201);
@@ -108,11 +184,8 @@ describe('Edge API Integration Tests', () => {
     const rejected=await app.inject({method:'POST',url:`/orders/${table.json().id}/cancel`,payload:{expectedVersion:table.json().version,emptyCounterOnly:true}});
     expect(rejected.statusCode).toBe(409);expect(rejected.json().error).toBe('ORDER_EMPTY_CANCEL_NOT_ALLOWED');
     await app.inject({method:'POST',url:`/orders/${table.json().id}/cancel`,payload:{expectedVersion:table.json().version}});
-    const product=await app.inject({method:'POST',url:'/catalog/products',payload:{name:'Discard fixture',description:'',productType:'STANDARD',
-      taxProfileId:'f47ac10b-58cc-4372-a567-0e02b2c3d479',taxProfileRevision:1,basePrice:{amount:100,currency:'MXN'}}});
-    expect(product.statusCode).toBe(201);
     const another=await app.inject({method:'POST',url:'/orders',payload:{orderType:'COUNTER',channel:'POS',currency:'MXN'}});
-    const added=await app.inject({method:'POST',url:`/orders/${another.json().id}/items`,payload:{commandId:'discard-fixture-item',expectedVersion:another.json().version,productId:product.json().id,selectedModifiers:[]}});
+    const added=await app.inject({method:'POST',url:`/orders/${another.json().id}/items`,payload:{commandId:'discard-fixture-item',expectedVersion:another.json().version,productId,selectedModifiers:[]}});
     expect(added.statusCode).toBe(200);
     const nonempty=await app.inject({method:'POST',url:`/orders/${another.json().id}/cancel`,payload:{expectedVersion:added.json().version,emptyCounterOnly:true}});
     expect(nonempty.statusCode).toBe(409);expect(nonempty.json().error).toBe('ORDER_EMPTY_CANCEL_NOT_ALLOWED');
@@ -120,7 +193,7 @@ describe('Edge API Integration Tests', () => {
     expect(preserved.status).toBe('OPEN');expect(preserved.items).toHaveLength(1);
   });
 
-  it('2. POST /catalog/products', async () => {
+  it('2. POST /catalog/products rejects legacy writes explicitly', async () => {
     const response = await app.inject({
       method: 'POST',
       url: '/catalog/products',
@@ -138,10 +211,8 @@ describe('Edge API Integration Tests', () => {
     });
 
     const body = response.json();
-    if (response.statusCode !== 201) console.error('TEST 2 FAILED', response.statusCode, body);
-    expect(response.statusCode).toBe(201);
-    expect(body.name).toBe('Test Burger');
-    productId = body.id;
+    expect(response.statusCode).toBe(409);
+    expect(body.error).toBe('CLIENT_CAPABILITY_REQUIRED');
   });
 
   it('3. GET /catalog/products/:id', async () => {
@@ -156,7 +227,7 @@ describe('Edge API Integration Tests', () => {
     expect(body.name).toBe('Test Burger');
   });
 
-  it('4. PATCH /catalog/products/:id/availability (mark unavailable)', async () => {
+  it('4. PATCH /catalog/products/:id/availability rejects legacy without mutation', async () => {
     const response = await app.inject({
       method: 'PATCH',
       url: `/catalog/products/${productId}/availability`,
@@ -165,16 +236,11 @@ describe('Edge API Integration Tests', () => {
       },
     });
 
-    expect(response.statusCode).toBe(200);
+    expect(response.statusCode).toBe(409);
     const body = response.json();
-    expect(body.available).toBe(false);
+    expect(body.error).toBe('CLIENT_CAPABILITY_REQUIRED');
 
-    // Restore availability for subsequent tests
-    const restoreResp = await app.inject({
-      method: 'PATCH',
-      url: `/catalog/products/${productId}/availability`,
-      payload: { available: true },
-    });
+    const restoreResp = await app.inject({ method: 'GET', url: `/catalog/products/${productId}` });
     expect(restoreResp.statusCode).toBe(200);
     expect(restoreResp.json().available).toBe(true);
   });
@@ -749,11 +815,12 @@ describe('Edge API Integration Tests', () => {
     expect(added.json().subtotal).toEqual({ amount: 14900, currency: 'MXN' });
     expect(added.json().items[0].specialInstructions).toBe('salsa aparte');
     expect(added.json().items[0].productSnapshot.selectedModifiers).toEqual([
-      { modifierOptionId: mediumId, name: 'Medio', priceDelta: { amount: 0, currency: 'MXN' } },
+      { modifierOptionId: mediumId, name: 'Medio', priceDelta: { amount: 0, currency: 'MXN' }, quantity: 1 },
       {
         modifierOptionId: cheeseId,
         name: 'Queso',
         priceDelta: { amount: 2000, currency: 'MXN' },
+        quantity: 1,
       },
     ]);
 
@@ -894,11 +961,13 @@ describe('Edge API Integration Tests', () => {
         modifierOptionId: threeQuartersId,
         name: '3/4',
         priceDelta: { amount: 0, currency: 'MXN' },
+        quantity: 1,
       },
       {
         modifierOptionId: baconId,
         name: 'Tocino',
         priceDelta: { amount: 2500, currency: 'MXN' },
+        quantity: 1,
       },
     ]);
     expect(configurationEdited.json().items[0].specialInstructions).toBe('nueva nota integral');

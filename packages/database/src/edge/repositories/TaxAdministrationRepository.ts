@@ -28,7 +28,7 @@ export class TaxAdministrationRepository {
       products:this.db.all(sql`SELECT id,name,tax_profile_id taxProfileId,tax_profile_revision taxProfileRevision,version FROM products ORDER BY name,id`)});
   }
 
-  execute(input: TaxAdministrationCommand, binding: Binding, audit: NewAuditEntry, authorize:(epoch:number)=>void=()=>{},onCommitted?:(result:TaxAdministrationResult)=>void): TaxAdministrationResult {
+  execute(input: TaxAdministrationCommand, binding: Binding, audit: NewAuditEntry, authorize:(epoch:number,sqlite:Database.Database)=>void=()=>{},onCommitted?:(result:TaxAdministrationResult)=>void): TaxAdministrationResult {
     const command = TaxAdministrationCommandSchema.parse(input);
     const digest = createHash('sha256').update(JSON.stringify({ binding, command, ...(command.kind==='ASSIGN_PRODUCT_TAX_PROFILE'?{actor:audit.actorUserId,device:audit.deviceId,session:audit.sessionId}:{}) })).digest('hex');
     let assignment=false;
@@ -37,7 +37,7 @@ export class TaxAdministrationRepository {
       const installation = db.get<{ epoch: number }>(sql`SELECT recovery_epoch AS epoch FROM edge_installations
         WHERE singleton_key='PRIMARY' AND edge_id=${binding.edgeId} AND tenant_id=${binding.tenantId} AND location_id=${binding.locationId}`);
       if (!installation) throw new Error('ADMINISTRATION_BINDING_MISMATCH');
-      authorize(installation.epoch);
+      authorize(installation.epoch,(this.db as DB & {$client:Database.Database}).$client);
       if (audit.tenantId !== binding.tenantId || audit.locationId !== binding.locationId || !audit.actorUserId ||
         !audit.sessionId || !audit.deviceId || audit.action !== 'TAX_CONFIGURATION_CHANGED' || audit.commandId !== command.commandId)
         throw new Error('ADMINISTRATION_AUDIT_REQUIRED');

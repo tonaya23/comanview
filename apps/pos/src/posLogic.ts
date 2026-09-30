@@ -113,12 +113,13 @@ export function getEffectiveModifierPrice(
 export function getConfiguredProductTotal(
   product: ProductResponse,
   selectedModifierIds: string[],
+  quantities: Readonly<Record<string,number>> = {},
 ): number {
   return getActiveModifierGroups(product).reduce(
     (total, group) =>
       total +
       selectedModifierIds.reduce(
-        (groupTotal, optionId) => groupTotal + getEffectiveModifierPrice(group, optionId),
+        (groupTotal, optionId) => groupTotal + getEffectiveModifierPrice(group, optionId) * (quantities[optionId] ?? 1),
         0,
       ),
     product.basePrice.amount,
@@ -128,10 +129,11 @@ export function getConfiguredProductTotal(
 export function getUnsatisfiedModifierGroups(
   product: ProductResponse,
   selectedModifierIds: string[],
+  quantities: Readonly<Record<string,number>> = {},
 ): ProductModifierGroupResponse[] {
   return getActiveModifierGroups(product).filter(({ modifierGroup }) => {
     const optionIds = new Set(modifierGroup.options.map(({ id }) => id));
-    const selectedCount = selectedModifierIds.filter((id) => optionIds.has(id)).length;
+    const selectedCount = selectedModifierIds.filter((id) => optionIds.has(id)).reduce((sum,id)=>sum+(quantities[id]??1),0);
     return (
       selectedCount < modifierGroup.minSelections || selectedCount > modifierGroup.maxSelections
     );
@@ -141,9 +143,10 @@ export function getUnsatisfiedModifierGroups(
 export function getModifierGroupValidationMessage(
   group: ProductModifierGroupResponse,
   selectedModifierIds: string[],
+  quantities: Readonly<Record<string,number>> = {},
 ): string | null {
   const optionIds = new Set(group.modifierGroup.options.map(({ id }) => id));
-  const selectedCount = selectedModifierIds.filter((id) => optionIds.has(id)).length;
+  const selectedCount = selectedModifierIds.filter((id) => optionIds.has(id)).reduce((sum,id)=>sum+(quantities[id]??1),0);
   if (selectedCount < group.modifierGroup.minSelections) {
     return group.modifierGroup.minSelections === 1
       ? `Selecciona 1 opción en ${group.modifierGroup.name}.`
@@ -157,10 +160,10 @@ export function getModifierGroupValidationMessage(
 
 export function getSnapshotTotal(snapshot: {
   basePrice: { amount: number };
-  selectedModifiers: Array<{ priceDelta: { amount: number } }>;
+  selectedModifiers: Array<{ priceDelta: { amount: number }; quantity?:number | undefined }>;
 }): number {
   return snapshot.selectedModifiers.reduce(
-    (total, modifier) => total + modifier.priceDelta.amount,
+    (total, modifier) => total + modifier.priceDelta.amount * (modifier.quantity??1),
     snapshot.basePrice.amount,
   );
 }

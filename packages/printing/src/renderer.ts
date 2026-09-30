@@ -50,7 +50,7 @@ export function renderDebugTicket(job: PrintJob): string {
   for (const item of payload.items) {
     lines.push(`${item.quantity} x ${item.productName}  ${money(item.lineTotal)}`);
     for (const modifier of item.modifiers) {
-      lines.push(`  + ${modifier.name}  ${money(modifier.priceDelta)}`);
+      lines.push(`  + ${modifier.name}${(modifier.quantity??1)>1?` ×${modifier.quantity}`:''}  ${money(modifier.priceDelta)}`);
     }
     if (item.specialInstructions) lines.push(`  NOTE: ${item.specialInstructions}`);
   }

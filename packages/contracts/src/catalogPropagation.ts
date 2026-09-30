@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { CommercialModifierGroupSchema, CommercialModifierOptionSchema,ProductModifierAssignmentSchema } from './modifierAdministration.js';
 const integer = z.number().int().safe().nonnegative();
 const version = integer.positive();
 const binding = {
@@ -15,7 +16,7 @@ export type CatalogState = z.infer<typeof CatalogStateSchema>;
 export const CatalogChangedSchema = CatalogStateSchema.extend({
   type: z.literal('CATALOG_CHANGED'),
   locationId: z.string().uuid(),
-  affectedTypes: z.array(z.enum(['PRODUCT', 'CATEGORY'])).max(2),
+  affectedTypes: z.array(z.enum(['PRODUCT', 'CATEGORY', 'MODIFIER_GROUP', 'MODIFIER_OPTION'])).max(4),
   affectedIds: z.array(z.string().uuid()).max(100),
   fullInvalidation: z.boolean(),
 });
@@ -29,6 +30,7 @@ export const CatalogProjectedCategorySchema = z.object({
   version,
 });
 export const CatalogProjectedProductSchema = z.object({
+  modifierAssignments:z.array(ProductModifierAssignmentSchema).optional(),
   id: z.string().uuid(),
   name: z.string(),
   description: z.string(),
@@ -46,11 +48,16 @@ export const CatalogProjectedProductSchema = z.object({
   version,
 });
 export const CatalogProjectedEntitySchema = z.discriminatedUnion('entityType', [
+  z.object({entityType:z.literal('MODIFIER_GROUP'),state:CommercialModifierGroupSchema.omit({options:true,products:true})}),
+  z.object({entityType:z.literal('MODIFIER_OPTION'),state:CommercialModifierOptionSchema}),
   z.object({ entityType: z.literal('PRODUCT'), state: CatalogProjectedProductSchema }),
   z.object({ entityType: z.literal('CATEGORY'), state: CatalogProjectedCategorySchema }),
 ]);
 export type CatalogProjectedEntity = z.infer<typeof CatalogProjectedEntitySchema>;
 export const CatalogMutationTypes = [
+  'CATALOG_PRODUCT_MODIFIERS_CHANGED',
+  'CATALOG_MODIFIER_GROUP_CREATED','CATALOG_MODIFIER_GROUP_UPDATED','CATALOG_MODIFIER_GROUP_STATUS_CHANGED',
+  'CATALOG_MODIFIER_OPTION_CREATED','CATALOG_MODIFIER_OPTION_UPDATED','CATALOG_MODIFIER_OPTION_STATUS_CHANGED','CATALOG_MODIFIER_OPTIONS_REORDERED',
   'CATALOG_PRODUCT_CREATED',
   'CATALOG_PRODUCT_UPDATED',
   'CATALOG_PRODUCT_STATUS_CHANGED',
@@ -74,6 +81,7 @@ export const CatalogMutationPayloadSchema = z.object({
 export type CatalogMutationPayload = z.infer<typeof CatalogMutationPayloadSchema>;
 const manifest = {
   payloadVersion: z.literal(1),
+  catalogStructureVersion: z.union([z.literal(1),z.literal(2)]).optional(),
   ...binding,
   sourceEpoch: integer,
   baselineId: z.string().regex(/^[a-f0-9]{64}$/),

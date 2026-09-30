@@ -1,4 +1,7 @@
 import type Database from 'better-sqlite3';
+import { isModifierCommand } from '@comanview/contracts';
+import { mutateModifier } from './ModifierMutations.js';
+import { mutateProductModifiers } from './ProductModifierMutations.js';
 import { createHash } from 'node:crypto';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { EntityId } from '@comanview/domain';
@@ -6,6 +9,8 @@ import {
   normalizeCatalogSku,
   insertAuditEntry,
   readCatalogState,
+  readModifierAdministration,
+  readProductModifierConfigurations,
   appendCatalogMutation,
   projectedCatalogEntity,
 } from '@comanview/database';
@@ -50,6 +55,19 @@ export class CatalogCommandService {
     return readCatalogState(this.db);
   }
 
+  modifiers() {
+    if (this.db.pragma('user_version', { simple: true }) !== 18)
+      fail('CLIENT_CAPABILITY_REQUIRED');
+    const row=this.db.prepare('SELECT currency FROM operational_configuration WHERE tenant_id=? AND location_id=?').get(this.binding.tenantId,this.binding.locationId) as {currency:string|null}|undefined;
+    return {currency:row?.currency??null,groups:readModifierAdministration(this.db)};
+  }
+  productModifiers(id:string) {
+    if(this.db.pragma('user_version',{simple:true})!==18)fail('CLIENT_CAPABILITY_REQUIRED');
+    const value=readProductModifierConfigurations(this.db).find(p=>p.productId===id);
+    if(!value)fail('PRODUCT_NOT_FOUND',404);
+    return value;
+  }
+
   execute(input: CatalogCommand, actor: AuthenticatedActor): Promise<CatalogCommandResult> {
     const command = CatalogCommandSchema.parse(input);
     let committed = false;
@@ -74,12 +92,12 @@ export class CatalogCommandService {
                 fail('ADMINISTRATION_BINDING_MISMATCH', 403);
               if (
                 !floor ||
-                floor.minimumSchemaVersion !== 16 ||
+                ![16,17,18].includes(floor.minimumSchemaVersion??0) ||
                 floor.recoveryState !== 'NORMAL' ||
                 floor.recoveryEpoch !== installation.epoch ||
                 floor.binding?.edgeId !== this.binding.edgeId ||
                 floor.catalogUpgradeJournal ||
-                this.db.pragma('user_version', { simple: true }) !== 16
+                this.db.pragma('user_version', { simple: true }) !== floor.minimumSchemaVersion
               )
                 fail('RECOVERY_REQUIRED', 503);
               const identity = {
@@ -123,7 +141,13 @@ export class CatalogCommandService {
                 !command.kind.includes('PRODUCT') &&
                 (command.kind.includes('CATEGORY') || command.kind === 'REORDER_CATEGORIES');
               let changed = false;
-              if (command.kind === 'CREATE_PRODUCT') {
+              let modifier:ReturnType<typeof mutateModifier>|undefined;
+              if(command.kind==='SET_PRODUCT_MODIFIERS') {
+                before.push(this.load('products',command.entityId));
+                changed=mutateProductModifiers(this.db,command,current.userId).changed;ids.push(command.entityId);
+              } else if(isModifierCommand(command)) {
+                modifier=mutateModifier(this.db,command,this.binding);changed=modifier.changed;ids.push(modifier.group.id);
+              } else if (command.kind === 'CREATE_PRODUCT') {
                 const p = command.payload,
                   id = EntityId.generate().toString(),
                   config = this.config();
@@ -283,9 +307,10 @@ export class CatalogCommandService {
                 }
                 changed = this.update(table, row, values, current);
               }
-              const eventType = (
+              const eventType = modifier?.eventType ?? (
                 {
                   CREATE_PRODUCT: 'CATALOG_PRODUCT_CREATED',
+                  SET_PRODUCT_MODIFIERS:'CATALOG_PRODUCT_MODIFIERS_CHANGED',
                   UPDATE_PRODUCT_DETAILS: 'CATALOG_PRODUCT_UPDATED',
                   SET_PRODUCT_ACTIVE: 'CATALOG_PRODUCT_STATUS_CHANGED',
                   SET_PRODUCT_AVAILABILITY: 'CATALOG_PRODUCT_STATUS_CHANGED',
@@ -295,8 +320,8 @@ export class CatalogCommandService {
                   UPDATE_CATEGORY: 'CATALOG_CATEGORY_UPDATED',
                   SET_CATEGORY_ACTIVE: 'CATALOG_CATEGORY_STATUS_CHANGED',
                   REORDER_CATEGORIES: 'CATALOG_CATEGORY_REORDERED',
-                } as const
-              )[command.kind];
+                } as Record<string,string>
+              )[command.kind]!;
               if (changed)
                 this.db
                   .prepare(
@@ -307,21 +332,21 @@ export class CatalogCommandService {
                 .prepare("SELECT generation FROM catalog_state WHERE singleton_key='PRIMARY'")
                 .get() as { generation: number } | undefined;
               if (!generation) fail('RECOVERY_REQUIRED', 503);
-              const after = ids.map((id) => this.load(category ? 'categories' : 'products', id));
+              const after = modifier?[]:ids.map((id) => this.load(category ? 'categories' : 'products', id));
               const result = CatalogCommandResultSchema.parse({
                 commandId: command.commandId,
                 entityType:
-                  command.kind === 'REORDER_CATEGORIES'
+                  modifier?'MODIFIER_GROUP':command.kind === 'REORDER_CATEGORIES'
                     ? 'CATEGORIES'
                     : category
                       ? 'CATEGORY'
                       : 'PRODUCT',
                 entityId: ids.length === 1 ? ids[0] : null,
-                version: ids.length === 1 ? after[0]!.version : null,
+                version: modifier?modifier.group.version:ids.length === 1 ? after[0]!.version : null,
                 catalogGeneration: generation.generation,
                 recoveryEpoch: installation.epoch,
                 changed,
-                entities: after.map((row) => this.publicRow(row, category)),
+                entities: modifier?[modifier.group]:after.map((row) => this.publicRow(row, category)),
               });
               const eventId = changed
                 ? appendCatalogMutation(
@@ -329,7 +354,7 @@ export class CatalogCommandService {
                     this.binding,
                     eventType,
                     command.commandId,
-                    ids.map((id) =>
+                    modifier?[projectedCatalogEntity(this.db,'MODIFIER_GROUP',modifier.group.id),...modifier.group.options.map(o=>projectedCatalogEntity(this.db,'MODIFIER_OPTION',o.id))]:ids.map((id) =>
                       projectedCatalogEntity(this.db, category ? 'CATEGORY' : 'PRODUCT', id),
                     ),
                   )
@@ -348,12 +373,12 @@ export class CatalogCommandService {
                   authorizedByUserId: null,
                   authorizedByRole: null,
                   action: 'CATALOG_CHANGED',
-                  entityType: category ? 'CATEGORY' : 'PRODUCT',
+                  entityType: modifier?'MODIFIER_GROUP':category ? 'CATEGORY' : 'PRODUCT',
                   entityId: ids[0]!,
                   outcome: 'SUCCESS',
                   reason: 'reason' in command ? command.reason : command.kind,
                   commandId: command.commandId,
-                  before: { entities: before },
+                  before: { entities: modifier?[modifier.before]:before },
                   after: { command, result },
                   amountAffected: null,
                   currency: null,
@@ -391,7 +416,7 @@ export class CatalogCommandService {
               capabilityVersion: 1,
               recoveryEpoch: result.recoveryEpoch,
               catalogGeneration: result.catalogGeneration,
-              affectedTypes: [result.entityType === 'PRODUCT' ? 'PRODUCT' : 'CATEGORY'],
+              affectedTypes: [result.entityType === 'MODIFIER_GROUP'?'MODIFIER_GROUP':result.entityType === 'PRODUCT' ? 'PRODUCT' : 'CATEGORY'],
               affectedIds: result.entities.length <= 100 ? result.entities.map((e) => e.id) : [],
               fullInvalidation: result.entities.length > 100,
             });

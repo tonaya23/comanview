@@ -12,6 +12,7 @@ export const SelectedModifierSchema = z.object({
   modifierOptionId: z.string().uuid(),
   name: z.string(),
   priceDelta: MoneySchema,
+  quantity: z.number().int().safe().min(1).optional(),
 });
 
 export const ProductSnapshotSchema = z.object({
@@ -80,6 +81,17 @@ export const OrderSchema = z.object({
 export type OrderResponse = z.infer<typeof OrderSchema>;
 
 // Requests
+export const ModifierSelectionSchema = z.object({
+  modifierOptionId: z.string().uuid(),
+  quantity: z.number().int().safe().min(1),
+});
+export type ModifierSelection = z.infer<typeof ModifierSelectionSchema>;
+function validateSelections(value: {selectedModifierIds?: string[] | undefined; selectedModifiers?: ModifierSelection[] | undefined}, ctx: z.RefinementCtx) {
+  if(value.selectedModifierIds !== undefined && value.selectedModifiers !== undefined)
+    ctx.addIssue({code:'custom',message:'Use one modifier selection representation, not both.'});
+  const ids=value.selectedModifiers?.map(x=>x.modifierOptionId)??value.selectedModifierIds??[];
+  if(new Set(ids).size!==ids.length)ctx.addIssue({code:'custom',message:'Duplicate modifier option IDs are not allowed.'});
+}
 export const CreateOrderRequestSchema = z.object({
   commandId: z.string().min(1).optional(),
   orderType: OrderTypeSchema,
@@ -94,8 +106,9 @@ export const AddOrderItemRequestSchema = z.object({
   expectedVersion: z.number().int(), // For OCC
   productId: z.string().uuid(),
   selectedModifierIds: z.array(z.string().uuid()).optional(),
+  selectedModifiers: z.array(ModifierSelectionSchema).optional(),
   specialInstructions: z.string().nullable().optional(),
-});
+}).superRefine(validateSelections);
 export type AddOrderItemRequest = z.infer<typeof AddOrderItemRequestSchema>;
 
 export const SendRoundRequestSchema = z.object({
@@ -145,8 +158,13 @@ export type UpdateOrderItemSpecialInstructionsRequest = z.infer<
 export const UpdateDraftOrderItemConfigurationRequestSchema = z.object({
   commandId: z.string().min(1),
   expectedVersion: z.number().int(),
-  selectedModifierIds: z.array(z.string().uuid()),
+  selectedModifierIds: z.array(z.string().uuid()).optional(),
+  selectedModifiers: z.array(ModifierSelectionSchema).optional(),
   specialInstructions: z.string().nullable(),
+}).superRefine((value,ctx)=>{
+  validateSelections(value,ctx);
+  if(value.selectedModifierIds===undefined&&value.selectedModifiers===undefined)
+    ctx.addIssue({code:'custom',message:'Explicit modifier selections are required for reconfiguration.'});
 });
 export type UpdateDraftOrderItemConfigurationRequest = z.infer<
   typeof UpdateDraftOrderItemConfigurationRequestSchema

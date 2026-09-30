@@ -114,6 +114,34 @@ describe('Product Domain', () => {
     expect(m2?.priceDelta.amount).toBe(250); // Overridden price
   });
 
+  it('counts quantities and multiplies the captured unit override', () => {
+    const { product, ids } = setupData();
+    const snapshot = product.createSnapshot(new Map([[ids.modGroupId.toString(), [
+      { modifierOptionId: ids.modOpt2Id, quantity: 2 },
+    ]]]));
+    expect(snapshot.modifiers).toHaveLength(1);
+    expect(snapshot.modifiers[0]?.quantity).toBe(2);
+    expect(snapshot.modifiers[0]?.priceDelta.amount).toBe(250);
+    expect(snapshot.lineAmounts(3).total.amount).toBe(37500);
+  });
+
+  it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, 3])('rejects invalid or excessive quantity %s', (quantity) => {
+    const { product, ids } = setupData();
+    expect(() => product.createSnapshot(new Map([[ids.modGroupId.toString(), [
+      { modifierOptionId: ids.modOpt1Id, quantity },
+    ]]]))).toThrow(InvalidModifierSelectionError);
+  });
+
+  it('keeps legacy selection at one and rejects duplicate option entries', () => {
+    const { product, ids } = setupData();
+    expect(product.createSnapshot(new Map([[ids.modGroupId.toString(), [ids.modOpt1Id]]]))
+      .modifiers[0]?.quantity).toBe(1);
+    expect(() => product.createSnapshot(new Map([[ids.modGroupId.toString(), [
+      { modifierOptionId: ids.modOpt1Id, quantity: 1 },
+      { modifierOptionId: ids.modOpt1Id, quantity: 1 },
+    ]]]))).toThrow(InvalidModifierSelectionError);
+  });
+
   it('throws when product is inactive', () => {
     const { productProps, ids } = setupData();
     const inactiveProduct = new Product({ ...productProps, active: false });

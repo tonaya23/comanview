@@ -39,6 +39,95 @@ async function fixture(){
   return input;
 }
 const version=(path:string)=>inspect(path,db=>db.pragma('user_version',{simple:true}));
+
+it('chains 15→16→17→18 preserving security, rejects stale writers and runtime17',async()=>{
+  const f=await fixture();
+  for(const targetSchema of [16,17] as const)expect(await prepareProductionCatalogUpgrade({...f,targetSchema})).toEqual({state:'UPGRADED'});
+  const before=await f.store.load();
+  expect(await prepareProductionCatalogUpgrade({...f,targetSchema:18})).toEqual({state:'UPGRADED'});
+  const after=await f.store.load();
+  expect(after).toMatchObject({minimumSchemaVersion:18,recoveryState:'NORMAL',catalogUpgradeJournal:null,
+    binding:before.binding,recoveryEpoch:before.recoveryEpoch,personnel:before.personnel,
+    maximumSignedRevisions:before.maximumSignedRevisions,stickyDeclaredState:before.stickyDeclaredState,
+    revokedDeviceBloom:before.revokedDeviceBloom,recoveryKey:before.recoveryKey});
+  expect(await assessStartupDatabase(f.dbPath,f.store,true,true)).toBe('NORMAL');
+  expect(await prepareProductionCatalogUpgrade({...f,targetSchema:18})).toEqual({state:'CURRENT'});
+  expect((await f.store.load()).checksum).toBe(after.checksum);
+  await expect(new DevelopmentRecoverySecurityStore(f.floorPath).save(updateRecoverySecurityFloor(before,{minimumSchemaVersion:17}))).rejects.toThrow();
+  await expect(f.store.save(updateRecoverySecurityFloor(after,{minimumSchemaVersion:17}))).rejects.toThrow();
+  expect((await prepareProductionCatalogUpgrade({...f,targetSchema:17})).state).toBe('RECOVERY_REQUIRED');
+});
+
+it.each(['before-migration','post-sqlite','post-floor'] as const)('version transition resumes at %s without resetting versions',async boundary=>{
+  const f=await fixture();for(const targetSchema of [16,17] as const)await prepareProductionCatalogUpgrade({...f,targetSchema});
+  const save=f.store.save.bind(f.store);let hit=false;
+  const fault=vi.spyOn(f.store,'save').mockImplementation(async value=>{
+    const j=value.catalogUpgradeJournal;
+    if(!hit&&j?.toSchema===18&&j.phase===(boundary==='before-migration'?'SNAPSHOT_READY':'VALIDATED')){
+      hit=true;if(boundary==='post-floor')await save(value);throw new Error('injected interruption');
+    }
+    await save(value);
+  });
+  expect((await prepareProductionCatalogUpgrade({...f,targetSchema:18})).state).toBe('RECOVERY_REQUIRED');
+  expect(hit).toBe(true);fault.mockRestore();
+  expect(await prepareProductionCatalogUpgrade({...f,targetSchema:18})).toEqual({state:'UPGRADED'});
+  expect(version(f.dbPath)).toBe(18);
+  expect(await assessStartupDatabase(f.dbPath,f.store,true,true)).toBe('NORMAL');
+});
+
+it('chains 15→16→17 and keeps security metadata, permissions and catalog data unchanged',async()=>{
+  const f=await fixture();
+  expect(await prepareProductionCatalogUpgrade(f)).toEqual({state:'UPGRADED'});
+  const before=await f.store.load(), data=catalog(f.dbPath);
+  expect(await prepareProductionCatalogUpgrade({...f,targetSchema:17})).toEqual({state:'UPGRADED'});
+  expect(version(f.dbPath)).toBe(17);
+  const after=await f.store.load();
+  expect(after).toMatchObject({minimumSchemaVersion:17,recoveryState:'NORMAL',catalogUpgradeJournal:null,
+    binding:before.binding,recoveryEpoch:before.recoveryEpoch,personnel:before.personnel,
+    maximumSignedRevisions:before.maximumSignedRevisions,stickyDeclaredState:before.stickyDeclaredState,
+    revokedDeviceBloom:before.revokedDeviceBloom,recoveryKey:before.recoveryKey});
+  expect(catalog(f.dbPath)).toEqual(data);
+  expect(await assessStartupDatabase(f.dbPath,f.store,true,true)).toBe('NORMAL');
+  expect(await prepareProductionCatalogUpgrade({...f,targetSchema:17})).toEqual({state:'CURRENT'});
+  expect((await f.store.load()).checksum).toBe(after.checksum);
+  await expect(f.store.save(updateRecoverySecurityFloor(after,{minimumSchemaVersion:16}))).rejects.toThrow();
+  expect((await prepareProductionCatalogUpgrade(f)).state).toBe('RECOVERY_REQUIRED');
+});
+
+it.each(['post-sqlite','post-floor'] as const)('quantity transition resumes safely at %s',async(boundary)=>{
+  const f=await fixture();await prepareProductionCatalogUpgrade(f);
+  const before=await f.store.load();
+  const save=f.store.save.bind(f.store);let hit=false;
+  const fault=vi.spyOn(f.store,'save').mockImplementation(async value=>{
+    if(!hit&&value.catalogUpgradeJournal?.kind==='CATALOG_MODIFIER_QUANTITY_16_TO_17'&&value.catalogUpgradeJournal.phase==='VALIDATED'){
+      hit=true;if(boundary==='post-floor')await save(value);throw new Error('injected interruption');
+    }
+    await save(value);
+  });
+  expect((await prepareProductionCatalogUpgrade({...f,targetSchema:17})).state).toBe('RECOVERY_REQUIRED');
+  expect(hit).toBe(true);expect(version(f.dbPath)).toBe(17);
+  expect(await assessStartupDatabase(f.dbPath,f.store,true,true)).toBe('RECOVERY_REQUIRED');
+  fault.mockRestore();
+  expect(await prepareProductionCatalogUpgrade({...f,targetSchema:17})).toEqual({state:'UPGRADED'});
+  expect(await assessStartupDatabase(f.dbPath,f.store,true,true)).toBe('NORMAL');
+  expect((await f.store.load()).personnel).toEqual(before.personnel);
+});
+
+it.each(['snapshot','digest','binding','partial','floor-ahead'] as const)('quantity transition fails closed for %s',async(kind)=>{
+  const f=await fixture();await prepareProductionCatalogUpgrade(f);
+  if(kind==='snapshot'||kind==='digest'){
+    const fault=vi.spyOn(artifact,'createEncryptedBackupArtifact').mockRejectedValueOnce(new Error('snapshot failure'));
+    expect((await prepareProductionCatalogUpgrade({...f,targetSchema:17})).state).toBe('RECOVERY_REQUIRED');
+    expect(version(f.dbPath)).toBe(16);fault.mockRestore();
+    if(kind==='snapshot'){
+      expect(await prepareProductionCatalogUpgrade({...f,targetSchema:17})).toEqual({state:'UPGRADED'});return;
+    }
+    await f.store.mutate(current=>updateRecoverySecurityFloor(current,{catalogUpgradeJournal:{...current.catalogUpgradeJournal!,migrationHash:'0'.repeat(64)}}));
+  }else if(kind==='floor-ahead')await f.store.mutate(current=>updateRecoverySecurityFloor(current,{minimumSchemaVersion:17}));
+  else {const db=new Database(f.dbPath);try{db.exec(kind==='partial'?'PRAGMA user_version=17':"UPDATE edge_installations SET tenant_id='different'");}finally{db.close();}}
+  expect((await prepareProductionCatalogUpgrade({...f,targetSchema:17})).state).toBe('RECOVERY_REQUIRED');
+  expect(await assessStartupDatabase(f.dbPath,f.store,true,true)).toBe('RECOVERY_REQUIRED');
+});
 const catalog=(path:string)=>inspect(path,db=>({
   categories:db.prepare('SELECT * FROM categories ORDER BY id').all(),
   products:db.prepare('SELECT * FROM products ORDER BY id').all(),
@@ -125,9 +214,11 @@ it.each(['corrupt-floor','missing-floor','partial-policy','partial-generation'] 
   if(kind.startsWith('partial-'))expect((await f.store.load()).recoveryState).toBe('RECOVERY_IN_PROGRESS');
 });
 
-it.each([15,16] as const)('restores a real encrypted schema %s backup under Floor16 and completes only on schema16',async schema=>{
+it.each([15,16,17,18] as const)('restores a real encrypted schema %s backup under Floor18 and completes only on schema18',async schema=>{
   const f=await fixture();
-  if(schema===16)expect(await prepareProductionCatalogUpgrade(f)).toEqual({state:'UPGRADED'});
+  if(schema>=16)expect(await prepareProductionCatalogUpgrade(f)).toEqual({state:'UPGRADED'});
+  if(schema>=17)expect(await prepareProductionCatalogUpgrade({...f,targetSchema:17})).toEqual({state:'UPGRADED'});
+  if(schema===18)expect(await prepareProductionCatalogUpgrade({...f,targetSchema:18})).toEqual({state:'UPGRADED'});
   if(schema===16){const current=new Database(f.dbPath);try{
     current.exec("UPDATE catalog_state SET generation=7; DELETE FROM role_permissions WHERE permission_code='CATALOG_IMPORT'");
     const commandId=randomUUID(),result={commandId,entityType:'CATEGORIES',entityId:null,version:null,catalogGeneration:7,recoveryEpoch:0,changed:false,entities:[]};
@@ -138,16 +229,18 @@ it.each([15,16] as const)('restores a real encrypted schema %s backup under Floo
   let backup:Awaited<ReturnType<typeof artifact.createEncryptedBackupArtifact>>;
   try{backup=await artifact.createEncryptedBackupArtifact({source:db,destinationDirectory:join(f.root,'backups'),backupId,binding:{...f.binding,recoveryEpoch:0},recoveryKey:before.recoveryKey!,schemaVersion:schema,trigger:'MANUAL',destinationType:'LOCAL',businessDate:null});}finally{db.close();}
   if(schema===15)expect(await prepareProductionCatalogUpgrade(f)).toEqual({state:'UPGRADED'});
+  if(schema<17)expect(await prepareProductionCatalogUpgrade({...f,targetSchema:17})).toEqual({state:'UPGRADED'});
+  if(schema<18)expect(await prepareProductionCatalogUpgrade({...f,targetSchema:18})).toEqual({state:'UPGRADED'});
   await scheduleEmergencyRecovery({backupId,artifactPath:backup.artifactPath,recoveryKey:before.recoveryKey!,binding:f.binding,publicKeyring:{},securityStore:f.store,dbPath:f.dbPath,now:new Date(),commandId:randomUUID()});
   const save=f.store.save.bind(f.store);
   vi.spyOn(f.store,'save').mockImplementation(async value=>{
-    expect(value.minimumSchemaVersion).toBe(16);
-    if(value.recoveryState==='NORMAL')expect(version(f.dbPath)).toBe(16);
+    expect(value.minimumSchemaVersion).toBe(18);
+    if(value.recoveryState==='NORMAL')expect(version(f.dbPath)).toBe(18);
     await save(value);
   });
   const result=await completePendingRecoveryAtStartup(f);
   expect(result,(await f.store.load()).pendingRecoveryFailure?.code).toBe('COMPLETED');
-  expect(await f.store.load()).toMatchObject({minimumSchemaVersion:16,recoveryEpoch:1,recoveryState:'NORMAL',journal:null});
+  expect(await f.store.load()).toMatchObject({minimumSchemaVersion:18,recoveryEpoch:1,recoveryState:'NORMAL',journal:null});
   inspect(f.dbPath,validateCatalogBaseline);
   if(originalCatalog)expect(catalog(f.dbPath)).toEqual(originalCatalog);
   else {
@@ -155,6 +248,6 @@ it.each([15,16] as const)('restores a real encrypted schema %s backup under Floo
     expect(inspect(f.dbPath,db=>db.prepare("SELECT id,category_id,tax_profile_id,version FROM products WHERE id='b'").get())).toEqual({id:'b',category_id:'legacy',tax_profile_id:'tax',version:7});
     expect(inspect(f.dbPath,db=>db.prepare('SELECT generation FROM catalog_state').get())).toEqual({generation:0});
   }
-  expect(await prepareProductionCatalogUpgrade(f)).toEqual({state:'CURRENT'});
+  expect(await prepareProductionCatalogUpgrade({...f,targetSchema:18})).toEqual({state:'CURRENT'});
   expect(await completePendingRecoveryAtStartup(f)).toBe('NONE');
 });

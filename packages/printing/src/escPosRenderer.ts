@@ -71,7 +71,7 @@ export function renderEscPosTicket(job: PrintJob): Uint8Array {
   for (const item of payload.items) {
     line(`${item.quantity} x ${item.productName}  ${money(item.lineTotal)}`);
     for (const modifier of item.modifiers) {
-      line(`  + ${modifier.name}  ${money(modifier.priceDelta)}`);
+      line(`  + ${modifier.name}${(modifier.quantity??1)>1?` ×${modifier.quantity}`:''}  ${money(modifier.priceDelta)}`);
     }
     if (item.specialInstructions) line(`  NOTE: ${item.specialInstructions}`);
   }

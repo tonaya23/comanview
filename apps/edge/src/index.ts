@@ -144,10 +144,21 @@ export async function buildApp(dbPath: string = ':memory:', options: BuildAppOpt
         if(administration.state==='RECOVERY_REQUIRED')throw new AppError('RECOVERY_REQUIRED',503,
           `Productive administration upgrade stopped: ${administration.code??'ADMINISTRATION_UPGRADE_FAILED'}.`);
         if(administration.state==='UPGRADED')app.log.info({fromSchema:14,toSchema:15},'UPGRADE COMPLETED');
-        const catalog=await prepareProductionCatalogUpgrade(upgradeInput);
+        const currentFloor=await recoverySecurityStore.load();
+        const quantityTransition=(currentFloor.catalogUpgradeJournal?.toSchema??0)>=17||(currentFloor.minimumSchemaVersion??0)>=17;
+        const versionTransition=currentFloor.catalogUpgradeJournal?.toSchema===18||currentFloor.minimumSchemaVersion===18;
+        const catalog=quantityTransition?{state:'CURRENT' as const}:await prepareProductionCatalogUpgrade(upgradeInput);
         if(catalog.state==='RECOVERY_REQUIRED')throw new AppError('RECOVERY_REQUIRED',503,
           `Productive catalog upgrade stopped: ${catalog.code??'CATALOG_UPGRADE_FAILED'}.`);
         if(catalog.state==='UPGRADED')app.log.info({fromSchema:15,toSchema:16},'UPGRADE COMPLETED');
+        const quantities=versionTransition?{state:'CURRENT' as const}:await prepareProductionCatalogUpgrade({...upgradeInput,targetSchema:17});
+        if(quantities.state==='RECOVERY_REQUIRED')throw new AppError('RECOVERY_REQUIRED',503,
+          `Productive modifier quantity upgrade stopped: ${quantities.code??'CATALOG_UPGRADE_FAILED'}.`);
+        if(quantities.state==='UPGRADED')app.log.info({fromSchema:16,toSchema:17},'UPGRADE COMPLETED');
+        const versions=await prepareProductionCatalogUpgrade({...upgradeInput,targetSchema:18});
+        if(versions.state==='RECOVERY_REQUIRED')throw new AppError('RECOVERY_REQUIRED',503,
+          `Productive modifier version upgrade stopped: ${versions.code??'CATALOG_UPGRADE_FAILED'}.`);
+        if(versions.state==='UPGRADED')app.log.info({fromSchema:17,toSchema:18},'UPGRADE COMPLETED');
       }
     }
     const disposition=await assessStartupDatabase(resolve(dbPath),recoverySecurityStore,
@@ -215,7 +226,7 @@ export async function buildApp(dbPath: string = ':memory:', options: BuildAppOpt
     (revision) => licenseManager.noteDesiredRevision(revision));
 
   // Setup Services
-  if(getRawDatabase().pragma('user_version',{simple:true})===16)ensureCatalogBaseline(getRawDatabase(),edgeIdentity);
+  if([16,17,18].includes(Number(getRawDatabase().pragma('user_version',{simple:true}))))ensureCatalogBaseline(getRawDatabase(),edgeIdentity);
   const realtimeHub = new RealtimeHub();
   const assignmentCommitted=(result:import('@comanview/contracts').TaxAdministrationResult)=>{
     if(result.changed&&result.catalogGeneration!==undefined&&result.recoveryEpoch!==undefined)realtimeHub.publish({type:'CATALOG_CHANGED',locationId:operationalContext.locationId,capabilityVersion:1,recoveryEpoch:result.recoveryEpoch,catalogGeneration:result.catalogGeneration,affectedTypes:['PRODUCT'],affectedIds:[result.entityId],fullInvalidation:false});

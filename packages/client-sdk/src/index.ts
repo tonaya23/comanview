@@ -4,6 +4,10 @@ import { CatalogStateSchema,type CatalogState } from '@comanview/contracts';
 export type { CatalogCommandInput, CatalogCommandResult } from '@comanview/contracts';
 import {
   CatalogCommandResultSchema,
+  ModifierAdministrationSchema,
+  type ModifierAdministration,
+  ProductModifierConfigurationSchema,
+  type ProductModifierConfiguration,
   type CatalogCommandInput,
   type CatalogCommandResult,
   CategorySchema,
@@ -138,6 +142,8 @@ export interface EdgeClient {
   logout(): Promise<LogoutResponse>;
   getAuditEntries(query?: Partial<AuditListQuery>): Promise<AuditListResponse>;
   getCategories(): Promise<CategoryResponse[]>;
+  getModifierAdministration(): Promise<ModifierAdministration>;
+  getProductModifierConfiguration(id:string):Promise<ProductModifierConfiguration>;
   getCatalogState():Promise<CatalogState>;
   getProducts(): Promise<ProductResponse[]>;
   createProduct(request: CreateProductRequest): Promise<ProductResponse>;
@@ -348,6 +354,8 @@ export function createEdgeClient(options: EdgeClientOptions = {}): EdgeClient {
     getProducts: () => request('/catalog/products', ProductSchema.array()),
     createProduct: (body) => request('/catalog/products', ProductSchema, { method: 'POST', body: JSON.stringify(body) }),
     catalogCommand: (body) => request('/catalog/commands', CatalogCommandResultSchema, {method:'POST',body:JSON.stringify(body)}),
+    getModifierAdministration: () => request('/catalog/modifiers', ModifierAdministrationSchema),
+    getProductModifierConfiguration: (id) => request(`/catalog/products/${encodeURIComponent(id)}/modifiers`,ProductModifierConfigurationSchema),
     getTables: () => request('/tables', RestaurantTableSchema.array()),
     createOrder: (body) =>
       request('/orders', OrderSchema, { method: 'POST', body: JSON.stringify(body) }),

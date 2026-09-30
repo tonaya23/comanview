@@ -20,8 +20,8 @@ export async function assessStartupDatabase(dbPath:string,store:RecoverySecurity
     const sqlite=new Database(dbPath,{readonly:true,fileMustExist:true});
     try{const integrity=sqlite.pragma('quick_check') as Array<{quick_check:string}>;
       if(integrity.length!==1||integrity[0]?.quick_check!=='ok')throw new Error('SQLITE_CORRUPT');
-      if(sqlite.pragma('user_version',{simple:true})===16){
-        if(floor.minimumSchemaVersion!==16)throw new Error('CATALOG_UPGRADE_EVIDENCE_MISSING');
+      if([16,17,18].includes(Number(sqlite.pragma('user_version',{simple:true})))){
+        if(floor.minimumSchemaVersion!==sqlite.pragma('user_version',{simple:true}))throw new Error('CATALOG_UPGRADE_EVIDENCE_MISSING');
         validateCatalogBaseline(sqlite);
       }
       if((floor.minimumSchemaVersion??0)>=15&&(sqlite.pragma('user_version',{simple:true})!==floor.minimumSchemaVersion||floor.personnel?.initializationState!=='ACTIVE'))

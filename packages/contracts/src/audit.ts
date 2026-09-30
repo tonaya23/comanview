@@ -19,6 +19,7 @@ export const AuditActionSchema = z.enum([
 ]);
 export const AuditOutcomeSchema = z.enum(['SUCCESS','REJECTED']);
 export const AuditEntityTypeSchema = z.enum([
+  'MODIFIER_GROUP', 'MODIFIER_OPTION',
   'CATEGORY',
   'TAX_PROFILE', 'PRODUCT', 'OPERATIONAL_CONFIGURATION',
   'USER',

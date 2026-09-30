@@ -1,3 +1,4 @@
+import type Database from 'better-sqlite3';
 import { EntityId } from '@comanview/domain';
 import type { NewAuditEntry,RestaurantAdministrationRepository } from '@comanview/database';
 import type { RestaurantAdministrationCommand,RestaurantAdministrationState } from '@comanview/contracts';
@@ -25,7 +26,7 @@ export class AdministrationService{
       deviceId:actor.deviceId,sessionId:actor.sessionId,actorUserId:actor.userId,actorRole:actor.roles[0]??null,authorizedByUserId:null,authorizedByRole:null,
       action:'RESTAURANT_ADMINISTRATION_CHANGED',entityType:'OPERATIONAL_CONFIGURATION',entityId:this.binding.locationId,outcome:'SUCCESS',reason:command.reason,
       commandId:command.commandId,before:null,after:null,amountAffected:null,currency:null,eventId:null};
-    const execute=(authorize?:(epoch:number)=>void)=>{try{return this.repository.execute(command,this.binding,audit,authorize,this.onCommitted);}catch(error){rethrowProductVersionConflict(error);const rawCode=error instanceof Error?error.message:'',code=parseContractErrorCode(rawCode);
+    const execute=(authorize?:(epoch:number,sqlite:Database.Database)=>void)=>{try{return this.repository.execute(command,this.binding,audit,authorize,this.onCommitted);}catch(error){rethrowProductVersionConflict(error);const rawCode=error instanceof Error?error.message:'',code=parseContractErrorCode(rawCode);
       if(code&&/^(CATALOG_|ADMINISTRATION_|BUSINESS_|CURRENCY_|CASH_REGISTER_|STATION_|ZONE_|TABLE_|PRODUCT_|COMMAND_)[A-Z_]*$/.test(code))
         throw new AppError(code,code.endsWith('_REQUIRED')||code.endsWith('_NOT_FOUND')?404:409,'La configuración no fue modificada.');throw error;}};
     return command.kind==='ASSIGN_PRODUCT_STATION'?withProductAssignmentAuthorization(this.auth,actor,this.binding,'STATION_MANAGE',execute):execute();

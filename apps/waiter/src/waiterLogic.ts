@@ -44,9 +44,10 @@ export function activeModifierGroups(product: ProductResponse) {
 export function modifierSelectionError(
   group: ProductModifierGroupResponse,
   selectedIds: readonly string[],
+  quantities: Readonly<Record<string,number>> = {},
 ): string | null {
   const groupIds = new Set(group.modifierGroup.options.map((option) => option.id));
-  const count = selectedIds.filter((id) => groupIds.has(id)).length;
+  const count = selectedIds.filter((id) => groupIds.has(id)).reduce((sum,id)=>sum+(quantities[id]??1),0);
   if (count < group.modifierGroup.minSelections)
     return `Selecciona al menos ${group.modifierGroup.minSelections}.`;
   if (count > group.modifierGroup.maxSelections)

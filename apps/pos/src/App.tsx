@@ -266,6 +266,7 @@ export function App() {
   const [configuredProduct, setConfiguredProduct] = useState<ProductResponse | null>(null);
   const [editingConfiguredItemId, setEditingConfiguredItemId] = useState<string | null>(null);
   const [selectedModifierIds, setSelectedModifierIds] = useState<string[]>([]);
+  const [modifierQuantities,setModifierQuantities]=useState<Record<string,number>>({});
   const [modifierValidation, setModifierValidation] = useState<string | null>(null);
   const [configuredSpecialInstructions, setConfiguredSpecialInstructions] = useState('');
   const [printJobs, setPrintJobs] = useState<PrintJobResponse[]>([]);
@@ -925,7 +926,7 @@ export function App() {
           commandId: crypto.randomUUID(),
           expectedVersion: order.version,
           productId: product.id,
-          selectedModifierIds: modifierIds,
+          selectedModifiers: modifierIds.map(modifierOptionId=>({modifierOptionId,quantity:modifierQuantities[modifierOptionId]??1})),
           specialInstructions,
         }),
       `${product.name} agregado.`,
@@ -933,7 +934,7 @@ export function App() {
     if (next) {
       setConfiguredProduct(null);
       setEditingConfiguredItemId(null);
-      setSelectedModifierIds([]);
+      setSelectedModifierIds([]); setModifierQuantities({});
       setModifierValidation(null);
       setConfiguredSpecialInstructions('');
     }
@@ -946,7 +947,7 @@ export function App() {
     }
     setConfiguredProduct(product);
     setEditingConfiguredItemId(null);
-    setSelectedModifierIds([]);
+    setSelectedModifierIds([]); setModifierQuantities({});
     setModifierValidation(null);
     setConfiguredSpecialInstructions('');
   }
@@ -962,7 +963,8 @@ export function App() {
 
     const groupOptionIds = new Set(group.modifierGroup.options.map(({ id }) => id));
     const alreadySelected = selectedModifierIds.includes(optionId);
-    const groupSelectionCount = selectedModifierIds.filter((id) => groupOptionIds.has(id)).length;
+    setModifierQuantities(current=>({...current,[optionId]:1}));
+    const groupSelectionCount = selectedModifierIds.filter((id) => groupOptionIds.has(id)).reduce((sum,id)=>sum+(modifierQuantities[id]??1),0);
     if (group.modifierGroup.maxSelections === 1) {
       if (alreadySelected) return;
       setModifierValidation(null);
@@ -988,7 +990,7 @@ export function App() {
 
   async function submitConfiguredProduct() {
     if (!configuredProduct || !order) return;
-    const missing = getUnsatisfiedModifierGroups(configuredProduct, selectedModifierIds);
+    const missing = getUnsatisfiedModifierGroups(configuredProduct, selectedModifierIds, modifierQuantities);
     if (missing.length > 0) {
       setModifierValidation('Completa las selecciones indicadas antes de confirmar.');
       return;
@@ -1004,7 +1006,7 @@ export function App() {
         edge.updateDraftOrderItemConfiguration(order.id, editingConfiguredItemId, {
           commandId: crypto.randomUUID(),
           expectedVersion: order.version,
-          selectedModifierIds,
+          selectedModifiers: selectedModifierIds.map(modifierOptionId=>({modifierOptionId,quantity:modifierQuantities[modifierOptionId]??1})),
           specialInstructions: configuredSpecialInstructions,
         }),
       `${configuredProduct.name} actualizado.`,
@@ -1012,7 +1014,7 @@ export function App() {
     if (next) {
       setConfiguredProduct(null);
       setEditingConfiguredItemId(null);
-      setSelectedModifierIds([]);
+      setSelectedModifierIds([]); setModifierQuantities({});
       setModifierValidation(null);
       setConfiguredSpecialInstructions('');
     }
@@ -1031,6 +1033,7 @@ export function App() {
     setSelectedModifierIds(
       item.productSnapshot.selectedModifiers.map(({ modifierOptionId }) => modifierOptionId),
     );
+    setModifierQuantities(Object.fromEntries(item.productSnapshot.selectedModifiers.map(m=>[m.modifierOptionId,m.quantity??1])));
     setConfiguredSpecialInstructions(item.specialInstructions ?? '');
     setModifierValidation(null);
   }
@@ -2493,7 +2496,7 @@ export function App() {
                             <ul className="order-item-modifiers">
                               {item.productSnapshot.selectedModifiers.map((modifier) => (
                                 <li key={modifier.modifierOptionId}>
-                                  {modifier.name}
+                                  {modifier.name}{(modifier.quantity??1)>1?` ×${modifier.quantity}`:''}
                                   {modifier.priceDelta.amount !== 0 && (
                                     <span>
                                       +
@@ -2564,7 +2567,7 @@ export function App() {
                             <ul className="order-item-modifiers">
                               {item.productSnapshot.selectedModifiers.map((modifier) => (
                                 <li key={modifier.modifierOptionId}>
-                                  {modifier.name}
+                                  {modifier.name}{(modifier.quantity??1)>1?` ×${modifier.quantity}`:''}
                                   {modifier.priceDelta.amount !== 0 && (
                                     <span>
                                       +
@@ -2929,7 +2932,7 @@ export function App() {
           onClose={() => {
             setConfiguredProduct(null);
             setEditingConfiguredItemId(null);
-            setSelectedModifierIds([]);
+            setSelectedModifierIds([]); setModifierQuantities({});
             setModifierValidation(null);
             setConfiguredSpecialInstructions('');
           }}
@@ -2949,10 +2952,11 @@ export function App() {
             <div className="modifier-groups">
               {getActiveModifierGroups(configuredProduct).map((group) => {
                 const optionIds = new Set(group.modifierGroup.options.map(({ id }) => id));
-                const selectionCount = selectedModifierIds.filter((id) => optionIds.has(id)).length;
+                const selectionCount = selectedModifierIds.filter((id) => optionIds.has(id)).reduce((sum,id)=>sum+(modifierQuantities[id]??1),0);
                 const validationMessage = getModifierGroupValidationMessage(
                   group,
                   selectedModifierIds,
+                  modifierQuantities,
                 );
                 return (
                   <fieldset
@@ -2980,6 +2984,7 @@ export function App() {
                           const available = option.active && option.available;
                           const price = getEffectiveModifierPrice(group, option.id);
                           return (
+                            <div key={option.id}>
                             <button
                               type="button"
                               className={selected ? 'modifier-option selected' : 'modifier-option'}
@@ -3010,6 +3015,12 @@ export function App() {
                                     : `+${formatMoney(price, option.defaultPriceDelta.currency)}`}
                               </span>
                             </button>
+                            {selected && <div className="catalog-actions">
+                              <button type="button" aria-label={`Reducir ${option.name}`} disabled={(modifierQuantities[option.id]??1)<=1} onClick={()=>setModifierQuantities(current=>({...current,[option.id]:(current[option.id]??1)-1}))}>−</button>
+                              <span aria-live="polite">{modifierQuantities[option.id]??1}</span>
+                              <button type="button" aria-label={`Aumentar ${option.name}`} disabled={!available||selectionCount>=group.modifierGroup.maxSelections} onClick={()=>setModifierQuantities(current=>({...current,[option.id]:(current[option.id]??1)+1}))}>+</button>
+                            </div>}
+                            </div>
                           );
                         })}
                     </div>
@@ -3045,7 +3056,7 @@ export function App() {
                 <span>Total del producto</span>
                 <strong>
                   {formatMoney(
-                    getConfiguredProductTotal(configuredProduct, selectedModifierIds),
+                    getConfiguredProductTotal(configuredProduct, selectedModifierIds, modifierQuantities),
                     configuredProduct.basePrice.currency,
                   )}
                 </strong>
@@ -3055,7 +3066,7 @@ export function App() {
                 className="confirm-payment"
                 disabled={
                   isBusy ||
-                  getUnsatisfiedModifierGroups(configuredProduct, selectedModifierIds).length > 0
+                  getUnsatisfiedModifierGroups(configuredProduct, selectedModifierIds, modifierQuantities).length > 0
                 }
                 onClick={() => void submitConfiguredProduct()}
               >

@@ -7,7 +7,7 @@ import {
   inspectRecoveryUpgradeSchema,
   recoveryUpgradeMigrationHash,
   inspectAdministrationSchema,
-  inspectCatalogSchema,
+  inspectModifierVersionSchema, inspectModifierQuantitySchema, inspectCatalogSchema,
 } from '@comanview/database';
 import { createEncryptedBackupArtifact, verifyEncryptedBackupArtifact } from './BackupArtifact.js';
 import {
@@ -60,7 +60,7 @@ export async function prepareProductionRecoveryUpgrade(input: {
       throw new Error('UPGRADE_SECURITY_STATE_UNAVAILABLE');
     // No create fallback, even if the path disappears between stat and open.
     const preflight = new Database(input.dbPath, { readonly: true, fileMustExist: true });
-    let version: 13 | 14 | 15 | 16, identity: Identity;
+    let version: 13 | 14 | 15 | 16 | 17 | 18, identity: Identity;
     try {
       integrity(preflight);
       version = inspectProductiveSchema(preflight);
@@ -265,7 +265,7 @@ function integrity(db: Database.Database) {
   )
     throw new Error('UPGRADE_DATABASE_INVALID');
 }
-function readIdentity(db: Database.Database, version: 13 | 14 | 15 | 16): Identity {
+function readIdentity(db: Database.Database, version: 13 | 14 | 15 | 16 | 17 | 18): Identity {
   const count = db.prepare('SELECT COUNT(*) n FROM edge_installations').get() as { n: number };
   if (
     count.n !== 1 ||
@@ -357,8 +357,8 @@ export function verifyFloor(
   if (!db.prepare("SELECT * FROM backup_runtime WHERE singleton_key='PRIMARY'").get())
     throw new Error('UPGRADE_RUNTIME_INVALID');
 }
-function inspectProductiveSchema(db:Database.Database):13|14|15|16{
-  return db.pragma('user_version',{simple:true})===16?inspectCatalogSchema(db):db.pragma('user_version',{simple:true})===15?inspectAdministrationSchema(db):inspectRecoveryUpgradeSchema(db);
+function inspectProductiveSchema(db:Database.Database):13|14|15|16|17|18{
+  return db.pragma('user_version',{simple:true})===18?inspectModifierVersionSchema(db):db.pragma('user_version',{simple:true})===17?inspectModifierQuantitySchema(db):db.pragma('user_version',{simple:true})===16?inspectCatalogSchema(db):db.pragma('user_version',{simple:true})===15?inspectAdministrationSchema(db):inspectRecoveryUpgradeSchema(db);
 }
 function mergeFloorIntoDatabase(db: Database.Database, floor: RecoverySecurityFloor) {
   const devices = db.prepare('SELECT id FROM devices').all() as Array<{ id: string }>;

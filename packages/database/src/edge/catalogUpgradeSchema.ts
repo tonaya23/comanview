@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { EntityId } from '@comanview/domain';
 import { inspectAdministrationSchema } from './administrationUpgradeSchema.js';
+import { inspectModifierVersionSchema } from './modifierVersionUpgradeSchema.js';
+import { inspectModifierQuantitySchema } from './modifierQuantityUpgradeSchema.js';
 
 const directory = fileURLToPath(new URL('../../../../migrations/edge/', import.meta.url));
 const migration = () => readFileSync(join(directory, '0016_commercial_catalog.sql'), 'utf8');
@@ -52,7 +54,9 @@ export function catalogMigrationDigest(): string {
 }
 
 export function validateCatalogBaseline(db: Database.Database): void {
-  if (inspectCatalogSchema(db) !== 16) throw new Error('CATALOG_SCHEMA_INVALID');
+  if (db.pragma('user_version', { simple: true }) === 18) inspectModifierVersionSchema(db);
+  else if (db.pragma('user_version', { simple: true }) === 17) inspectModifierQuantitySchema(db);
+  else if (inspectCatalogSchema(db) !== 16) throw new Error('CATALOG_SCHEMA_INVALID');
   const category = db.prepare("SELECT id,active FROM categories WHERE system_key='UNCATEGORIZED'").get() as {id:string;active:number}|undefined;
   if (!category || category.active !== 1 || db.prepare('SELECT id FROM products WHERE category_id IS NULL LIMIT 1').get())
     throw new Error('CATALOG_BASELINE_INVALID');

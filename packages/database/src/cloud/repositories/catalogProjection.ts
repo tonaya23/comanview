@@ -69,6 +69,7 @@ export async function applyCatalogProjection(
     const { phase, ...rest } = payload;
     const manifest = {
       payloadVersion: rest.payloadVersion,
+      ...(rest.catalogStructureVersion===undefined?{}:{catalogStructureVersion:rest.catalogStructureVersion}),
       tenantId: rest.tenantId,
       locationId: rest.locationId,
       edgeId: rest.edgeId,

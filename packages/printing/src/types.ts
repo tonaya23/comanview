@@ -29,6 +29,7 @@ export interface PrintModifierSnapshot {
   modifierOptionId: string;
   name: string;
   priceDelta: PrintMoneySnapshot;
+  quantity?: number;
 }
 
 export interface PrintItemSnapshot {

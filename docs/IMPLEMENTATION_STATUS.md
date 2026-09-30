@@ -8,7 +8,7 @@ El repositorio determina qué existe; el Master PRD determina el comportamiento 
 
 - Current functional phase: **Group B — Commercial Catalog**
 - Current phase status: **OPEN**
-- Current block: **B0 COMPLETE; B1 CLOSED; B2 CLOSED; B3 NOT STARTED**
+- Current block: **B0 COMPLETE; B1 CLOSED; B2 CLOSED; B3a IMPLEMENTED / API GATE PASS; B3b IMPLEMENTED / GATE PASS; B3c IMPLEMENTED; B3 REVIEW PENDING**
 - Last closed phase: **1X — UX/UI Foundation & Product Experience**
 - Closure commit message: `feat: complete phase 1X UX foundation`
 - Branch: `main`
@@ -17,6 +17,33 @@ El repositorio determina qué existe; el Master PRD determina el comportamiento 
 - 1X status: **CLOSED; X-A → X-I COMPLETE; UX ROUND 2 ACCEPTED**
 - Manual acceptance 1X: **PASS**, confirmada por el usuario para POS, Cobro, descarte vacío, Admin Local, Waiter, KDS, Super Admin, continuidad, responsive y uso real. Evidencia técnica en `docs/Acceptance_Phase_1X.md`.
 - Manual acceptance 1W: **PASS** (`phase-1w-final-acceptance`).
+
+### B3 — Modifier Core (2026-09-21)
+
+**GROUP B OPEN; B3a IMPLEMENTED / API GATE PASS; B3b IMPLEMENTED / GATE PASS; B3c IMPLEMENTED; B3 REVIEW PENDING.**
+Prerequisite B3b: incremental 0018 Group/Option version baseline and protected
+17→18 lifecycle implemented; 2/2 schema and 29/29 lifecycle tests PASS. B3b commands,
+read API/SDK, Admin UI and projection implemented. B3c Product assignment/order/
+override editor uses Product.version OCC and existing command receipts/security.
+Final focal UI/Admin 52/52 and commands 53/53 PASS. Exact-Floor16 assignment blocker fixed
+with shared schema readiness policy, feature minimum16 and DB/Floor consistency.
+Authorization 29/29, affected command subset 17/17 and real Tax/Station HTTP on
+schemas16/17/18 3/3 PASS. Database build and Database/Edge typechecks PASS.
+Full B3b gate PASS: Admin UI/B2 regression 48/48, real PostgreSQL18 modifier
+projection/baseline/replay/epoch PASS, HTTP18 PASS; focal builds/typechecks/diff PASS.
+Visual fixture checked tablet/desktop and keyboard; no manual acceptance claimed.
+Final B3c PostgreSQL18 pipeline PASS: assignment/override mutations, complete baseline,
+no partial publication, duplicates/replay and epoch isolation. Eight affected targets
+typecheck PASS; focal builds PASS. No global suites. B3d/e/f and Group C not started.
+Quantity contracts, captured unit price × quantity, legacy quantity=1 and capability
+guard for legacy DRAFT reconstruction. Protected schema16→17 lifecycle and minimum
+POS/Waiter/KDS/printing support. API full file 21/21 PASS; Edge typecheck PASS.
+Diagnosis and compatibility: `docs/Catalog_Modifiers_B3.md`. Manual acceptance pending.
+Initial manual load/create blocker reproduced on stale Edge/schema16 and resolved
+by productive harness restart to schema18/Floor18 NORMAL. Browser empty/create/reload
+retest PASS; real HTTP regression and 12 Modifier Admin tests PASS. Full B3 manual
+acceptance remains pending; no checkpoint. Incident details and harness boot-time
+precision limitation are recorded in the B3 document.
 
 ### B2 — Products & Categories Admin (2026-09-18)
 

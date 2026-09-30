@@ -1,0 +1,101 @@
+.modifier-admin {
+  min-width: 0;
+  width: 100%;
+  overflow-wrap: anywhere;
+}
+.modifier-admin fieldset {
+  min-width: 0;
+  margin: 1rem 0;
+  border: 1px solid #bfd1cc;
+  border-radius: 12px;
+  padding: 1rem;
+}
+.modifier-admin label {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0.7rem 0;
+}
+.modifier-admin input,
+.modifier-admin select {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0.65rem;
+  border: 1px solid #809d94;
+  border-radius: 8px;
+  font: inherit;
+}
+.modifier-admin .modifier-check {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+.modifier-check input {
+  width: 22px;
+  min-height: 22px;
+}
+.modifier-toolbar,
+.modifier-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+.modifier-toolbar {
+  justify-content: space-between;
+}
+.modifier-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+.modifier-list {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  gap: 0.65rem;
+}
+.modifier-list > li {
+  min-width: 0;
+  border: 1px solid #bfd1cc;
+  border-radius: 12px;
+  padding: 1rem;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+.modifier-list h3,
+.modifier-list h4,
+.modifier-list p {
+  margin: 0.3rem 0;
+}
+.modifier-admin button {
+  max-width: 100%;
+  white-space: normal;
+  min-height: 44px;
+}
+.modifier-admin summary {
+  padding: 0.65rem;
+  cursor: pointer;
+  min-height: 44px;
+  box-sizing: border-box;
+}
+.modifier-admin :focus-visible {
+  outline: 3px solid #236bb4;
+  outline-offset: 3px;
+}
+.modifier-admin aside {
+  border: 1px solid #bfd1cc;
+  padding: 1rem;
+  border-radius: 12px;
+}
+@media (max-width: 800px) {
+  .modifier-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .modifier-list > li {
+    display: grid;
+  }
+}

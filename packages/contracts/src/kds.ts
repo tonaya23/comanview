@@ -13,6 +13,7 @@ export type KdsStationResponse = z.infer<typeof KdsStationSchema>;
 export const KdsModifierSnapshotSchema = z.object({
   modifierOptionId: z.string().uuid(),
   name: z.string(),
+  quantity: z.number().int().safe().min(1).optional(),
 });
 
 export const KdsItemSchema = z.object({
